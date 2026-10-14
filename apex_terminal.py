@@ -169,7 +169,8 @@ def fetch_index_quote(ticker: str):
         prev = getattr(info, "previous_close", None)
         if price is None or prev is None:
             hist = t.history(period="5d")
-            if hist.empty: return None
+            if hist.empty:
+                return None
             price = float(hist["Close"].iloc[-1])
             prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
         change = price - prev
@@ -178,6 +179,7 @@ def fetch_index_quote(ticker: str):
     except:
         return None
 
+
 @st.cache_data(ttl=45)
 def fetch_stock_data(symbol: str):
     ticker = f"{symbol}.NS"
@@ -185,7 +187,8 @@ def fetch_stock_data(symbol: str):
         t = yf.Ticker(ticker)
         info = t.fast_info
         hist = t.history(period="1mo")
-        if hist.empty: return None
+        if hist.empty:
+            return None
         ltp = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None) or float(hist["Close"].iloc[-1])
         prev_close = getattr(info, "previous_close", None) or (float(hist["Close"].iloc[-2]) if len(hist) > 1 else ltp)
         day_high = getattr(info, "day_high", None) or float(hist["High"].iloc[-1])
@@ -203,16 +206,105 @@ def fetch_stock_data(symbol: str):
     except:
         return None
 
+
 @st.cache_data(ttl=60)
-def get_candlestick_data(symbol: str, period: str = "3mo"):
+def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
+    """Fetch OHLC data for any interval."""
     try:
         t = yf.Ticker(f"{symbol}.NS")
-        df = t.history(period=period, interval="1d")
-        if df.empty: return None
+        if interval in ["30m", "1h"]:
+            period = "1mo" if interval == "1h" else "5d"
+        df = t.history(period=period, interval=interval)
+        if df.empty:
+            return None
         df = df.reset_index()
+        if "Datetime" in df.columns:
+            df = df.rename(columns={"Datetime": "Date"})
         return df
-    except:
+    except Exception:
         return None
+
+
+@st.cache_data(ttl=90)
+def get_daily_atr(symbol: str, atr_period: int = 14, lookback_days: int = 30):
+    """Return the average ATR over recent days (used for Renko box sizing)."""
+    try:
+        t = yf.Ticker(f"{symbol}.NS")
+        df = t.history(period="2mo", interval="1d")
+        if df.empty or len(df) < atr_period + 5:
+            return None
+        high = df["High"]
+        low = df["Low"]
+        close = df["Close"]
+        tr1 = high - low
+        tr2 = (high - close.shift()).abs()
+        tr3 = (low - close.shift()).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(window=atr_period).mean()
+        recent = atr.dropna().tail(lookback_days)
+        if recent.empty:
+            return None
+        return float(recent.mean())
+    except Exception:
+        return None
+
+
+def calculate_ema(series: pd.Series, span: int) -> pd.Series:
+    return series.ewm(span=span, adjust=False).mean()
+
+
+def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
+    """
+    Generate classic Renko bricks from OHLC DataFrame using Close prices.
+    Returns a DataFrame with columns: Date, Open, High, Low, Close
+    """
+    if df is None or df.empty or box_size <= 0:
+        return pd.DataFrame()
+
+    prices = df["Close"].values
+    dates = df["Date"].values
+
+    bricks = []
+    current_price = prices[0]
+    current_brick = round(current_price / box_size) * box_size
+
+    for i in range(1, len(prices)):
+        price = prices[i]
+        date = dates[i]
+
+        # Up bricks
+        while price >= current_brick + box_size:
+            open_p = current_brick
+            close_p = current_brick + box_size
+            bricks.append({
+                "Date": date,
+                "Open": open_p,
+                "High": close_p,
+                "Low": open_p,
+                "Close": close_p
+            })
+            current_brick = close_p
+
+        # Down bricks
+        while price <= current_brick - box_size:
+            open_p = current_brick
+            close_p = current_brick - box_size
+            bricks.append({
+                "Date": date,
+                "Open": open_p,
+                "High": open_p,
+                "Low": close_p,
+                "Close": close_p
+            })
+            current_brick = close_p
+
+    if not bricks:
+        return pd.DataFrame()
+
+    renko_df = pd.DataFrame(bricks)
+    renko_df["Brick"] = range(1, len(renko_df) + 1)
+    return renko_df
+
 
 @st.cache_data(ttl=90)
 def get_top_movers(universe: list):
@@ -227,9 +319,11 @@ def get_top_movers(universe: list):
                     hist = data
                 else:
                     hist = data[f"{sym}.NS"] if f"{sym}.NS" in data.columns.get_level_values(0) else None
-                if hist is None or hist.empty: continue
+                if hist is None or hist.empty:
+                    continue
                 close = hist["Close"].dropna()
-                if len(close) < 2: continue
+                if len(close) < 2:
+                    continue
                 last = float(close.iloc[-1])
                 prev = float(close.iloc[-2])
                 chg = last - prev
@@ -238,12 +332,14 @@ def get_top_movers(universe: list):
             except:
                 continue
         df = pd.DataFrame(rows)
-        if df.empty: return None, None
+        if df.empty:
+            return None, None
         gainers = df.sort_values("% Chg", ascending=False).head(8).reset_index(drop=True)
         losers = df.sort_values("% Chg", ascending=True).head(8).reset_index(drop=True)
         return gainers, losers
-    except Exception as e:
+    except Exception:
         return None, None
+
 
 def get_options_chain(ltp: float, symbol: str):
     try:
@@ -269,6 +365,7 @@ def get_options_chain(ltp: float, symbol: str):
         rows.append({"Call Price (CE)": round(ce, 2), "Strike Price": s, "Put Price (PE)": round(pe, 2)})
     return pd.DataFrame(rows)
 
+
 @st.cache_data
 def get_stock_universe():
     return [
@@ -281,14 +378,13 @@ def get_stock_universe():
         "CUMMINSIND", "ASTRAL", "PAGEIND", "HAVELLS", "VOLTAS", "BERGEPAINT"
     ]
 
+
 # -------------------------------------------------
 # Sidebar
 # -------------------------------------------------
 with st.sidebar:
     st.markdown("### ⚙️ Controls")
-
-    # Theme toggle
-    theme_choice = st.radio("Theme", ["🌙 Dark", "☀️ Light"], 
+    theme_choice = st.radio("Theme", ["🌙 Dark", "☀️ Light"],
                             index=0 if st.session_state.theme == "dark" else 1,
                             horizontal=True)
     new_theme = "dark" if "Dark" in theme_choice else "light"
@@ -300,7 +396,6 @@ with st.sidebar:
     universe = get_stock_universe()
     selected = st.selectbox("Select Stock (NSE)", universe, index=0)
 
-    # Watchlist management
     st.markdown("### ⭐ Watchlist")
     col_add, col_rem = st.columns(2)
     with col_add:
@@ -314,7 +409,6 @@ with st.sidebar:
                 st.session_state.watchlist.remove(selected)
                 st.info(f"Removed {selected}")
 
-    # Display current watchlist
     if st.session_state.watchlist:
         chips = " ".join([f'<span class="watchlist-chip">{s}</span>' for s in st.session_state.watchlist])
         st.markdown(chips, unsafe_allow_html=True)
@@ -361,7 +455,7 @@ for i, (name, ticker) in enumerate(indices.items()):
 st.markdown("---")
 
 # -------------------------------------------------
-# Selected Stock Analytics + Candlestick
+# Selected Stock Analytics
 # -------------------------------------------------
 st.markdown(f'<div class="section-header">📌 {selected} • Live Analytics</div>', unsafe_allow_html=True)
 
@@ -380,17 +474,51 @@ v1, v2 = st.columns(2)
 v1.metric("Session Volume", f"{metrics['volume']:,}")
 v2.metric("20-Day Avg Volume", f"{metrics['avg_volume']:,}")
 
-# Candlestick Chart
+# -------------------------------------------------
+# Shared Timeframe Control
+# -------------------------------------------------
 st.markdown("#### 📊 Price Chart")
-period = st.select_slider("Chart Period", options=["1mo", "3mo", "6mo", "1y"], value="3mo")
-candle_df = get_candlestick_data(selected, period)
+tf_col1, tf_col2 = st.columns([2, 1])
+with tf_col1:
+    timeframe = st.radio(
+        "Timeframe (applies to both Candlestick & Renko)",
+        options=["Daily", "1 Hour", "30 Minutes"],
+        index=0,
+        horizontal=True
+    )
+with tf_col2:
+    if timeframe == "Daily":
+        period = st.select_slider("Chart Period", options=["1mo", "3mo", "6mo", "1y"], value="3mo")
+    else:
+        period = "1mo" if timeframe == "1 Hour" else "5d"
+        st.caption(f"Period auto-set to **{period}** for intraday")
 
-if candle_df is not None and not candle_df.empty:
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                        vertical_spacing=0.03, row_heights=[0.7, 0.3],
-                        subplot_titles=(f"{selected} Price", "Volume"))
+interval_map = {
+    "Daily": "1d",
+    "1 Hour": "1h",
+    "30 Minutes": "30m"
+}
+interval = interval_map[timeframe]
 
-    # Candlestick
+# -------------------------------------------------
+# Fetch OHLC data (shared by both charts)
+# -------------------------------------------------
+candle_df = get_ohlc_data(selected, interval=interval, period=period)
+
+if candle_df is None or candle_df.empty:
+    st.info("Chart data temporarily unavailable")
+else:
+    # Calculate EMAs on the source data
+    candle_df["EMA20"] = calculate_ema(candle_df["Close"], 20)
+    candle_df["EMA50"] = calculate_ema(candle_df["Close"], 50)
+
+    # ---------- CANDLESTICK CHART ----------
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        vertical_spacing=0.03, row_heights=[0.7, 0.3],
+        subplot_titles=(f"{selected} • {timeframe}", "Volume")
+    )
+
     fig.add_trace(go.Candlestick(
         x=candle_df["Date"],
         open=candle_df["Open"],
@@ -402,7 +530,18 @@ if candle_df is not None and not candle_df.empty:
         decreasing_line_color="#f87171"
     ), row=1, col=1)
 
-    # Volume bars
+    fig.add_trace(go.Scatter(
+        x=candle_df["Date"], y=candle_df["EMA20"],
+        mode="lines", name="EMA 20",
+        line=dict(color="#fbbf24", width=1.5)
+    ), row=1, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=candle_df["Date"], y=candle_df["EMA50"],
+        mode="lines", name="EMA 50",
+        line=dict(color="#60a5fa", width=1.8)
+    ), row=1, col=1)
+
     colors = ["#34d399" if c >= o else "#f87171" for o, c in zip(candle_df["Open"], candle_df["Close"])]
     fig.add_trace(go.Bar(
         x=candle_df["Date"], y=candle_df["Volume"],
@@ -414,15 +553,86 @@ if candle_df is not None and not candle_df.empty:
         xaxis_rangeslider_visible=False,
         template="plotly_dark" if st.session_state.theme == "dark" else "plotly_white",
         margin=dict(l=20, r=20, t=40, b=20),
-        showlegend=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)"
     )
     fig.update_xaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
     fig.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
     st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Chart data temporarily unavailable")
+
+    # -------------------------------------------------
+    # RENKO CHART (directly below)
+    # -------------------------------------------------
+    st.markdown("#### 🧱 Renko Chart")
+
+    daily_atr_14 = get_daily_atr(selected, atr_period=14, lookback_days=14)
+    daily_atr_7 = get_daily_atr(selected, atr_period=14, lookback_days=7)
+
+    if timeframe == "Daily":
+        box_size = daily_atr_14 if daily_atr_14 and daily_atr_14 > 0 else metrics["ltp"] * 0.005
+        box_label = f"ATR(14) ≈ ₹{box_size:.2f}"
+    elif timeframe == "1 Hour":
+        base = daily_atr_7 if daily_atr_7 and daily_atr_7 > 0 else (daily_atr_14 or metrics["ltp"] * 0.005)
+        box_size = base / 5
+        box_label = f"(7-day ATR / 5) ≈ ₹{box_size:.2f}"
+    else:  # 30 Minutes
+        base = daily_atr_7 if daily_atr_7 and daily_atr_7 > 0 else (daily_atr_14 or metrics["ltp"] * 0.005)
+        box_size = (base / 5) / 2
+        box_label = f"½ of 1h box ≈ ₹{box_size:.2f}"
+
+    st.caption(f"Renko Box Size: **{box_label}**  |  Timeframe: **{timeframe}**")
+
+    renko_df = generate_renko(candle_df, box_size)
+
+    if renko_df.empty:
+        st.info("Not enough price movement to generate Renko bricks with the current box size.")
+    else:
+        renko_df["EMA20"] = calculate_ema(renko_df["Close"], 20)
+        renko_df["EMA50"] = calculate_ema(renko_df["Close"], 50)
+
+        fig_r = go.Figure()
+
+        fig_r.add_trace(go.Candlestick(
+            x=renko_df["Brick"],
+            open=renko_df["Open"],
+            high=renko_df["High"],
+            low=renko_df["Low"],
+            close=renko_df["Close"],
+            name="Renko",
+            increasing_line_color="#34d399",
+            decreasing_line_color="#f87171",
+            increasing_fillcolor="#34d399",
+            decreasing_fillcolor="#f87171"
+        ))
+
+        fig_r.add_trace(go.Scatter(
+            x=renko_df["Brick"], y=renko_df["EMA20"],
+            mode="lines", name="EMA 20",
+            line=dict(color="#fbbf24", width=1.5)
+        ))
+
+        fig_r.add_trace(go.Scatter(
+            x=renko_df["Brick"], y=renko_df["EMA50"],
+            mode="lines", name="EMA 50",
+            line=dict(color="#60a5fa", width=1.8)
+        ))
+
+        fig_r.update_layout(
+            height=420,
+            title=f"{selected} Renko • {timeframe}  |  Box ≈ ₹{box_size:.2f}",
+            xaxis_title="Brick #",
+            yaxis_title="Price (₹)",
+            xaxis_rangeslider_visible=False,
+            template="plotly_dark" if st.session_state.theme == "dark" else "plotly_white",
+            margin=dict(l=20, r=20, t=50, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)"
+        )
+        fig_r.update_xaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
+        fig_r.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
+        st.plotly_chart(fig_r, use_container_width=True)
 
 st.markdown("---")
 
@@ -431,7 +641,6 @@ st.markdown("---")
 # -------------------------------------------------
 st.markdown('<div class="section-header">⚡ Options Strike Matrix (ATM ±2)</div>', unsafe_allow_html=True)
 st.caption(f"Spot: **₹{metrics['ltp']:,.2f}**")
-
 options_df = get_options_chain(metrics["ltp"], selected)
 
 def highlight_atm(row):
@@ -451,9 +660,7 @@ st.markdown("---")
 # Top Gainers / Losers
 # -------------------------------------------------
 st.markdown('<div class="section-header">🏆 Top Gainers & Losers (Universe)</div>', unsafe_allow_html=True)
-
 gainers, losers = get_top_movers(universe)
-
 gcol, lcol = st.columns(2)
 with gcol:
     st.markdown("##### 🟢 Top Gainers")
@@ -464,7 +671,6 @@ with gcol:
         )
     else:
         st.info("Gainers data loading...")
-
 with lcol:
     st.markdown("##### 🔴 Top Losers")
     if losers is not None:
