@@ -9,39 +9,24 @@ import time
 import pytz
 
 # -------------------------------------------------
-# Page Config - Sidebar starts EXPANDED
+# Page Config
 # -------------------------------------------------
 st.set_page_config(
     page_title="Apex Market Terminal",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"          # Important: always open on load
+    initial_sidebar_state="expanded"          # Expanded on desktop
 )
 
 # -------------------------------------------------
-# CSS - Keep sidebar toggle visible + hide only Manage app
+# Hide Manage app button
 # -------------------------------------------------
 st.markdown("""
 <style>
     footer {visibility: hidden !important;}
-    
-    /* Hide only the Deploy / Manage app button */
-    .stDeployButton {
-        display: none !important;
-        visibility: hidden !important;
-    }
-    
-    /* Do NOT hide the sidebar collapse/expand button */
-    [data-testid="stSidebarCollapsedControl"] {
-        display: block !important;
-        visibility: visible !important;
-        opacity: 1 !important;
-    }
-    
-    /* Make the collapse chevron more visible */
-    button[kind="headerNoPadding"] {
-        visibility: visible !important;
-    }
+    .stDeployButton {display: none !important; visibility: hidden !important;}
+    [data-testid="stToolbar"] {display: none !important;}
+    div[data-testid="stDecoration"] {display: none !important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -173,7 +158,7 @@ def apply_theme(theme: str):
 apply_theme(st.session_state.theme)
 
 # -------------------------------------------------
-# Data Helpers (same as before)
+# Data Helpers
 # -------------------------------------------------
 @st.cache_data(ttl=45)
 def fetch_index_quote(ticker: str):
@@ -293,6 +278,106 @@ def get_top_movers(universe: list):
     except:
         return None, None
 
+
+def analyze_renko_signal(symbol: str, timeframe: str):
+    """Return a row only when the latest two Renko bricks share direction."""
+    interval = "1h" if timeframe == "1 Hour" else "30m"
+    period = "1mo" if interval == "1h" else "5d"
+    candles = get_ohlc_data(symbol, interval=interval, period=period)
+    if candles is None or candles.empty or len(candles) < 22:
+        return None
+
+    candles = candles.tail(120 if interval == "1h" else 150).copy().reset_index(drop=True)
+
+    # Ignore the current, still-forming intraday candle where identifiable.
+    if not candles.empty:
+        last_time = pd.Timestamp(candles["Date"].iloc[-1])
+        if last_time.tzinfo is None:
+            last_time = last_time.tz_localize("Asia/Kolkata")
+        else:
+            last_time = last_time.tz_convert("Asia/Kolkata")
+        bar_length = pd.Timedelta(hours=1 if interval == "1h" else 0, minutes=30 if interval == "30m" else 0)
+        if last_time + bar_length > pd.Timestamp.now(tz="Asia/Kolkata") and len(candles) > 1:
+            candles = candles.iloc[:-1].reset_index(drop=True)
+
+    if len(candles) < 22:
+        return None
+    candles["EMA20"] = calculate_ema(candles["Close"], 20)
+    price = float(candles["Close"].iloc[-1])
+    ema20 = float(candles["EMA20"].iloc[-1])
+
+    daily_atr = get_daily_atr(symbol, 14, 7)
+    if not daily_atr or daily_atr <= 0:
+        daily_atr = get_daily_atr(symbol, 14, 14)
+    if not daily_atr or daily_atr <= 0:
+        daily_atr = price * 0.005
+    box_size = daily_atr / 5 if interval == "1h" else daily_atr / 10
+
+    bricks = generate_renko(candles, box_size)
+    if bricks.empty or len(bricks) < 2:
+        return None
+
+    first, second = bricks.iloc[-2], bricks.iloc[-1]
+    first_green = float(first["Close"]) > float(first["Open"])
+    second_green = float(second["Close"]) > float(second["Open"])
+    first_red = float(first["Close"]) < float(first["Open"])
+    second_red = float(second["Close"]) < float(second["Open"])
+
+    if first_green and second_green:
+        direction = "BULLISH"
+        action = "BUY" if price > ema20 else "BULLISH"
+        entry = float(second["Close"])
+        exit_price = float(first["Low"])
+    elif first_red and second_red:
+        direction = "BEARISH"
+        action = "SELL" if price < ema20 else "BEARISH"
+        entry = float(second["Close"])
+        exit_price = float(first["High"])
+    else:
+        return None
+
+    return {
+        "Stock": symbol,
+        "Timeframe": timeframe,
+        "Signal": action,
+        "Renko": direction,
+        "Price": round(price, 2),
+        "EMA 20": round(ema20, 2),
+        "Entry": round(entry, 2),
+        "Exit": round(exit_price, 2),
+        "Box Size": round(float(box_size), 2),
+        "Last Brick Time": str(bricks["Date"].iloc[-1])
+    }
+
+
+@st.cache_data(ttl=90, show_spinner=False)
+def scan_renko_universe(universe_tuple: tuple):
+    """Cached scan of the stock universe for both intraday timeframes."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    jobs = [(symbol, timeframe) for symbol in universe_tuple
+            for timeframe in ("1 Hour", "30 Minutes")]
+    rows = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(analyze_renko_signal, symbol, timeframe)
+                   for symbol, timeframe in jobs]
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                if result:
+                    rows.append(result)
+            except Exception:
+                continue
+
+    if not rows:
+        return pd.DataFrame()
+    result_df = pd.DataFrame(rows)
+    order = {"BUY": 0, "BULLISH": 1, "SELL": 2, "BEARISH": 3}
+    result_df["_order"] = result_df["Signal"].map(order).fillna(9)
+    return result_df.sort_values(["_order", "Timeframe", "Stock"]).drop(
+        columns=["_order"]).reset_index(drop=True)
+
+
 def get_options_chain(ltp: float, symbol: str):
     try:
         t = yf.Ticker(f"{symbol}.NS")
@@ -337,14 +422,11 @@ PLOTLY_CONFIG = {
 }
 
 # -------------------------------------------------
-# SIDEBAR - Full controls for Desktop
+# Sidebar (Desktop friendly)
 # -------------------------------------------------
-universe = get_stock_universe()
-
 with st.sidebar:
     st.markdown("### ⚙️ Controls")
-
-    # Theme
+    
     theme_choice = st.radio("Theme", ["🌙 Dark", "☀️ Light"],
                             index=0 if st.session_state.theme == "dark" else 1,
                             horizontal=True)
@@ -354,31 +436,20 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-
-    # Stock Selection (Desktop primary)
-    selected = st.selectbox("🔍 Select Stock (NSE)", options=universe, index=0, key="selected")
-
-    st.markdown("---")
-
-    # Auto refresh + Refresh button
-    auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=False)
-    if st.button("Refresh Now", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-
-    st.markdown("---")
     st.markdown("### ⭐ Watchlist")
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("➕ Add", use_container_width=True):
-            if selected not in st.session_state.watchlist:
-                st.session_state.watchlist.append(selected)
-                st.success(f"Added {selected}")
-    with c2:
-        if st.button("➖ Remove", use_container_width=True):
-            if selected in st.session_state.watchlist:
-                st.session_state.watchlist.remove(selected)
-                st.info(f"Removed {selected}")
+    
+    if "selected" in st.session_state:
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("➕ Add", use_container_width=True):
+                if st.session_state.selected not in st.session_state.watchlist:
+                    st.session_state.watchlist.append(st.session_state.selected)
+                    st.success(f"Added {st.session_state.selected}")
+        with c2:
+            if st.button("➖ Remove", use_container_width=True):
+                if st.session_state.selected in st.session_state.watchlist:
+                    st.session_state.watchlist.remove(st.session_state.selected)
+                    st.info(f"Removed {st.session_state.selected}")
 
     if st.session_state.watchlist:
         chips = " ".join([f'<span class="watchlist-chip">{s}</span>' for s in st.session_state.watchlist])
@@ -390,7 +461,7 @@ with st.sidebar:
     st.caption("Data: Yahoo Finance • ~15 min delay")
 
 # -------------------------------------------------
-# Main Page Header
+# Header + Time
 # -------------------------------------------------
 ist = pytz.timezone("Asia/Kolkata")
 current_time = datetime.now(ist).strftime("%d %b %Y • %H:%M:%S IST")
@@ -398,16 +469,27 @@ current_time = datetime.now(ist).strftime("%d %b %Y • %H:%M:%S IST")
 st.markdown("# 📈 Apex Market Terminal")
 st.caption(f"Live Indian Equities & Indices • **{current_time}**")
 
-# Extra stock selector on main page (for Mobile convenience)
-st.selectbox("🔍 Quick Stock Select (Mobile friendly)", options=universe, 
-             index=universe.index(selected) if selected in universe else 0,
-             key="mobile_selected",
-             on_change=lambda: st.session_state.update({"selected": st.session_state.mobile_selected}))
+# ========== MAIN CONTROLS (Visible on both Desktop & Mobile) ==========
+universe = get_stock_universe()
+
+col1, col2, col3 = st.columns([2.2, 1.2, 1])
+
+with col1:
+    selected = st.selectbox("🔍 Select Stock (NSE)", options=universe, index=0, key="selected")
+
+with col2:
+    auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=False)
+
+with col3:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("Refresh Now", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
 st.markdown("---")
 
 # -------------------------------------------------
-# Rest of the app (Indices, Charts, etc.) remains the same
+# Indices
 # -------------------------------------------------
 st.markdown('<div class="section-header">Market Indices</div>', unsafe_allow_html=True)
 indices = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "NIFTY MIDCAP 150": "NIFTYMIDCAP150.NS"}
@@ -430,6 +512,9 @@ for i, (name, ticker) in enumerate(indices.items()):
 
 st.markdown("---")
 
+# -------------------------------------------------
+# Stock Analytics
+# -------------------------------------------------
 st.markdown(f'<div class="section-header">📌 {selected} • Live Analytics</div>', unsafe_allow_html=True)
 
 metrics = fetch_stock_data(selected)
@@ -447,6 +532,9 @@ v1, v2 = st.columns(2)
 v1.metric("Session Volume", f"{metrics['volume']:,}")
 v2.metric("20-Day Avg Volume", f"{metrics['avg_volume']:,}")
 
+# -------------------------------------------------
+# Timeframe
+# -------------------------------------------------
 st.markdown("#### 📊 Price Chart")
 tf_col1, tf_col2 = st.columns([2, 1])
 with tf_col1:
@@ -460,6 +548,9 @@ with tf_col2:
 
 interval = {"Daily": "1d", "1 Hour": "1h", "30 Minutes": "30m"}[timeframe]
 
+# -------------------------------------------------
+# Charts
+# -------------------------------------------------
 candle_df = get_ohlc_data(selected, interval=interval, period=period)
 
 if candle_df is None or candle_df.empty:
@@ -528,7 +619,7 @@ else:
     fig.update_yaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
     st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
 
-    # Renko Chart
+    # Renko
     st.markdown("#### 🧱 Renko Chart")
 
     daily_atr_14 = get_daily_atr(selected, 14, 14)
@@ -586,7 +677,63 @@ else:
 
 st.markdown("---")
 
-# Options + Gainers/Losers (same as before)
+# -------------------------------------------------
+# Intraday Renko Signal Scanner (all stocks in universe)
+# -------------------------------------------------
+st.markdown('<div class="section-header">🎯 Intraday Renko Signals • 1 Hour & 30 Minutes</div>',
+            unsafe_allow_html=True)
+st.caption(
+    "Only stocks with the latest two Renko bricks in the same direction are listed. "
+    "BUY/SELL additionally requires the latest timeframe close to be above/below its 20 EMA. "
+    "Signals use Yahoo Finance intraday data and the same ATR-based Renko box sizing as the chart."
+)
+
+scan_col1, scan_col2 = st.columns([1, 4])
+with scan_col1:
+    if st.button("🔄 Scan All Stocks", use_container_width=True):
+        scan_renko_universe.clear()
+        st.cache_data.clear()
+        st.rerun()
+with scan_col2:
+    st.caption(f"Scanning {len(universe)} NSE stocks across 1-hour and 30-minute timeframes.")
+
+with st.spinner("Scanning Renko bricks for the stock universe… first scan may take a little time."):
+    signal_df = scan_renko_universe(tuple(universe))
+
+if signal_df.empty:
+    st.info("No stocks currently meet the two-consecutive-brick criteria, or intraday data is unavailable.")
+else:
+    buy_df = signal_df[signal_df["Signal"] == "BUY"]
+    bullish_df = signal_df[signal_df["Signal"] == "BULLISH"]
+    sell_df = signal_df[signal_df["Signal"] == "SELL"]
+    bearish_df = signal_df[signal_df["Signal"] == "BEARISH"]
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1.metric("BUY", len(buy_df))
+    sc2.metric("BULLISH", len(bullish_df))
+    sc3.metric("SELL", len(sell_df))
+    sc4.metric("BEARISH", len(bearish_df))
+
+    display_df = signal_df.copy()
+    display_df["Signal"] = display_df["Signal"].map({
+        "BUY": "🟢 BUY", "BULLISH": "🟩 BULLISH",
+        "SELL": "🔴 SELL", "BEARISH": "🟥 BEARISH"
+    }).fillna(display_df["Signal"])
+    st.dataframe(
+        display_df[["Stock", "Timeframe", "Signal", "Price", "EMA 20",
+                    "Entry", "Exit", "Box Size", "Last Brick Time"]],
+        use_container_width=True, hide_index=True
+    )
+    st.download_button(
+        "⬇️ Download signal list (CSV)",
+        data=signal_df.to_csv(index=False).encode("utf-8"),
+        file_name="intraday_renko_signals.csv",
+        mime="text/csv"
+    )
+
+st.markdown("---")
+
+# Options
 st.markdown('<div class="section-header">⚡ Options Strike Matrix (ATM ±2)</div>', unsafe_allow_html=True)
 st.caption(f"Spot: **₹{metrics['ltp']:,.2f}**")
 options_df = get_options_chain(metrics["ltp"], selected)
@@ -602,6 +749,7 @@ st.dataframe(styled, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
+# Gainers / Losers
 st.markdown('<div class="section-header">🏆 Top Gainers & Losers</div>', unsafe_allow_html=True)
 gainers, losers = get_top_movers(universe)
 gcol, lcol = st.columns(2)
@@ -620,6 +768,7 @@ with lcol:
     else:
         st.info("Loading...")
 
+# Auto refresh every 1 minute
 if auto_refresh:
     time.sleep(60)
     st.rerun()
