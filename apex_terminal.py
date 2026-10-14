@@ -15,11 +15,11 @@ st.set_page_config(
     page_title="Apex Market Terminal",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"          # Expanded on desktop
 )
 
 # -------------------------------------------------
-# Hide Streamlit Menu + Manage app button
+# Hide Manage app button
 # -------------------------------------------------
 st.markdown("""
 <style>
@@ -94,7 +94,6 @@ def apply_theme(theme: str):
                 padding: 4px 12px; border-radius: 20px; margin: 3px;
                 font-size: 13px; font-weight: 500;
             }
-            /* Make captions more visible in dark mode */
             .stCaption, [data-testid="stCaption"] {
                 color: #cbd5e1 !important;
             }
@@ -170,8 +169,7 @@ def fetch_index_quote(ticker: str):
         prev = getattr(info, "previous_close", None)
         if price is None or prev is None:
             hist = t.history(period="5d")
-            if hist.empty:
-                return None
+            if hist.empty: return None
             price = float(hist["Close"].iloc[-1])
             prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
         change = price - prev
@@ -182,13 +180,11 @@ def fetch_index_quote(ticker: str):
 
 @st.cache_data(ttl=45)
 def fetch_stock_data(symbol: str):
-    ticker = f"{symbol}.NS"
     try:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(f"{symbol}.NS")
         info = t.fast_info
         hist = t.history(period="1mo")
-        if hist.empty:
-            return None
+        if hist.empty: return None
         ltp = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None) or float(hist["Close"].iloc[-1])
         prev_close = getattr(info, "previous_close", None) or (float(hist["Close"].iloc[-2]) if len(hist) > 1 else ltp)
         day_high = getattr(info, "day_high", None) or float(hist["High"].iloc[-1])
@@ -213,13 +209,12 @@ def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
         if interval in ["30m", "1h"]:
             period = "1mo" if interval == "1h" else "5d"
         df = t.history(period=period, interval=interval)
-        if df.empty:
-            return None
+        if df.empty: return None
         df = df.reset_index()
         if "Datetime" in df.columns:
             df = df.rename(columns={"Datetime": "Date"})
         return df
-    except Exception:
+    except:
         return None
 
 @st.cache_data(ttl=90)
@@ -227,48 +222,35 @@ def get_daily_atr(symbol: str, atr_period: int = 14, lookback_days: int = 30):
     try:
         t = yf.Ticker(f"{symbol}.NS")
         df = t.history(period="2mo", interval="1d")
-        if df.empty or len(df) < atr_period + 5:
-            return None
-        high = df["High"]
-        low = df["Low"]
-        close = df["Close"]
-        tr1 = high - low
-        tr2 = (high - close.shift()).abs()
-        tr3 = (low - close.shift()).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        if df.empty or len(df) < atr_period + 5: return None
+        high, low, close = df["High"], df["Low"], df["Close"]
+        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
         atr = tr.rolling(window=atr_period).mean()
         recent = atr.dropna().tail(lookback_days)
-        if recent.empty:
-            return None
-        return float(recent.mean())
-    except Exception:
+        return float(recent.mean()) if not recent.empty else None
+    except:
         return None
 
 def calculate_ema(series: pd.Series, span: int) -> pd.Series:
     return series.ewm(span=span, adjust=False).mean()
 
 def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
-    if df is None or df.empty or box_size <= 0:
-        return pd.DataFrame()
+    if df is None or df.empty or box_size <= 0: return pd.DataFrame()
     prices = df["Close"].values
     dates = df["Date"].values
     bricks = []
     current_brick = round(prices[0] / box_size) * box_size
     for i in range(1, len(prices)):
-        price = prices[i]
-        date = dates[i]
+        price, date = prices[i], dates[i]
         while price >= current_brick + box_size:
-            open_p = current_brick
-            close_p = current_brick + box_size
-            bricks.append({"Date": date, "Open": open_p, "High": close_p, "Low": open_p, "Close": close_p})
-            current_brick = close_p
+            bricks.append({"Date": date, "Open": current_brick, "High": current_brick + box_size,
+                           "Low": current_brick, "Close": current_brick + box_size})
+            current_brick += box_size
         while price <= current_brick - box_size:
-            open_p = current_brick
-            close_p = current_brick - box_size
-            bricks.append({"Date": date, "Open": open_p, "High": open_p, "Low": close_p, "Close": close_p})
-            current_brick = close_p
-    if not bricks:
-        return pd.DataFrame()
+            bricks.append({"Date": date, "Open": current_brick, "High": current_brick,
+                           "Low": current_brick - box_size, "Close": current_brick - box_size})
+            current_brick -= box_size
+    if not bricks: return pd.DataFrame()
     renko_df = pd.DataFrame(bricks)
     renko_df["Brick"] = range(1, len(renko_df) + 1)
     return renko_df
@@ -281,29 +263,19 @@ def get_top_movers(universe: list):
         rows = []
         for sym in universe:
             try:
-                if len(universe) == 1:
-                    hist = data
-                else:
-                    hist = data[f"{sym}.NS"] if f"{sym}.NS" in data.columns.get_level_values(0) else None
-                if hist is None or hist.empty:
-                    continue
+                hist = data if len(universe) == 1 else (data[f"{sym}.NS"] if f"{sym}.NS" in data.columns.get_level_values(0) else None)
+                if hist is None or hist.empty: continue
                 close = hist["Close"].dropna()
-                if len(close) < 2:
-                    continue
-                last = float(close.iloc[-1])
-                prev = float(close.iloc[-2])
+                if len(close) < 2: continue
+                last, prev = float(close.iloc[-1]), float(close.iloc[-2])
                 chg = last - prev
-                pct = (chg / prev) * 100
-                rows.append({"Symbol": sym, "LTP": round(last, 2), "Change": round(chg, 2), "% Chg": round(pct, 2)})
-            except:
-                continue
+                rows.append({"Symbol": sym, "LTP": round(last, 2), "Change": round(chg, 2), "% Chg": round((chg/prev)*100, 2)})
+            except: continue
         df = pd.DataFrame(rows)
-        if df.empty:
-            return None, None
-        gainers = df.sort_values("% Chg", ascending=False).head(8).reset_index(drop=True)
-        losers = df.sort_values("% Chg", ascending=True).head(8).reset_index(drop=True)
-        return gainers, losers
-    except Exception:
+        if df.empty: return None, None
+        return df.sort_values("% Chg", ascending=False).head(8).reset_index(drop=True), \
+               df.sort_values("% Chg", ascending=True).head(8).reset_index(drop=True)
+    except:
         return None, None
 
 def get_options_chain(ltp: float, symbol: str):
@@ -318,8 +290,7 @@ def get_options_chain(ltp: float, symbol: str):
             df = df.iloc[(df["Strike Price"] - atm).abs().argsort()[:5]].sort_values("Strike Price").reset_index(drop=True)
             if not df.empty:
                 return df[["Call Price (CE)", "Strike Price", "Put Price (PE)"]]
-    except:
-        pass
+    except: pass
     gap = 50 if ltp > 1000 else (20 if ltp > 500 else 10)
     atm = round(ltp / gap) * gap
     strikes = [atm + i * gap for i in range(-2, 3)]
@@ -342,9 +313,6 @@ def get_stock_universe():
         "CUMMINSIND", "ASTRAL", "PAGEIND", "HAVELLS", "VOLTAS", "BERGEPAINT"
     ]
 
-# -------------------------------------------------
-# Plotly Config
-# -------------------------------------------------
 PLOTLY_CONFIG = {
     "displayModeBar": False,
     "scrollZoom": False,
@@ -354,10 +322,11 @@ PLOTLY_CONFIG = {
 }
 
 # -------------------------------------------------
-# Sidebar
+# Sidebar (Desktop friendly)
 # -------------------------------------------------
 with st.sidebar:
-    st.markdown("### ⚙️ Extra Controls")
+    st.markdown("### ⚙️ Controls")
+    
     theme_choice = st.radio("Theme", ["🌙 Dark", "☀️ Light"],
                             index=0 if st.session_state.theme == "dark" else 1,
                             horizontal=True)
@@ -368,14 +337,15 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### ⭐ Watchlist")
+    
     if "selected" in st.session_state:
-        col_add, col_rem = st.columns(2)
-        with col_add:
+        c1, c2 = st.columns(2)
+        with c1:
             if st.button("➕ Add", use_container_width=True):
                 if st.session_state.selected not in st.session_state.watchlist:
                     st.session_state.watchlist.append(st.session_state.selected)
                     st.success(f"Added {st.session_state.selected}")
-        with col_rem:
+        with c2:
             if st.button("➖ Remove", use_container_width=True):
                 if st.session_state.selected in st.session_state.watchlist:
                     st.session_state.watchlist.remove(st.session_state.selected)
@@ -388,16 +358,10 @@ with st.sidebar:
         st.caption("Watchlist is empty")
 
     st.markdown("---")
-    auto_refresh = st.checkbox("Auto-refresh every 45s", value=False)
-    if st.button("🔄 Refresh Now", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-
-    st.markdown("---")
     st.caption("Data: Yahoo Finance • ~15 min delay")
 
 # -------------------------------------------------
-# Header + Current Time (Always latest)
+# Header + Time
 # -------------------------------------------------
 ist = pytz.timezone("Asia/Kolkata")
 current_time = datetime.now(ist).strftime("%d %b %Y • %H:%M:%S IST")
@@ -405,9 +369,22 @@ current_time = datetime.now(ist).strftime("%d %b %Y • %H:%M:%S IST")
 st.markdown("# 📈 Apex Market Terminal")
 st.caption(f"Live Indian Equities & Indices • **{current_time}**")
 
-# ========== STOCK SELECTION ==========
+# ========== MAIN CONTROLS (Visible on both Desktop & Mobile) ==========
 universe = get_stock_universe()
-selected = st.selectbox("🔍 Select Stock (NSE)", options=universe, index=0, key="selected")
+
+col1, col2, col3 = st.columns([2.2, 1.2, 1])
+
+with col1:
+    selected = st.selectbox("🔍 Select Stock (NSE)", options=universe, index=0, key="selected")
+
+with col2:
+    auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=False)
+
+with col3:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("Refresh Now", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
 st.markdown("---")
 
@@ -461,10 +438,10 @@ v2.metric("20-Day Avg Volume", f"{metrics['avg_volume']:,}")
 st.markdown("#### 📊 Price Chart")
 tf_col1, tf_col2 = st.columns([2, 1])
 with tf_col1:
-    timeframe = st.radio("Timeframe", options=["Daily", "1 Hour", "30 Minutes"], index=0, horizontal=True)
+    timeframe = st.radio("Timeframe", ["Daily", "1 Hour", "30 Minutes"], index=0, horizontal=True)
 with tf_col2:
     if timeframe == "Daily":
-        period = st.select_slider("Chart Period", options=["1mo", "3mo", "6mo", "1y"], value="3mo")
+        period = st.select_slider("Chart Period", ["1mo", "3mo", "6mo", "1y"], value="3mo")
     else:
         period = "1mo" if timeframe == "1 Hour" else "5d"
         st.caption(f"Period: **{period}**")
@@ -499,7 +476,6 @@ else:
     axis_color = "#e2e8f0" if is_dark else "#1e293b"
     grid_color = "rgba(148,163,184,0.2)" if is_dark else "rgba(100,116,139,0.15)"
 
-    # Candlestick
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03,
                         row_heights=[0.72, 0.28], subplot_titles=(f"{selected} • {timeframe}", "Volume"))
 
@@ -517,7 +493,8 @@ else:
                              line=dict(color="#60a5fa", width=2.0), hoverinfo="skip"), row=1, col=1)
 
     colors = ["#34d399" if c >= o else "#f87171" for o, c in zip(candle_df["Open"], candle_df["Close"])]
-    fig.add_trace(go.Bar(x=candle_df["x"], y=candle_df["Volume"], marker_color=colors, name="Volume", opacity=0.7, hoverinfo="skip"), row=2, col=1)
+    fig.add_trace(go.Bar(x=candle_df["x"], y=candle_df["Volume"], marker_color=colors,
+                         name="Volume", opacity=0.7, hoverinfo="skip"), row=2, col=1)
 
     fig.update_layout(
         height=580 if use_sequential else 520,
@@ -526,8 +503,7 @@ else:
         margin=dict(l=10, r=10, t=40, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=axis_color)),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color=axis_color),
-        dragmode=False
+        font=dict(color=axis_color), dragmode=False
     )
 
     if use_sequential:
@@ -546,8 +522,8 @@ else:
     # Renko
     st.markdown("#### 🧱 Renko Chart")
 
-    daily_atr_14 = get_daily_atr(selected, atr_period=14, lookback_days=14)
-    daily_atr_7 = get_daily_atr(selected, atr_period=14, lookback_days=7)
+    daily_atr_14 = get_daily_atr(selected, 14, 14)
+    daily_atr_7 = get_daily_atr(selected, 14, 7)
 
     if timeframe == "Daily":
         box_size = daily_atr_14 if daily_atr_14 and daily_atr_14 > 0 else metrics["ltp"] * 0.005
@@ -593,8 +569,7 @@ else:
             margin=dict(l=20, r=20, t=50, b=20),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=axis_color)),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color=axis_color),
-            dragmode=False
+            font=dict(color=axis_color), dragmode=False
         )
         fig_r.update_xaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
         fig_r.update_yaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
@@ -613,15 +588,13 @@ def highlight_atm(row):
                else ["background-color: #e0e7ff; color: #312e81; font-weight: 600"] * len(row)
     return [""] * len(row)
 
-styled = (options_df.style
-          .format({"Call Price (CE)": "₹{:,.2f}", "Strike Price": "₹{:,.0f}", "Put Price (PE)": "₹{:,.2f}"})
-          .apply(highlight_atm, axis=1))
+styled = options_df.style.format({"Call Price (CE)": "₹{:,.2f}", "Strike Price": "₹{:,.0f}", "Put Price (PE)": "₹{:,.2f}"}).apply(highlight_atm, axis=1)
 st.dataframe(styled, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
 # Gainers / Losers
-st.markdown('<div class="section-header">🏆 Top Gainers & Losers (Universe)</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">🏆 Top Gainers & Losers</div>', unsafe_allow_html=True)
 gainers, losers = get_top_movers(universe)
 gcol, lcol = st.columns(2)
 with gcol:
@@ -630,15 +603,16 @@ with gcol:
         st.dataframe(gainers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
                      use_container_width=True, hide_index=True)
     else:
-        st.info("Gainers data loading...")
+        st.info("Loading...")
 with lcol:
     st.markdown("##### 🔴 Top Losers")
     if losers is not None:
         st.dataframe(losers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
                      use_container_width=True, hide_index=True)
     else:
-        st.info("Losers data loading...")
+        st.info("Loading...")
 
+# Auto refresh every 1 minute
 if auto_refresh:
-    time.sleep(45)
+    time.sleep(60)
     st.rerun()
