@@ -9,24 +9,39 @@ import time
 import pytz
 
 # -------------------------------------------------
-# Page Config
+# Page Config - Sidebar starts EXPANDED
 # -------------------------------------------------
 st.set_page_config(
     page_title="Apex Market Terminal",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"          # Expanded on desktop
+    initial_sidebar_state="expanded"          # Important: always open on load
 )
 
 # -------------------------------------------------
-# Hide Manage app button
+# CSS - Keep sidebar toggle visible + hide only Manage app
 # -------------------------------------------------
 st.markdown("""
 <style>
     footer {visibility: hidden !important;}
-    .stDeployButton {display: none !important; visibility: hidden !important;}
-    [data-testid="stToolbar"] {display: none !important;}
-    div[data-testid="stDecoration"] {display: none !important;}
+    
+    /* Hide only the Deploy / Manage app button */
+    .stDeployButton {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    
+    /* Do NOT hide the sidebar collapse/expand button */
+    [data-testid="stSidebarCollapsedControl"] {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* Make the collapse chevron more visible */
+    button[kind="headerNoPadding"] {
+        visibility: visible !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -158,7 +173,7 @@ def apply_theme(theme: str):
 apply_theme(st.session_state.theme)
 
 # -------------------------------------------------
-# Data Helpers
+# Data Helpers (same as before)
 # -------------------------------------------------
 @st.cache_data(ttl=45)
 def fetch_index_quote(ticker: str):
@@ -322,11 +337,14 @@ PLOTLY_CONFIG = {
 }
 
 # -------------------------------------------------
-# Sidebar (Desktop friendly)
+# SIDEBAR - Full controls for Desktop
 # -------------------------------------------------
+universe = get_stock_universe()
+
 with st.sidebar:
     st.markdown("### ⚙️ Controls")
-    
+
+    # Theme
     theme_choice = st.radio("Theme", ["🌙 Dark", "☀️ Light"],
                             index=0 if st.session_state.theme == "dark" else 1,
                             horizontal=True)
@@ -336,20 +354,31 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
+
+    # Stock Selection (Desktop primary)
+    selected = st.selectbox("🔍 Select Stock (NSE)", options=universe, index=0, key="selected")
+
+    st.markdown("---")
+
+    # Auto refresh + Refresh button
+    auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=False)
+    if st.button("Refresh Now", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.markdown("---")
     st.markdown("### ⭐ Watchlist")
-    
-    if "selected" in st.session_state:
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("➕ Add", use_container_width=True):
-                if st.session_state.selected not in st.session_state.watchlist:
-                    st.session_state.watchlist.append(st.session_state.selected)
-                    st.success(f"Added {st.session_state.selected}")
-        with c2:
-            if st.button("➖ Remove", use_container_width=True):
-                if st.session_state.selected in st.session_state.watchlist:
-                    st.session_state.watchlist.remove(st.session_state.selected)
-                    st.info(f"Removed {st.session_state.selected}")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("➕ Add", use_container_width=True):
+            if selected not in st.session_state.watchlist:
+                st.session_state.watchlist.append(selected)
+                st.success(f"Added {selected}")
+    with c2:
+        if st.button("➖ Remove", use_container_width=True):
+            if selected in st.session_state.watchlist:
+                st.session_state.watchlist.remove(selected)
+                st.info(f"Removed {selected}")
 
     if st.session_state.watchlist:
         chips = " ".join([f'<span class="watchlist-chip">{s}</span>' for s in st.session_state.watchlist])
@@ -361,7 +390,7 @@ with st.sidebar:
     st.caption("Data: Yahoo Finance • ~15 min delay")
 
 # -------------------------------------------------
-# Header + Time
+# Main Page Header
 # -------------------------------------------------
 ist = pytz.timezone("Asia/Kolkata")
 current_time = datetime.now(ist).strftime("%d %b %Y • %H:%M:%S IST")
@@ -369,27 +398,16 @@ current_time = datetime.now(ist).strftime("%d %b %Y • %H:%M:%S IST")
 st.markdown("# 📈 Apex Market Terminal")
 st.caption(f"Live Indian Equities & Indices • **{current_time}**")
 
-# ========== MAIN CONTROLS (Visible on both Desktop & Mobile) ==========
-universe = get_stock_universe()
-
-col1, col2, col3 = st.columns([2.2, 1.2, 1])
-
-with col1:
-    selected = st.selectbox("🔍 Select Stock (NSE)", options=universe, index=0, key="selected")
-
-with col2:
-    auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=False)
-
-with col3:
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("Refresh Now", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+# Extra stock selector on main page (for Mobile convenience)
+st.selectbox("🔍 Quick Stock Select (Mobile friendly)", options=universe, 
+             index=universe.index(selected) if selected in universe else 0,
+             key="mobile_selected",
+             on_change=lambda: st.session_state.update({"selected": st.session_state.mobile_selected}))
 
 st.markdown("---")
 
 # -------------------------------------------------
-# Indices
+# Rest of the app (Indices, Charts, etc.) remains the same
 # -------------------------------------------------
 st.markdown('<div class="section-header">Market Indices</div>', unsafe_allow_html=True)
 indices = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "NIFTY MIDCAP 150": "NIFTYMIDCAP150.NS"}
@@ -412,9 +430,6 @@ for i, (name, ticker) in enumerate(indices.items()):
 
 st.markdown("---")
 
-# -------------------------------------------------
-# Stock Analytics
-# -------------------------------------------------
 st.markdown(f'<div class="section-header">📌 {selected} • Live Analytics</div>', unsafe_allow_html=True)
 
 metrics = fetch_stock_data(selected)
@@ -432,9 +447,6 @@ v1, v2 = st.columns(2)
 v1.metric("Session Volume", f"{metrics['volume']:,}")
 v2.metric("20-Day Avg Volume", f"{metrics['avg_volume']:,}")
 
-# -------------------------------------------------
-# Timeframe
-# -------------------------------------------------
 st.markdown("#### 📊 Price Chart")
 tf_col1, tf_col2 = st.columns([2, 1])
 with tf_col1:
@@ -448,9 +460,6 @@ with tf_col2:
 
 interval = {"Daily": "1d", "1 Hour": "1h", "30 Minutes": "30m"}[timeframe]
 
-# -------------------------------------------------
-# Charts
-# -------------------------------------------------
 candle_df = get_ohlc_data(selected, interval=interval, period=period)
 
 if candle_df is None or candle_df.empty:
@@ -519,7 +528,7 @@ else:
     fig.update_yaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
     st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
 
-    # Renko
+    # Renko Chart
     st.markdown("#### 🧱 Renko Chart")
 
     daily_atr_14 = get_daily_atr(selected, 14, 14)
@@ -577,7 +586,7 @@ else:
 
 st.markdown("---")
 
-# Options
+# Options + Gainers/Losers (same as before)
 st.markdown('<div class="section-header">⚡ Options Strike Matrix (ATM ±2)</div>', unsafe_allow_html=True)
 st.caption(f"Spot: **₹{metrics['ltp']:,.2f}**")
 options_df = get_options_chain(metrics["ltp"], selected)
@@ -593,7 +602,6 @@ st.dataframe(styled, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
-# Gainers / Losers
 st.markdown('<div class="section-header">🏆 Top Gainers & Losers</div>', unsafe_allow_html=True)
 gainers, losers = get_top_movers(universe)
 gcol, lcol = st.columns(2)
@@ -612,7 +620,6 @@ with lcol:
     else:
         st.info("Loading...")
 
-# Auto refresh every 1 minute
 if auto_refresh:
     time.sleep(60)
     st.rerun()
