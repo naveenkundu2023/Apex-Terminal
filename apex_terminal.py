@@ -1,3 +1,25 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import time
+
+# -------------------------------------------------
+# Page Config
+# -------------------------------------------------
+st.set_page_config(
+    page_title="Apex Market Terminal",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# -------------------------------------------------
+# Hide Streamlit Menu + "Manage app" button
+# -------------------------------------------------
 st.markdown("""
 <style>
     /* Hide the Streamlit hamburger menu and footer */
@@ -10,21 +32,21 @@ st.markdown("""
         display: none !important;
     }
     
-    /* Optional: hide the top-right toolbar completely */
+    /* Hide the top-right toolbar */
     [data-testid="stToolbar"] {
         display: none !important;
     }
 </style>
 """, unsafe_allow_html=True)
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import time
 
+# -------------------------------------------------
+# Session State Init
+# -------------------------------------------------
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = ["RELIANCE", "HDFCBANK", "INFY", "TCS"]
+if "theme" not in st.session_state:
+    st.session_state.theme = "dark"
+    
 # -------------------------------------------------
 # Page Config
 # -------------------------------------------------
