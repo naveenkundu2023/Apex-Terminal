@@ -2,10 +2,11 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
+import pytz
 
 # -------------------------------------------------
 # Page Config
@@ -14,47 +15,23 @@ st.set_page_config(
     page_title="Apex Market Terminal",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # -------------------------------------------------
-# Hide Streamlit Menu + "Manage app" button (Strong version)
+# Hide Streamlit Menu + Manage app button
 # -------------------------------------------------
 st.markdown("""
 <style>
-    /* Hide hamburger menu, footer, header */
-    #MainMenu {visibility: hidden !important;}
     footer {visibility: hidden !important;}
-    header {visibility: hidden !important;}
-    
-    /* Hide Deploy / Manage app button */
-    .stDeployButton {
-        display: none !important;
-        visibility: hidden !important;
-    }
-    
-    /* Hide the entire toolbar */
-    [data-testid="stToolbar"] {
-        display: none !important;
-        visibility: hidden !important;
-    }
-    
-    /* Extra selectors for local Streamlit */
-    div[data-testid="stDecoration"] {
-        display: none !important;
-    }
-    
-    /* Hide the bottom-right status / manage area */
-    .stStatusWidget, 
-    .stAppDeployButton,
-    button[kind="header"] {
-        display: none !important;
-    }
+    .stDeployButton {display: none !important; visibility: hidden !important;}
+    [data-testid="stToolbar"] {display: none !important;}
+    div[data-testid="stDecoration"] {display: none !important;}
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------
-# Session State Init
+# Session State
 # -------------------------------------------------
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = ["RELIANCE", "HDFCBANK", "INFY", "TCS"]
@@ -85,12 +62,6 @@ def apply_theme(theme: str):
                 padding: 18px 14px;
                 text-align: center;
                 box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-                transition: all 0.3s ease;
-            }
-            .metric-card:hover {
-                transform: translateY(-3px);
-                border-color: #818cf8;
-                box-shadow: 0 12px 40px rgba(99,102,241,0.25);
             }
             .index-title { font-size: 12px; font-weight: 600; color: #94a3b8; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 6px; }
             .index-price { font-size: 24px; font-weight: 700; color: #f8fafc; }
@@ -113,10 +84,6 @@ def apply_theme(theme: str):
                 background: linear-gradient(90deg, #6366f1, #8b5cf6);
                 color: white; border: none; border-radius: 10px; font-weight: 600;
             }
-            .stButton > button:hover {
-                background: linear-gradient(90deg, #4f46e5, #7c3aed);
-                box-shadow: 0 6px 20px rgba(99,102,241,0.4);
-            }
             h1 {
                 background: linear-gradient(90deg, #a5b4fc, #c4b5fd, #f0abfc);
                 -webkit-background-clip: text; -webkit-text-fill-color: transparent;
@@ -126,6 +93,10 @@ def apply_theme(theme: str):
                 display: inline-block; background: #312e81; color: #e0e7ff;
                 padding: 4px 12px; border-radius: 20px; margin: 3px;
                 font-size: 13px; font-weight: 500;
+            }
+            /* Make captions more visible in dark mode */
+            .stCaption, [data-testid="stCaption"] {
+                color: #cbd5e1 !important;
             }
         </style>
         """, unsafe_allow_html=True)
@@ -149,12 +120,6 @@ def apply_theme(theme: str):
                 padding: 18px 14px;
                 text-align: center;
                 box-shadow: 0 4px 20px rgba(99,102,241,0.1);
-                transition: all 0.3s ease;
-            }
-            .metric-card:hover {
-                transform: translateY(-3px);
-                border-color: #818cf8;
-                box-shadow: 0 8px 30px rgba(99,102,241,0.2);
             }
             .index-title { font-size: 12px; font-weight: 600; color: #64748b; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 6px; }
             .index-price { font-size: 24px; font-weight: 700; color: #0f172a; }
@@ -215,7 +180,6 @@ def fetch_index_quote(ticker: str):
     except:
         return None
 
-
 @st.cache_data(ttl=45)
 def fetch_stock_data(symbol: str):
     ticker = f"{symbol}.NS"
@@ -242,7 +206,6 @@ def fetch_stock_data(symbol: str):
     except:
         return None
 
-
 @st.cache_data(ttl=60)
 def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
     try:
@@ -258,7 +221,6 @@ def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
         return df
     except Exception:
         return None
-
 
 @st.cache_data(ttl=90)
 def get_daily_atr(symbol: str, atr_period: int = 14, lookback_days: int = 30):
@@ -282,57 +244,34 @@ def get_daily_atr(symbol: str, atr_period: int = 14, lookback_days: int = 30):
     except Exception:
         return None
 
-
 def calculate_ema(series: pd.Series, span: int) -> pd.Series:
     return series.ewm(span=span, adjust=False).mean()
-
 
 def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
     if df is None or df.empty or box_size <= 0:
         return pd.DataFrame()
-
     prices = df["Close"].values
     dates = df["Date"].values
-
     bricks = []
-    current_price = prices[0]
-    current_brick = round(current_price / box_size) * box_size
-
+    current_brick = round(prices[0] / box_size) * box_size
     for i in range(1, len(prices)):
         price = prices[i]
         date = dates[i]
-
         while price >= current_brick + box_size:
             open_p = current_brick
             close_p = current_brick + box_size
-            bricks.append({
-                "Date": date,
-                "Open": open_p,
-                "High": close_p,
-                "Low": open_p,
-                "Close": close_p
-            })
+            bricks.append({"Date": date, "Open": open_p, "High": close_p, "Low": open_p, "Close": close_p})
             current_brick = close_p
-
         while price <= current_brick - box_size:
             open_p = current_brick
             close_p = current_brick - box_size
-            bricks.append({
-                "Date": date,
-                "Open": open_p,
-                "High": open_p,
-                "Low": close_p,
-                "Close": close_p
-            })
+            bricks.append({"Date": date, "Open": open_p, "High": open_p, "Low": close_p, "Close": close_p})
             current_brick = close_p
-
     if not bricks:
         return pd.DataFrame()
-
     renko_df = pd.DataFrame(bricks)
     renko_df["Brick"] = range(1, len(renko_df) + 1)
     return renko_df
-
 
 @st.cache_data(ttl=90)
 def get_top_movers(universe: list):
@@ -367,7 +306,6 @@ def get_top_movers(universe: list):
     except Exception:
         return None, None
 
-
 def get_options_chain(ltp: float, symbol: str):
     try:
         t = yf.Ticker(f"{symbol}.NS")
@@ -392,7 +330,6 @@ def get_options_chain(ltp: float, symbol: str):
         rows.append({"Call Price (CE)": round(ce, 2), "Strike Price": s, "Put Price (PE)": round(pe, 2)})
     return pd.DataFrame(rows)
 
-
 @st.cache_data
 def get_stock_universe():
     return [
@@ -405,19 +342,14 @@ def get_stock_universe():
         "CUMMINSIND", "ASTRAL", "PAGEIND", "HAVELLS", "VOLTAS", "BERGEPAINT"
     ]
 
-
 # -------------------------------------------------
-# Plotly Config - Mobile Friendly (no zoom/pan on touch)
+# Plotly Config
 # -------------------------------------------------
 PLOTLY_CONFIG = {
-    "displayModeBar": False,          # Hide the mode bar completely
-    "scrollZoom": False,              # Disable scroll zoom
+    "displayModeBar": False,
+    "scrollZoom": False,
     "doubleClick": "reset",
     "displaylogo": False,
-    "modeBarButtonsToRemove": [
-        "zoom", "pan", "select", "lasso2d",
-        "zoomIn", "zoomOut", "autoScale", "resetScale"
-    ],
     "responsive": True
 }
 
@@ -425,7 +357,7 @@ PLOTLY_CONFIG = {
 # Sidebar
 # -------------------------------------------------
 with st.sidebar:
-    st.markdown("### ⚙️ Controls")
+    st.markdown("### ⚙️ Extra Controls")
     theme_choice = st.radio("Theme", ["🌙 Dark", "☀️ Light"],
                             index=0 if st.session_state.theme == "dark" else 1,
                             horizontal=True)
@@ -435,21 +367,19 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    universe = get_stock_universe()
-    selected = st.selectbox("Select Stock (NSE)", universe, index=0)
-
     st.markdown("### ⭐ Watchlist")
-    col_add, col_rem = st.columns(2)
-    with col_add:
-        if st.button("➕ Add", use_container_width=True):
-            if selected not in st.session_state.watchlist:
-                st.session_state.watchlist.append(selected)
-                st.success(f"Added {selected}")
-    with col_rem:
-        if st.button("➖ Remove", use_container_width=True):
-            if selected in st.session_state.watchlist:
-                st.session_state.watchlist.remove(selected)
-                st.info(f"Removed {selected}")
+    if "selected" in st.session_state:
+        col_add, col_rem = st.columns(2)
+        with col_add:
+            if st.button("➕ Add", use_container_width=True):
+                if st.session_state.selected not in st.session_state.watchlist:
+                    st.session_state.watchlist.append(st.session_state.selected)
+                    st.success(f"Added {st.session_state.selected}")
+        with col_rem:
+            if st.button("➖ Remove", use_container_width=True):
+                if st.session_state.selected in st.session_state.watchlist:
+                    st.session_state.watchlist.remove(st.session_state.selected)
+                    st.info(f"Removed {st.session_state.selected}")
 
     if st.session_state.watchlist:
         chips = " ".join([f'<span class="watchlist-chip">{s}</span>' for s in st.session_state.watchlist])
@@ -467,10 +397,19 @@ with st.sidebar:
     st.caption("Data: Yahoo Finance • ~15 min delay")
 
 # -------------------------------------------------
-# Header
+# Header + Current Time (Always latest)
 # -------------------------------------------------
+ist = pytz.timezone("Asia/Kolkata")
+current_time = datetime.now(ist).strftime("%d %b %Y • %H:%M:%S IST")
+
 st.markdown("# 📈 Apex Market Terminal")
-st.caption(f"Live Indian Equities & Indices • {datetime.now().strftime('%d %b %Y • %H:%M:%S IST')}")
+st.caption(f"Live Indian Equities & Indices • **{current_time}**")
+
+# ========== STOCK SELECTION ==========
+universe = get_stock_universe()
+selected = st.selectbox("🔍 Select Stock (NSE)", options=universe, index=0, key="selected")
+
+st.markdown("---")
 
 # -------------------------------------------------
 # Indices
@@ -497,7 +436,7 @@ for i, (name, ticker) in enumerate(indices.items()):
 st.markdown("---")
 
 # -------------------------------------------------
-# Selected Stock Analytics
+# Stock Analytics
 # -------------------------------------------------
 st.markdown(f'<div class="section-header">📌 {selected} • Live Analytics</div>', unsafe_allow_html=True)
 
@@ -517,51 +456,38 @@ v1.metric("Session Volume", f"{metrics['volume']:,}")
 v2.metric("20-Day Avg Volume", f"{metrics['avg_volume']:,}")
 
 # -------------------------------------------------
-# Shared Timeframe Control
+# Timeframe
 # -------------------------------------------------
 st.markdown("#### 📊 Price Chart")
 tf_col1, tf_col2 = st.columns([2, 1])
 with tf_col1:
-    timeframe = st.radio(
-        "Timeframe (applies to both Candlestick & Renko)",
-        options=["Daily", "1 Hour", "30 Minutes"],
-        index=0,
-        horizontal=True
-    )
+    timeframe = st.radio("Timeframe", options=["Daily", "1 Hour", "30 Minutes"], index=0, horizontal=True)
 with tf_col2:
     if timeframe == "Daily":
         period = st.select_slider("Chart Period", options=["1mo", "3mo", "6mo", "1y"], value="3mo")
     else:
         period = "1mo" if timeframe == "1 Hour" else "5d"
-        st.caption(f"Period auto-set to **{period}** for intraday")
+        st.caption(f"Period: **{period}**")
 
-interval_map = {
-    "Daily": "1d",
-    "1 Hour": "1h",
-    "30 Minutes": "30m"
-}
-interval = interval_map[timeframe]
+interval = {"Daily": "1d", "1 Hour": "1h", "30 Minutes": "30m"}[timeframe]
 
 # -------------------------------------------------
-# Fetch OHLC data
+# Charts
 # -------------------------------------------------
 candle_df = get_ohlc_data(selected, interval=interval, period=period)
 
 if candle_df is None or candle_df.empty:
     st.info("Chart data temporarily unavailable")
 else:
-    # Limit candles for clean look
     if timeframe == "1 Hour":
         candle_df = candle_df.tail(80).reset_index(drop=True)
     elif timeframe == "30 Minutes":
         candle_df = candle_df.tail(100).reset_index(drop=True)
 
-    # Calculate EMAs
     candle_df["EMA20"] = calculate_ema(candle_df["Close"], 20)
     candle_df["EMA50"] = calculate_ema(candle_df["Close"], 50)
 
     use_sequential = timeframe in ["1 Hour", "30 Minutes"]
-
     if use_sequential:
         candle_df["x"] = list(range(len(candle_df)))
         candle_df["hover"] = candle_df["Date"].dt.strftime("%d %b %Y<br>%H:%M")
@@ -569,60 +495,39 @@ else:
         candle_df["x"] = candle_df["Date"]
         candle_df["hover"] = candle_df["Date"].dt.strftime("%d %b %Y")
 
-    # ---------- CANDLESTICK CHART ----------
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True,
-        vertical_spacing=0.03, row_heights=[0.72, 0.28],
-        subplot_titles=(f"{selected} • {timeframe}", "Volume")
-    )
+    is_dark = st.session_state.theme == "dark"
+    axis_color = "#e2e8f0" if is_dark else "#1e293b"
+    grid_color = "rgba(148,163,184,0.2)" if is_dark else "rgba(100,116,139,0.15)"
+
+    # Candlestick
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                        row_heights=[0.72, 0.28], subplot_titles=(f"{selected} • {timeframe}", "Volume"))
 
     fig.add_trace(go.Candlestick(
-        x=candle_df["x"],
-        open=candle_df["Open"],
-        high=candle_df["High"],
-        low=candle_df["Low"],
-        close=candle_df["Close"],
-        name="OHLC",
-        increasing_line_color="#34d399",
-        decreasing_line_color="#f87171",
-        increasing_fillcolor="#34d399",
-        decreasing_fillcolor="#f87171",
-        text=candle_df["hover"],
-        hoverinfo="text+y"
+        x=candle_df["x"], open=candle_df["Open"], high=candle_df["High"],
+        low=candle_df["Low"], close=candle_df["Close"], name="OHLC",
+        increasing_line_color="#34d399", decreasing_line_color="#f87171",
+        increasing_fillcolor="#34d399", decreasing_fillcolor="#f87171",
+        text=candle_df["hover"], hoverinfo="text+y"
     ), row=1, col=1)
 
-    fig.add_trace(go.Scatter(
-        x=candle_df["x"], y=candle_df["EMA20"],
-        mode="lines", name="EMA 20",
-        line=dict(color="#fbbf24", width=1.8),
-        hoverinfo="skip"
-    ), row=1, col=1)
-
-    fig.add_trace(go.Scatter(
-        x=candle_df["x"], y=candle_df["EMA50"],
-        mode="lines", name="EMA 50",
-        line=dict(color="#60a5fa", width=2.0),
-        hoverinfo="skip"
-    ), row=1, col=1)
+    fig.add_trace(go.Scatter(x=candle_df["x"], y=candle_df["EMA20"], mode="lines", name="EMA 20",
+                             line=dict(color="#fbbf24", width=1.8), hoverinfo="skip"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=candle_df["x"], y=candle_df["EMA50"], mode="lines", name="EMA 50",
+                             line=dict(color="#60a5fa", width=2.0), hoverinfo="skip"), row=1, col=1)
 
     colors = ["#34d399" if c >= o else "#f87171" for o, c in zip(candle_df["Open"], candle_df["Close"])]
-    fig.add_trace(go.Bar(
-        x=candle_df["x"], y=candle_df["Volume"],
-        marker_color=colors, name="Volume", opacity=0.7,
-        hoverinfo="skip"
-    ), row=2, col=1)
-
-    chart_height = 580 if use_sequential else 520
+    fig.add_trace(go.Bar(x=candle_df["x"], y=candle_df["Volume"], marker_color=colors, name="Volume", opacity=0.7, hoverinfo="skip"), row=2, col=1)
 
     fig.update_layout(
-        height=chart_height,
+        height=580 if use_sequential else 520,
         xaxis_rangeslider_visible=False,
-        template="plotly_dark" if st.session_state.theme == "dark" else "plotly_white",
+        template="plotly_dark" if is_dark else "plotly_white",
         margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        dragmode=False          # Disable drag/pan
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=axis_color)),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=axis_color),
+        dragmode=False
     )
 
     if use_sequential:
@@ -630,30 +535,15 @@ else:
         step = max(1, n // 7)
         tickvals = list(range(0, n, step))
         ticktext = [candle_df["Date"].iloc[i].strftime("%d %b<br>%H:%M") for i in tickvals]
-
-        fig.update_xaxes(
-            type="category",
-            tickmode="array",
-            tickvals=tickvals,
-            ticktext=ticktext,
-            showgrid=True,
-            gridcolor="rgba(148,163,184,0.15)"
-        )
+        fig.update_xaxes(type="category", tickmode="array", tickvals=tickvals, ticktext=ticktext,
+                         tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
     else:
-        fig.update_xaxes(
-            tickformat="%d %b",
-            showgrid=True,
-            gridcolor="rgba(148,163,184,0.15)"
-        )
+        fig.update_xaxes(tickformat="%d %b", tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
 
-    fig.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
-    
-    # Use mobile-friendly config
+    fig.update_yaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
     st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
 
-    # -------------------------------------------------
-    # RENKO CHART
-    # -------------------------------------------------
+    # Renko
     st.markdown("#### 🧱 Renko Chart")
 
     daily_atr_14 = get_daily_atr(selected, atr_period=14, lookback_days=14)
@@ -676,61 +566,43 @@ else:
     renko_df = generate_renko(candle_df, box_size)
 
     if renko_df.empty:
-        st.info("Not enough price movement to generate Renko bricks with the current box size.")
+        st.info("Not enough price movement to generate Renko bricks.")
     else:
         renko_df["EMA20"] = calculate_ema(renko_df["Close"], 20)
         renko_df["EMA50"] = calculate_ema(renko_df["Close"], 50)
 
         fig_r = go.Figure()
-
         fig_r.add_trace(go.Candlestick(
-            x=renko_df["Brick"],
-            open=renko_df["Open"],
-            high=renko_df["High"],
-            low=renko_df["Low"],
-            close=renko_df["Close"],
-            name="Renko",
-            increasing_line_color="#34d399",
-            decreasing_line_color="#f87171",
-            increasing_fillcolor="#34d399",
-            decreasing_fillcolor="#f87171"
+            x=renko_df["Brick"], open=renko_df["Open"], high=renko_df["High"],
+            low=renko_df["Low"], close=renko_df["Close"], name="Renko",
+            increasing_line_color="#34d399", decreasing_line_color="#f87171",
+            increasing_fillcolor="#34d399", decreasing_fillcolor="#f87171"
         ))
-
-        fig_r.add_trace(go.Scatter(
-            x=renko_df["Brick"], y=renko_df["EMA20"],
-            mode="lines", name="EMA 20",
-            line=dict(color="#fbbf24", width=1.5)
-        ))
-
-        fig_r.add_trace(go.Scatter(
-            x=renko_df["Brick"], y=renko_df["EMA50"],
-            mode="lines", name="EMA 50",
-            line=dict(color="#60a5fa", width=1.8)
-        ))
+        fig_r.add_trace(go.Scatter(x=renko_df["Brick"], y=renko_df["EMA20"], mode="lines", name="EMA 20",
+                                   line=dict(color="#fbbf24", width=1.5)))
+        fig_r.add_trace(go.Scatter(x=renko_df["Brick"], y=renko_df["EMA50"], mode="lines", name="EMA 50",
+                                   line=dict(color="#60a5fa", width=1.8)))
 
         fig_r.update_layout(
             height=420,
-            title=f"{selected} Renko • {timeframe}  |  Box ≈ ₹{box_size:.2f}",
-            xaxis_title="Brick #",
-            yaxis_title="Price (₹)",
+            title=dict(text=f"{selected} Renko • {timeframe}  |  Box ≈ ₹{box_size:.2f}", font=dict(color=axis_color, size=16)),
+            xaxis_title=dict(text="Brick #", font=dict(color=axis_color)),
+            yaxis_title=dict(text="Price (₹)", font=dict(color=axis_color)),
             xaxis_rangeslider_visible=False,
-            template="plotly_dark" if st.session_state.theme == "dark" else "plotly_white",
+            template="plotly_dark" if is_dark else "plotly_white",
             margin=dict(l=20, r=20, t=50, b=20),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=axis_color)),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color=axis_color),
             dragmode=False
         )
-        fig_r.update_xaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
-        fig_r.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
-        
+        fig_r.update_xaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
+        fig_r.update_yaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
         st.plotly_chart(fig_r, use_container_width=True, config=PLOTLY_CONFIG)
 
 st.markdown("---")
 
-# -------------------------------------------------
-# Options Chain
-# -------------------------------------------------
+# Options
 st.markdown('<div class="section-header">⚡ Options Strike Matrix (ATM ±2)</div>', unsafe_allow_html=True)
 st.caption(f"Spot: **₹{metrics['ltp']:,.2f}**")
 options_df = get_options_chain(metrics["ltp"], selected)
@@ -748,34 +620,25 @@ st.dataframe(styled, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
-# -------------------------------------------------
-# Top Gainers / Losers
-# -------------------------------------------------
+# Gainers / Losers
 st.markdown('<div class="section-header">🏆 Top Gainers & Losers (Universe)</div>', unsafe_allow_html=True)
 gainers, losers = get_top_movers(universe)
 gcol, lcol = st.columns(2)
 with gcol:
     st.markdown("##### 🟢 Top Gainers")
     if gainers is not None:
-        st.dataframe(
-            gainers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
-            use_container_width=True, hide_index=True
-        )
+        st.dataframe(gainers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
+                     use_container_width=True, hide_index=True)
     else:
         st.info("Gainers data loading...")
 with lcol:
     st.markdown("##### 🔴 Top Losers")
     if losers is not None:
-        st.dataframe(
-            losers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
-            use_container_width=True, hide_index=True
-        )
+        st.dataframe(losers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
+                     use_container_width=True, hide_index=True)
     else:
         st.info("Losers data loading...")
 
-# -------------------------------------------------
-# Auto refresh
-# -------------------------------------------------
 if auto_refresh:
     time.sleep(45)
     st.rerun()
