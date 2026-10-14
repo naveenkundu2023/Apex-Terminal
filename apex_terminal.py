@@ -209,7 +209,6 @@ def fetch_stock_data(symbol: str):
 
 @st.cache_data(ttl=60)
 def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
-    """Fetch OHLC data for any interval."""
     try:
         t = yf.Ticker(f"{symbol}.NS")
         if interval in ["30m", "1h"]:
@@ -227,7 +226,6 @@ def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
 
 @st.cache_data(ttl=90)
 def get_daily_atr(symbol: str, atr_period: int = 14, lookback_days: int = 30):
-    """Return the average ATR over recent days (used for Renko box sizing)."""
     try:
         t = yf.Ticker(f"{symbol}.NS")
         df = t.history(period="2mo", interval="1d")
@@ -254,7 +252,6 @@ def calculate_ema(series: pd.Series, span: int) -> pd.Series:
 
 
 def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
-    """Generate classic Renko bricks from Close prices."""
     if df is None or df.empty or box_size <= 0:
         return pd.DataFrame()
 
@@ -502,15 +499,25 @@ candle_df = get_ohlc_data(selected, interval=interval, period=period)
 if candle_df is None or candle_df.empty:
     st.info("Chart data temporarily unavailable")
 else:
-    # ---------- LIMIT CANDLES FOR INTRADAY (fixes compression) ----------
+    # Limit candles for clean look
     if timeframe == "1 Hour":
-        candle_df = candle_df.tail(120).reset_index(drop=True)   # ~ last 5-6 trading days
+        candle_df = candle_df.tail(80).reset_index(drop=True)
     elif timeframe == "30 Minutes":
-        candle_df = candle_df.tail(150).reset_index(drop=True)   # ~ last 3-4 trading days
+        candle_df = candle_df.tail(100).reset_index(drop=True)
 
     # Calculate EMAs
     candle_df["EMA20"] = calculate_ema(candle_df["Close"], 20)
     candle_df["EMA50"] = calculate_ema(candle_df["Close"], 50)
+
+    # ========== KEY FIX FOR THICK CANDLES ==========
+    use_sequential = timeframe in ["1 Hour", "30 Minutes"]
+
+    if use_sequential:
+        candle_df["x"] = list(range(len(candle_df)))
+        candle_df["hover"] = candle_df["Date"].dt.strftime("%d %b %Y<br>%H:%M")
+    else:
+        candle_df["x"] = candle_df["Date"]
+        candle_df["hover"] = candle_df["Date"].dt.strftime("%d %b %Y")
 
     # ---------- CANDLESTICK CHART ----------
     fig = make_subplots(
@@ -520,7 +527,7 @@ else:
     )
 
     fig.add_trace(go.Candlestick(
-        x=candle_df["Date"],
+        x=candle_df["x"],
         open=candle_df["Open"],
         high=candle_df["High"],
         low=candle_df["Low"],
@@ -529,29 +536,33 @@ else:
         increasing_line_color="#34d399",
         decreasing_line_color="#f87171",
         increasing_fillcolor="#34d399",
-        decreasing_fillcolor="#f87171"
+        decreasing_fillcolor="#f87171",
+        text=candle_df["hover"],
+        hoverinfo="text+y"
     ), row=1, col=1)
 
     fig.add_trace(go.Scatter(
-        x=candle_df["Date"], y=candle_df["EMA20"],
+        x=candle_df["x"], y=candle_df["EMA20"],
         mode="lines", name="EMA 20",
-        line=dict(color="#fbbf24", width=1.6)
+        line=dict(color="#fbbf24", width=1.8),
+        hoverinfo="skip"
     ), row=1, col=1)
 
     fig.add_trace(go.Scatter(
-        x=candle_df["Date"], y=candle_df["EMA50"],
+        x=candle_df["x"], y=candle_df["EMA50"],
         mode="lines", name="EMA 50",
-        line=dict(color="#60a5fa", width=1.8)
+        line=dict(color="#60a5fa", width=2.0),
+        hoverinfo="skip"
     ), row=1, col=1)
 
     colors = ["#34d399" if c >= o else "#f87171" for o, c in zip(candle_df["Open"], candle_df["Close"])]
     fig.add_trace(go.Bar(
-        x=candle_df["Date"], y=candle_df["Volume"],
-        marker_color=colors, name="Volume", opacity=0.7
+        x=candle_df["x"], y=candle_df["Volume"],
+        marker_color=colors, name="Volume", opacity=0.7,
+        hoverinfo="skip"
     ), row=2, col=1)
 
-    # Better height + x-axis formatting for intraday
-    chart_height = 560 if timeframe != "Daily" else 520
+    chart_height = 580 if use_sequential else 520
 
     fig.update_layout(
         height=chart_height,
@@ -563,15 +574,26 @@ else:
         plot_bgcolor="rgba(0,0,0,0)"
     )
 
-    # Improve x-axis for different timeframes
-    if timeframe == "Daily":
-        fig.update_xaxes(tickformat="%d %b", showgrid=True, gridcolor="rgba(148,163,184,0.15)")
+    # ========== MOST IMPORTANT FIX ==========
+    if use_sequential:
+        n = len(candle_df)
+        step = max(1, n // 7)
+        tickvals = list(range(0, n, step))
+        ticktext = [candle_df["Date"].iloc[i].strftime("%d %b<br>%H:%M") for i in tickvals]
+
+        fig.update_xaxes(
+            type="category",
+            tickmode="array",
+            tickvals=tickvals,
+            ticktext=ticktext,
+            showgrid=True,
+            gridcolor="rgba(148,163,184,0.15)"
+        )
     else:
         fig.update_xaxes(
-            tickformat="%d %b\n%H:%M",
+            tickformat="%d %b",
             showgrid=True,
-            gridcolor="rgba(148,163,184,0.15)",
-            nticks=10          # prevents overcrowding of labels
+            gridcolor="rgba(148,163,184,0.15)"
         )
 
     fig.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
