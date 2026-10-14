@@ -18,44 +18,40 @@ st.set_page_config(
 )
 
 # -------------------------------------------------
-# Hide Streamlit Menu + "Manage app" button
+# Hide Streamlit Menu + "Manage app" button (Strong version)
 # -------------------------------------------------
 st.markdown("""
 <style>
-    /* Hide the Streamlit hamburger menu and footer */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    /* Hide hamburger menu, footer, header */
+    #MainMenu {visibility: hidden !important;}
+    footer {visibility: hidden !important;}
+    header {visibility: hidden !important;}
     
-    /* Hide the "Manage app" button */
+    /* Hide Deploy / Manage app button */
     .stDeployButton {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    
+    /* Hide the entire toolbar */
+    [data-testid="stToolbar"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    
+    /* Extra selectors for local Streamlit */
+    div[data-testid="stDecoration"] {
         display: none !important;
     }
     
-    /* Hide the top-right toolbar */
-    [data-testid="stToolbar"] {
+    /* Hide the bottom-right status / manage area */
+    .stStatusWidget, 
+    .stAppDeployButton,
+    button[kind="header"] {
         display: none !important;
     }
 </style>
 """, unsafe_allow_html=True)
-
-# -------------------------------------------------
-# Session State Init
-# -------------------------------------------------
-if "watchlist" not in st.session_state:
-    st.session_state.watchlist = ["RELIANCE", "HDFCBANK", "INFY", "TCS"]
-if "theme" not in st.session_state:
-    st.session_state.theme = "dark"
-    
-# -------------------------------------------------
-# Page Config
-# -------------------------------------------------
-st.set_page_config(
-    page_title="Apex Market Terminal",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # -------------------------------------------------
 # Session State Init
@@ -411,6 +407,21 @@ def get_stock_universe():
 
 
 # -------------------------------------------------
+# Plotly Config - Mobile Friendly (no zoom/pan on touch)
+# -------------------------------------------------
+PLOTLY_CONFIG = {
+    "displayModeBar": False,          # Hide the mode bar completely
+    "scrollZoom": False,              # Disable scroll zoom
+    "doubleClick": "reset",
+    "displaylogo": False,
+    "modeBarButtonsToRemove": [
+        "zoom", "pan", "select", "lasso2d",
+        "zoomIn", "zoomOut", "autoScale", "resetScale"
+    ],
+    "responsive": True
+}
+
+# -------------------------------------------------
 # Sidebar
 # -------------------------------------------------
 with st.sidebar:
@@ -549,7 +560,6 @@ else:
     candle_df["EMA20"] = calculate_ema(candle_df["Close"], 20)
     candle_df["EMA50"] = calculate_ema(candle_df["Close"], 50)
 
-    # ========== KEY FIX FOR THICK CANDLES ==========
     use_sequential = timeframe in ["1 Hour", "30 Minutes"]
 
     if use_sequential:
@@ -611,10 +621,10 @@ else:
         margin=dict(l=10, r=10, t=40, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)"
+        plot_bgcolor="rgba(0,0,0,0)",
+        dragmode=False          # Disable drag/pan
     )
 
-    # ========== MOST IMPORTANT FIX ==========
     if use_sequential:
         n = len(candle_df)
         step = max(1, n // 7)
@@ -637,7 +647,9 @@ else:
         )
 
     fig.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
-    st.plotly_chart(fig, use_container_width=True)
+    
+    # Use mobile-friendly config
+    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
 
     # -------------------------------------------------
     # RENKO CHART
@@ -706,11 +718,13 @@ else:
             margin=dict(l=20, r=20, t=50, b=20),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)"
+            plot_bgcolor="rgba(0,0,0,0)",
+            dragmode=False
         )
         fig_r.update_xaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
         fig_r.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
-        st.plotly_chart(fig_r, use_container_width=True)
+        
+        st.plotly_chart(fig_r, use_container_width=True, config=PLOTLY_CONFIG)
 
 st.markdown("---")
 
