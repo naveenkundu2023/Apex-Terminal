@@ -254,10 +254,7 @@ def calculate_ema(series: pd.Series, span: int) -> pd.Series:
 
 
 def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
-    """
-    Generate classic Renko bricks from OHLC DataFrame using Close prices.
-    Returns a DataFrame with columns: Date, Open, High, Low, Close
-    """
+    """Generate classic Renko bricks from Close prices."""
     if df is None or df.empty or box_size <= 0:
         return pd.DataFrame()
 
@@ -272,7 +269,6 @@ def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
         price = prices[i]
         date = dates[i]
 
-        # Up bricks
         while price >= current_brick + box_size:
             open_p = current_brick
             close_p = current_brick + box_size
@@ -285,7 +281,6 @@ def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
             })
             current_brick = close_p
 
-        # Down bricks
         while price <= current_brick - box_size:
             open_p = current_brick
             close_p = current_brick - box_size
@@ -308,7 +303,6 @@ def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
 
 @st.cache_data(ttl=90)
 def get_top_movers(universe: list):
-    """Fetch % change for universe and return top gainers / losers."""
     try:
         tickers = [f"{s}.NS" for s in universe]
         data = yf.download(tickers, period="5d", group_by="ticker", progress=False, threads=True)
@@ -501,21 +495,27 @@ interval_map = {
 interval = interval_map[timeframe]
 
 # -------------------------------------------------
-# Fetch OHLC data (shared by both charts)
+# Fetch OHLC data
 # -------------------------------------------------
 candle_df = get_ohlc_data(selected, interval=interval, period=period)
 
 if candle_df is None or candle_df.empty:
     st.info("Chart data temporarily unavailable")
 else:
-    # Calculate EMAs on the source data
+    # ---------- LIMIT CANDLES FOR INTRADAY (fixes compression) ----------
+    if timeframe == "1 Hour":
+        candle_df = candle_df.tail(120).reset_index(drop=True)   # ~ last 5-6 trading days
+    elif timeframe == "30 Minutes":
+        candle_df = candle_df.tail(150).reset_index(drop=True)   # ~ last 3-4 trading days
+
+    # Calculate EMAs
     candle_df["EMA20"] = calculate_ema(candle_df["Close"], 20)
     candle_df["EMA50"] = calculate_ema(candle_df["Close"], 50)
 
     # ---------- CANDLESTICK CHART ----------
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True,
-        vertical_spacing=0.03, row_heights=[0.7, 0.3],
+        vertical_spacing=0.03, row_heights=[0.72, 0.28],
         subplot_titles=(f"{selected} • {timeframe}", "Volume")
     )
 
@@ -527,13 +527,15 @@ else:
         close=candle_df["Close"],
         name="OHLC",
         increasing_line_color="#34d399",
-        decreasing_line_color="#f87171"
+        decreasing_line_color="#f87171",
+        increasing_fillcolor="#34d399",
+        decreasing_fillcolor="#f87171"
     ), row=1, col=1)
 
     fig.add_trace(go.Scatter(
         x=candle_df["Date"], y=candle_df["EMA20"],
         mode="lines", name="EMA 20",
-        line=dict(color="#fbbf24", width=1.5)
+        line=dict(color="#fbbf24", width=1.6)
     ), row=1, col=1)
 
     fig.add_trace(go.Scatter(
@@ -548,21 +550,35 @@ else:
         marker_color=colors, name="Volume", opacity=0.7
     ), row=2, col=1)
 
+    # Better height + x-axis formatting for intraday
+    chart_height = 560 if timeframe != "Daily" else 520
+
     fig.update_layout(
-        height=520,
+        height=chart_height,
         xaxis_rangeslider_visible=False,
         template="plotly_dark" if st.session_state.theme == "dark" else "plotly_white",
-        margin=dict(l=20, r=20, t=40, b=20),
+        margin=dict(l=10, r=10, t=40, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)"
     )
-    fig.update_xaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
+
+    # Improve x-axis for different timeframes
+    if timeframe == "Daily":
+        fig.update_xaxes(tickformat="%d %b", showgrid=True, gridcolor="rgba(148,163,184,0.15)")
+    else:
+        fig.update_xaxes(
+            tickformat="%d %b\n%H:%M",
+            showgrid=True,
+            gridcolor="rgba(148,163,184,0.15)",
+            nticks=10          # prevents overcrowding of labels
+        )
+
     fig.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)")
     st.plotly_chart(fig, use_container_width=True)
 
     # -------------------------------------------------
-    # RENKO CHART (directly below)
+    # RENKO CHART
     # -------------------------------------------------
     st.markdown("#### 🧱 Renko Chart")
 
@@ -576,7 +592,7 @@ else:
         base = daily_atr_7 if daily_atr_7 and daily_atr_7 > 0 else (daily_atr_14 or metrics["ltp"] * 0.005)
         box_size = base / 5
         box_label = f"(7-day ATR / 5) ≈ ₹{box_size:.2f}"
-    else:  # 30 Minutes
+    else:
         base = daily_atr_7 if daily_atr_7 and daily_atr_7 > 0 else (daily_atr_14 or metrics["ltp"] * 0.005)
         box_size = (base / 5) / 2
         box_label = f"½ of 1h box ≈ ₹{box_size:.2f}"
