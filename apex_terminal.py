@@ -1,3 +1,21 @@
+st.markdown("""
+<style>
+    /* Hide the Streamlit hamburger menu and footer */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Hide the "Manage app" button */
+    .stDeployButton {
+        display: none !important;
+    }
+    
+    /* Optional: hide the top-right toolbar completely */
+    [data-testid="stToolbar"] {
+        display: none !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 import streamlit as st
 import yfinance as yf
 import pandas as pd
