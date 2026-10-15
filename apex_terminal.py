@@ -8,6 +8,7 @@ from plotly.subplots import make_subplots
 import time
 import pytz
 import requests
+from io import StringIO
 
 # -------------------------------------------------
 # Page Config
@@ -38,6 +39,8 @@ if "watchlist" not in st.session_state:
     st.session_state.watchlist = ["RELIANCE", "HDFCBANK", "INFY", "TCS"]
 if "theme" not in st.session_state:
     st.session_state.theme = "dark"
+if "last_options_refresh" not in st.session_state:
+    st.session_state.last_options_refresh = time.time()
 
 # -------------------------------------------------
 # Theme CSS
@@ -421,7 +424,7 @@ def scan_renko_universe(universe_tuple: tuple):
 
     return result_df
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)   # Options refresh every 30 seconds
 def get_options_chain(ltp: float, symbol: str):
     """Fetch near-live ATM ±2 strikes from NSE option chain."""
     headers = {
@@ -488,16 +491,49 @@ def get_options_chain(ltp: float, symbol: str):
             })
         return pd.DataFrame(rows)
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def get_stock_universe():
+    """
+    Fetch live Nifty 50 constituents from NSE.
+    Falls back to a recent static list if NSE is unreachable.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/csv,application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.nseindia.com/",
+    }
+
+    urls = [
+        "https://archives.nseindia.com/content/indices/ind_nifty50list.csv",
+        "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv",
+    ]
+
+    for url in urls:
+        try:
+            session = requests.Session()
+            session.get("https://www.nseindia.com", headers=headers, timeout=8)
+            r = session.get(url, headers=headers, timeout=10)
+            if r.status_code == 200 and "Symbol" in r.text:
+                df = pd.read_csv(StringIO(r.text))
+                symbols = df["Symbol"].str.strip().tolist()
+                if len(symbols) >= 45:
+                    return sorted(symbols)
+        except Exception:
+            continue
+
+    # Fallback – recent Nifty 50 (Oct 2026). Overwritten once live fetch works.
     return [
-        "RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "BHARTIARTL", "SBIN", "LT",
-        "AXISBANK", "KOTAKBANK", "ITC", "HINDUNILVR", "BAJFINANCE", "ASIANPAINT", "MARUTI",
-        "TITAN", "SUNPHARMA", "WIPRO", "ULTRACEMCO", "NESTLEIND", "TATAMOTORS", "POWERGRID",
-        "NTPC", "ONGC", "M&M", "HCLTECH", "ADANIENT", "ADANIPORTS", "JSWSTEEL", "TATASTEEL",
-        "BAJAJFINSV", "TECHM", "INDUSINDBK", "CIPLA", "DRREDDY", "EICHERMOT", "HEROMOTOCO",
-        "GRASIM", "COALINDIA", "BPCL", "PIDILITIND", "DIXON", "PERSISTENT", "POLYCAB",
-        "CUMMINSIND", "ASTRAL", "PAGEIND", "HAVELLS", "VOLTAS", "BERGEPAINT"
+        "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
+        "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL", "BHARTIARTL",
+        "BRITANNIA", "CIPLA", "COALINDIA", "DIVISLAB", "DRREDDY",
+        "EICHERMOT", "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE",
+        "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK", "INDUSINDBK",
+        "INFY", "ITC", "JSWSTEEL", "KOTAKBANK", "LT",
+        "M&M", "MARUTI", "NESTLEIND", "NTPC", "ONGC",
+        "POWERGRID", "RELIANCE", "SBILIFE", "SBIN", "SUNPHARMA",
+        "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TCS", "TECHM",
+        "TITAN", "ULTRACEMCO", "UPL", "WIPRO", "ETERNAL"
     ]
 
 PLOTLY_CONFIG = {
@@ -547,7 +583,7 @@ with st.sidebar:
         st.caption("Watchlist is empty")
 
     st.markdown("---")
-    st.caption("Data: Yahoo Finance + NSE • ~1-15 min delay")
+    st.caption("Data: Yahoo Finance + NSE • Options refresh every 30s")
 
 # -------------------------------------------------
 # Header + Time
@@ -568,6 +604,7 @@ with col3:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("Refresh Now", use_container_width=True):
         st.cache_data.clear()
+        st.session_state.last_options_refresh = time.time()
         st.rerun()
 
 st.markdown("---")
@@ -789,7 +826,7 @@ with scan_col1:
         st.cache_data.clear()
         st.rerun()
 with scan_col2:
-    st.caption(f"Scanning {len(universe)} NSE stocks across 30-minute and 1-hour timeframes.")
+    st.caption(f"Scanning {len(universe)} Nifty 50 stocks across 30-minute and 1-hour timeframes.")
 
 with st.spinner("Scanning Renko bricks for the stock universe… first scan may take a little time."):
     signal_df = scan_renko_universe(tuple(universe))
@@ -853,7 +890,7 @@ st.markdown("---")
 # Options
 # -------------------------------------------------
 st.markdown('<div class="section-header">⚡ Options Strike Matrix (ATM ±2)</div>', unsafe_allow_html=True)
-st.caption(f"Spot: **₹{metrics['ltp']:,.2f}** • Source: NSE Option Chain (nearest expiry) • ~1–2 min delay")
+st.caption(f"Spot: **₹{metrics['ltp']:,.2f}** • Source: NSE Option Chain (nearest expiry) • Auto-refreshes every 30 seconds")
 
 options_df = get_options_chain(metrics["ltp"], selected)
 
@@ -872,6 +909,12 @@ styled = options_df.style.format({
 }).apply(highlight_atm, axis=1)
 
 st.dataframe(styled, use_container_width=True, hide_index=True)
+
+# Force options to stay fresh every 30 seconds
+if time.time() - st.session_state.last_options_refresh > 30:
+    get_options_chain.clear()
+    st.session_state.last_options_refresh = time.time()
+    st.rerun()
 
 st.markdown("---")
 
