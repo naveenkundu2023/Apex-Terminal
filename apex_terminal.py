@@ -43,7 +43,7 @@ if "last_options_refresh" not in st.session_state:
     st.session_state.last_options_refresh = time.time()
 
 # -------------------------------------------------
-# Theme CSS  (updated with smaller metric cards)
+# Theme CSS (Compact cards)
 # -------------------------------------------------
 def apply_theme(theme: str):
     if theme == "dark":
@@ -60,39 +60,42 @@ def apply_theme(theme: str):
                 border-right: 1px solid #334155;
             }
             .metric-card {
-                background: linear-gradient(145deg, rgba(30,41,59,0.9), rgba(15,23,42,0.95));
-                border: 1px solid rgba(99,102,241,0.3);
-                border-radius: 12px;
-                padding: 10px 8px;
+                background: linear-gradient(145deg, rgba(30,41,59,0.95), rgba(15,23,42,0.98));
+                border: 1px solid rgba(99,102,241,0.35);
+                border-radius: 10px;
+                padding: 8px 6px !important;
                 text-align: center;
-                box-shadow: 0 6px 20px rgba(0,0,0,0.25);
-                min-height: 95px;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                min-height: 78px !important;
             }
             .index-title { 
-                font-size: 11px; 
+                font-size: 10px !important; 
                 font-weight: 600; 
                 color: #94a3b8; 
-                letter-spacing: 0.4px; 
+                letter-spacing: 0.3px; 
                 text-transform: uppercase; 
-                margin-bottom: 4px; 
+                margin-bottom: 3px !important;
+                line-height: 1.1;
             }
             .index-price { 
-                font-size: 18px; 
+                font-size: 15px !important; 
                 font-weight: 700; 
                 color: #f8fafc; 
-                line-height: 1.2;
+                line-height: 1.15 !important;
+                margin: 2px 0 !important;
             }
             .index-change { 
-                font-size: 12px; 
+                font-size: 11px !important; 
                 font-weight: 600; 
-                margin-top: 2px;
+                margin-top: 1px !important;
             }
-            .pos { color: #34d399; }
-            .neg { color: #f87171; }
+            .pos { color: #34d399 !important; }
+            .neg { color: #f87171 !important; }
             .section-header {
                 font-size: 18px; font-weight: 700;
                 background: linear-gradient(90deg, #818cf8, #c084fc);
                 -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+                margin-bottom: 8px;
             }
             div[data-testid="stMetric"] {
                 background: linear-gradient(145deg, rgba(30,41,59,0.85), rgba(15,23,42,0.9));
@@ -136,37 +139,40 @@ def apply_theme(theme: str):
             .metric-card {
                 background: linear-gradient(145deg, #ffffff, #f1f5f9);
                 border: 1px solid #c7d2fe;
-                border-radius: 12px;
-                padding: 10px 8px;
+                border-radius: 10px;
+                padding: 8px 6px !important;
                 text-align: center;
-                box-shadow: 0 4px 15px rgba(99,102,241,0.1);
-                min-height: 95px;
+                box-shadow: 0 3px 12px rgba(99,102,241,0.12);
+                min-height: 78px !important;
             }
             .index-title { 
-                font-size: 11px; 
+                font-size: 10px !important; 
                 font-weight: 600; 
                 color: #64748b; 
-                letter-spacing: 0.4px; 
+                letter-spacing: 0.3px; 
                 text-transform: uppercase; 
-                margin-bottom: 4px; 
+                margin-bottom: 3px !important;
+                line-height: 1.1;
             }
             .index-price { 
-                font-size: 18px; 
+                font-size: 15px !important; 
                 font-weight: 700; 
                 color: #0f172a; 
-                line-height: 1.2;
+                line-height: 1.15 !important;
+                margin: 2px 0 !important;
             }
             .index-change { 
-                font-size: 12px; 
+                font-size: 11px !important; 
                 font-weight: 600; 
-                margin-top: 2px;
+                margin-top: 1px !important;
             }
-            .pos { color: #059669; }
-            .neg { color: #dc2626; }
+            .pos { color: #059669 !important; }
+            .neg { color: #dc2626 !important; }
             .section-header {
                 font-size: 18px; font-weight: 700;
                 background: linear-gradient(90deg, #4f46e5, #7c3aed);
                 -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+                margin-bottom: 8px;
             }
             div[data-testid="stMetric"] {
                 background: white;
@@ -344,14 +350,12 @@ def get_top_movers(universe: list):
         return None, None
 
 def analyze_renko_signal(symbol: str, timeframe: str):
-    """Return a row only when the latest two Renko bricks share direction."""
     interval = "1h" if timeframe == "1 Hour" else "30m"
     period = "1mo" if interval == "1h" else "5d"
     candles = get_ohlc_data(symbol, interval=interval, period=period)
     if candles is None or candles.empty or len(candles) < 22:
         return None
     candles = candles.tail(120 if interval == "1h" else 150).copy().reset_index(drop=True)
-    # Drop still-forming bar
     if not candles.empty:
         last_time = pd.Timestamp(candles["Date"].iloc[-1])
         if last_time.tzinfo is None:
@@ -443,9 +447,8 @@ def scan_renko_universe(universe_tuple: tuple):
     ).drop(columns=["_tf", "_sig"]).reset_index(drop=True)
     return result_df
 
-@st.cache_data(ttl=30)   # Options refresh every 30 seconds
+@st.cache_data(ttl=30)
 def get_options_chain(ltp: float, symbol: str):
-    """Fetch near-live ATM ±2 strikes from NSE option chain."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
@@ -508,10 +511,6 @@ def get_options_chain(ltp: float, symbol: str):
 
 @st.cache_data(ttl=3600)
 def get_stock_universe():
-    """
-    Fetch live Nifty 50 constituents from NSE.
-    Falls back to a recent static list if NSE is unreachable.
-    """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/csv,application/json,text/plain,*/*",
@@ -534,7 +533,6 @@ def get_stock_universe():
                     return sorted(symbols)
         except Exception:
             continue
-    # Fallback – recent Nifty 50
     return [
         "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
         "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL", "BHARTIARTL",
@@ -622,13 +620,13 @@ st.markdown("---")
 # -------------------------------------------------
 st.markdown('<div class="section-header">Market Indices & Global Instruments</div>', unsafe_allow_html=True)
 
-# All instruments with their Yahoo tickers
 instruments = {
     "NIFTY 50": "^NSEI",
     "BANK NIFTY": "^NSEBANK",
     "MIDCAP 150": "NIFTYMIDCAP150.NS",
-    "GIFT NIFTY": "GIFTNIFTY",          # May not always work on Yahoo
+    "GIFT NIFTY": "GIFTNIFTY",
     "MIDCAP SELECT": "NIFTY_MID_SELECT.NS",
+    "INDIA VIX": "^INDIAVIX",
     "CRUDE OIL WTI": "CL=F",
     "CRUDE OIL BRENT": "BZ=F",
     "NATURAL GAS": "NG=F",
@@ -642,24 +640,28 @@ instruments = {
     "BITCOIN": "BTC-USD",
 }
 
-# Instruments that should show as % (yields)
 yield_tickers = {"^TNX", "^TYX"}
+vix_tickers = {"^INDIAVIX"}
 
-# Group into rows of 6
 items = list(instruments.items())
+
 for i in range(0, len(items), 6):
     row_items = items[i:i+6]
     cols = st.columns(6)
+    
     for j, (name, ticker) in enumerate(row_items):
         data = fetch_index_quote(ticker)
+        
         with cols[j]:
             if data:
                 sign = "+" if data["change"] >= 0 else ""
                 color = "pos" if data["change"] >= 0 else "neg"
 
-                # Formatting based on instrument type
                 if ticker in yield_tickers:
                     price_str = f"{data['price']:.2f}%"
+                    change_str = f"{sign}{data['change']:.2f}"
+                elif ticker in vix_tickers:
+                    price_str = f"{data['price']:.2f}"
                     change_str = f"{sign}{data['change']:.2f}"
                 elif ticker in ["CL=F", "BZ=F", "NG=F", "GC=F", "SI=F", "HG=F", "BTC-USD", "INR=X"]:
                     price_str = f"{data['price']:,.2f}"
@@ -679,7 +681,7 @@ for i in range(0, len(items), 6):
                 st.markdown(f"""
                 <div class="metric-card">
                     <div class="index-title">{name}</div>
-                    <div class="index-price" style="font-size:14px; color:#94a3b8;">Unavailable</div>
+                    <div class="index-price" style="font-size:12px; color:#94a3b8; padding-top:8px;">Unavailable</div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -951,7 +953,6 @@ styled = options_df.style.format({
 }).apply(highlight_atm, axis=1)
 st.dataframe(styled, use_container_width=True, hide_index=True)
 
-# Force options to stay fresh every 30 seconds
 if time.time() - st.session_state.last_options_refresh > 30:
     get_options_chain.clear()
     st.session_state.last_options_refresh = time.time()
