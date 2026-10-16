@@ -206,25 +206,43 @@ apply_theme(st.session_state.theme)
 # Data Helpers
 # -------------------------------------------------
 @st.cache_data(ttl=45)
+@st.cache_data(ttl=20)
 def fetch_index_quote(ticker: str):
     try:
         t = yf.Ticker(ticker)
+        
+        # Prefer history (more reliable for commodities, crypto, indices)
+        hist = t.history(period="5d")
+        if not hist.empty and len(hist) >= 1:
+            price = float(hist["Close"].iloc[-1])
+            prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
+            change = price - prev
+            pct = (change / prev) * 100 if prev else 0
+            return {
+                "price": round(price, 2),
+                "change": round(change, 2),
+                "pct": round(pct, 2)
+            }
+        
+        # Fallback to fast_info
         info = t.fast_info
         price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
         prev = getattr(info, "previous_close", None)
-        if price is None or prev is None:
-            hist = t.history(period="5d")
-            if hist.empty:
-                return None
-            price = float(hist["Close"].iloc[-1])
-            prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
-        change = price - prev
-        pct = (change / prev) * 100 if prev else 0
-        return {"price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2)}
-    except:
-        return None
-
-@st.cache_data(ttl=30)
+        
+        if price is not None:
+            if prev is None:
+                prev = price
+            change = price - prev
+            pct = (change / prev) * 100 if prev else 0
+            return {
+                "price": round(float(price), 2),
+                "change": round(float(change), 2),
+                "pct": round(float(pct), 2)
+            }
+    except Exception:
+        pass
+    return None
+@st.cache_data(ttl=20)
 def fetch_gift_nifty():
     """Fetch live GIFT Nifty from Moneycontrol"""
     try:
@@ -235,28 +253,28 @@ def fetch_gift_nifty():
         }
         url = "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx"
         r = requests.get(url, headers=headers, timeout=12)
+        
         if r.status_code != 200:
             return None
 
-        text = r.text
+        text = r.text.replace(",", "")
 
-        # Multiple patterns to extract price and change
         price = None
         change = 0.0
         pct = 0.0
 
-        # Pattern 1: Look for number followed by change in parentheses
-        match = re.search(r'([\d,]+\.\d{2})\s*([+-]?[\d,]+\.\d{2})\s*\(\s*([+-]?[\d.]+)\s*%\s*\)', text)
+        # Pattern 1: price + change + percentage
+        match = re.search(r'(\d+\.\d{2})\s*([+-]?\d+\.\d{2})\s*\(\s*([+-]?\d+\.\d+)\s*%\s*\)', text)
         if match:
-            price = float(match.group(1).replace(",", ""))
-            change = float(match.group(2).replace(",", ""))
+            price = float(match.group(1))
+            change = float(match.group(2))
             pct = float(match.group(3))
         else:
-            # Fallback: just try to find a large number around 20k-30k range
-            numbers = re.findall(r'([\d,]{5,}\.\d{2})', text)
-            for num in numbers:
-                val = float(num.replace(",", ""))
-                if 18000 < val < 35000:  # reasonable GIFT Nifty range
+            # Fallback: find number in GIFT Nifty range
+            candidates = re.findall(r'(\d{5}\.\d{2})', text)
+            for cand in candidates:
+                val = float(cand)
+                if 18000 < val < 35000:
                     price = val
                     break
 
@@ -269,7 +287,6 @@ def fetch_gift_nifty():
     except Exception:
         pass
     return None
-
 @st.cache_data(ttl=45)
 def fetch_stock_data(symbol: str):
     try:
@@ -656,9 +673,9 @@ with col2:
 with col3:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("Refresh Now", use_container_width=True):
-        st.cache_data.clear()
-        st.session_state.last_options_refresh = time.time()
-        st.rerun()
+    st.cache_data.clear()
+    st.session_state.last_options_refresh = time.time()
+    st.rerun()
 
 st.markdown("---")
 
