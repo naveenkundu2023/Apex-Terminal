@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
@@ -189,66 +189,94 @@ def apply_theme(theme: str):
 apply_theme(st.session_state.theme)
 
 # -------------------------------------------------
-# Data Helpers - Improved Live Fetching
+# Improved Live Data Helpers
 # -------------------------------------------------
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=15)
 def fetch_index_quote(ticker: str):
+    """Aggressive live quote – forces recent history"""
     try:
         t = yf.Ticker(ticker)
-        # Primary: history (most reliable)
         hist = t.history(period="5d")
+        if hist is None or hist.empty:
+            hist = t.history(period="1d")
         if not hist.empty and len(hist) >= 1:
             price = float(hist["Close"].iloc[-1])
             prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
             change = price - prev
-            pct = (change / prev) * 100 if prev else 0
+            pct = (change / prev * 100) if prev else 0
             return {"price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2)}
         
-        # Fallback: fast_info
         info = t.fast_info
         price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
-        prev = getattr(info, "previous_close", None)
+        prev = getattr(info, "previous_close", None) or price
         if price is not None:
-            if prev is None:
-                prev = price
-            change = price - prev
-            pct = (change / prev) * 100 if prev else 0
-            return {"price": round(float(price), 2), "change": round(float(change), 2), "pct": round(float(pct), 2)}
+            change = float(price) - float(prev)
+            pct = (change / float(prev) * 100) if prev else 0
+            return {"price": round(float(price), 2), "change": round(change, 2), "pct": round(pct, 2)}
     except Exception:
         pass
     return None
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=15)
 def fetch_gift_nifty():
-    """Improved GIFT Nifty scraper from Moneycontrol"""
+    """Robust GIFT Nifty scraper – targets current ~23,xxx range"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.moneycontrol.com/",
+        "Cache-Control": "no-cache",
+    }
+    urls = [
+        "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx",
+        "https://www.moneycontrol.com/indian-indices/gift-nifty-107.html",
+    ]
+    for url in urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code != 200:
+                continue
+            text = r.text.replace(",", "").replace(" ", "")
+            
+            # Strong pattern for price + change + %
+            match = re.search(
+                r'(\d{5}\.\d{1,2})\s*([+-]?\d+\.?\d*)\s*\(?\s*([+-]?\d+\.?\d*)\s*%?\s*\)?',
+                text
+            )
+            if match:
+                price = float(match.group(1))
+                if 22000 < price < 28000:  # valid 2026 GIFT range
+                    change = float(match.group(2) or 0)
+                    pct = float(match.group(3) or 0)
+                    return {"price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2)}
+            
+            # Fallback: any number in valid range
+            candidates = re.findall(r'(\d{5}\.\d{1,2})', text)
+            for cand in candidates:
+                val = float(cand)
+                if 22000 < val < 28000:
+                    return {"price": round(val, 2), "change": 0.0, "pct": 0.0}
+        except Exception:
+            continue
+    return None
+
+@st.cache_data(ttl=20)
+def fetch_commodity_live(ticker: str):
+    """Extra push for oil, metals, forex, crypto"""
+    data = fetch_index_quote(ticker)
+    if data and data["price"] > 0:
+        return data
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://www.moneycontrol.com/",
-        }
-        url = "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx"
-        r = requests.get(url, headers=headers, timeout=12)
-        if r.status_code != 200:
-            return None
-        text = r.text.replace(",", "")
-        
-        # Primary pattern
-        match = re.search(r'(\d+\.\d{2})\s*([+-]?\d+\.\d{2})\s*\(\s*([+-]?\d+\.\d+)\s*%\s*\)', text)
-        if match:
+        t = yf.Ticker(ticker)
+        hist = t.history(period="1d", interval="1m")
+        if not hist.empty:
+            price = float(hist["Close"].iloc[-1])
+            prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
             return {
-                "price": round(float(match.group(1)), 2),
-                "change": round(float(match.group(2)), 2),
-                "pct": round(float(match.group(3)), 2)
+                "price": round(price, 2),
+                "change": round(price - prev, 2),
+                "pct": round((price - prev) / prev * 100, 2) if prev else 0
             }
-        
-        # Fallback range search
-        candidates = re.findall(r'(\d{5}\.\d{2})', text)
-        for cand in candidates:
-            val = float(cand)
-            if 18000 < val < 35000:
-                return {"price": round(val, 2), "change": 0.0, "pct": 0.0}
-    except Exception:
+    except:
         pass
     return None
 
@@ -542,7 +570,6 @@ def get_stock_universe():
         "TITAN", "ULTRACEMCO", "UPL", "WIPRO", "ETERNAL"
     ]
 
-# ---------- NEW: Index Analytics Helper ----------
 @st.cache_data(ttl=60)
 def get_index_analytics(ticker: str):
     try:
@@ -558,7 +585,6 @@ def get_index_analytics(ticker: str):
         avg_5d = float(last5["Close"].mean())
         high_5d = float(last5["High"].max())
         low_5d = float(last5["Low"].min())
-        # Approximate VWAP (typical price * volume)
         last5 = last5.copy()
         last5["TP"] = (last5["High"] + last5["Low"] + last5["Close"]) / 3
         vwap_5d = float((last5["TP"] * last5["Volume"]).sum() / last5["Volume"].sum()) if last5["Volume"].sum() > 0 else avg_5d
@@ -580,10 +606,8 @@ def get_index_analytics(ticker: str):
     except:
         return None
 
-# ---------- NEW: PCR Fetcher ----------
 @st.cache_data(ttl=45)
 def get_pcr(symbol: str = "NIFTY"):
-    """Fetch Put-Call Ratio from NSE Option Chain"""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
@@ -620,7 +644,6 @@ def get_pcr(symbol: str = "NIFTY"):
     except Exception:
         return None
 
-# ---------- NEW: Market Breadth ----------
 @st.cache_data(ttl=60)
 def get_market_breadth(universe: list):
     try:
@@ -645,7 +668,6 @@ def get_market_breadth(universe: list):
     except:
         return 0, 0
 
-# ---------- NEW: Stock News + Summary ----------
 @st.cache_data(ttl=120)
 def get_stock_news(symbol: str, limit: int = 4):
     try:
@@ -682,7 +704,6 @@ def get_stock_summary_analytics(symbol: str):
         vwap_5d = float((last5["TP"] * last5["Volume"]).sum() / last5["Volume"].sum()) if last5["Volume"].sum() > 0 else avg_5d
         change = current - prev_close
         pct = (change / prev_close) * 100 if prev_close else 0
-        # Simple bias
         bias = "BULLISH" if current > vwap_5d and current > avg_5d else "BEARISH" if current < vwap_5d and current < avg_5d else "NEUTRAL"
         return {
             "current": round(current, 2),
@@ -763,7 +784,7 @@ with col3:
         st.session_state.last_options_refresh = time.time()
         st.rerun()
 
-# ========== STOCK SUMMARY BOX (NEW - right below dropdown) ==========
+# ========== STOCK SUMMARY BOX ==========
 st.markdown("---")
 summary = get_stock_summary_analytics(selected)
 news_items = get_stock_news(selected)
@@ -831,8 +852,11 @@ for i in range(0, len(items), 6):
     for j, (name, ticker) in enumerate(row_items):
         if ticker == "GIFT_NIFTY_SPECIAL":
             data = fetch_gift_nifty()
+        elif ticker in ["CL=F", "BZ=F", "GC=F", "SI=F", "HG=F", "INR=X", "BTC-USD", "NG=F"]:
+            data = fetch_commodity_live(ticker)
         else:
             data = fetch_index_quote(ticker)
+        
         with cols[j]:
             if data:
                 sign = "+" if data["change"] >= 0 else ""
@@ -866,7 +890,7 @@ for i in range(0, len(items), 6):
 
 st.markdown("---")
 
-# ========== NEW SECTION: Global Opening Commentary & Analytics ==========
+# ========== Global Opening Commentary & Analytics ==========
 st.markdown('<div class="section-header">🌍 Global Opening Commentary & Index Analytics</div>', unsafe_allow_html=True)
 
 nifty_an = get_index_analytics("^NSEI")
@@ -907,7 +931,6 @@ with col_b:
     else:
         st.info("Bank Nifty analytics loading...")
 
-# Sharp Commentary
 st.markdown("#### 🎯 Day's Actionable View")
 commentary = []
 if gift:
@@ -931,7 +954,7 @@ else:
 
 st.markdown("---")
 
-# ========== NEW SECTION: Market Breadth + PCR ==========
+# ========== Market Breadth + PCR ==========
 st.markdown('<div class="section-header">📊 Market Breadth & Put-Call Ratio</div>', unsafe_allow_html=True)
 
 bullish_cnt, bearish_cnt = get_market_breadth(universe)
@@ -967,7 +990,7 @@ v1.metric("Session Volume", f"{metrics['volume']:,}")
 v2.metric("20-Day Avg Volume", f"{metrics['avg_volume']:,}")
 
 # -------------------------------------------------
-# Timeframe + Charts
+# Charts
 # -------------------------------------------------
 st.markdown("#### 📊 Price Chart")
 tf_col1, tf_col2 = st.columns([2, 1])
@@ -1123,7 +1146,6 @@ else:
         return [""] * len(row)
 
     cols_to_show = ["Stock", "Timeframe", "Signal", "Price", "EMA 20", "Entry", "Exit", "Box Size", "Last Brick Time", "Age Minutes"]
-    # Ensure 2-decimal formatting
     for col in ["Price", "EMA 20", "Entry", "Exit", "Box Size"]:
         if col in display_df.columns:
             display_df[col] = display_df[col].apply(lambda x: round(float(x), 2) if pd.notnull(x) else x)
@@ -1190,7 +1212,7 @@ with lcol:
     else:
         st.info("Loading...")
 
-# Auto refresh every 1 minute
+# Auto refresh
 if auto_refresh:
     time.sleep(60)
     st.rerun()
