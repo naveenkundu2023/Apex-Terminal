@@ -613,8 +613,6 @@ with col3:
         st.session_state.last_options_refresh = time.time()
         st.rerun()
 
-st.markdown("---")
-
 # -------------------------------------------------
 # Market Indices + Global Instruments (6 cards per row)
 # -------------------------------------------------
@@ -624,7 +622,7 @@ instruments = {
     "NIFTY 50": "^NSEI",
     "BANK NIFTY": "^NSEBANK",
     "MIDCAP 150": "NIFTYMIDCAP150.NS",
-    "GIFT NIFTY": "GIFTNIFTY",
+    "GIFT NIFTY": "GIFT_NIFTY_SPECIAL",      # special handling
     "MIDCAP SELECT": "NIFTY_MID_SELECT.NS",
     "INDIA VIX": "^INDIAVIX",
     "CRUDE OIL WTI": "CL=F",
@@ -650,7 +648,11 @@ for i in range(0, len(items), 6):
     cols = st.columns(6)
     
     for j, (name, ticker) in enumerate(row_items):
-        data = fetch_index_quote(ticker)
+        # Special case for GIFT Nifty
+        if ticker == "GIFT_NIFTY_SPECIAL":
+            data = fetch_gift_nifty()
+        else:
+            data = fetch_index_quote(ticker)
         
         with cols[j]:
             if data:
@@ -660,8 +662,8 @@ for i in range(0, len(items), 6):
                 if ticker in yield_tickers:
                     price_str = f"{data['price']:.2f}%"
                     change_str = f"{sign}{data['change']:.2f}"
-                elif ticker in vix_tickers:
-                    price_str = f"{data['price']:.2f}"
+                elif ticker in vix_tickers or ticker == "GIFT_NIFTY_SPECIAL":
+                    price_str = f"{data['price']:,.2f}"
                     change_str = f"{sign}{data['change']:.2f}"
                 elif ticker in ["CL=F", "BZ=F", "NG=F", "GC=F", "SI=F", "HG=F", "BTC-USD", "INR=X"]:
                     price_str = f"{data['price']:,.2f}"
@@ -686,7 +688,6 @@ for i in range(0, len(items), 6):
                 """, unsafe_allow_html=True)
 
 st.markdown("---")
-
 # -------------------------------------------------
 # Stock Analytics
 # -------------------------------------------------
