@@ -9,6 +9,7 @@ import time
 import pytz
 import requests
 from io import StringIO
+import re
 
 # -------------------------------------------------
 # Page Config
@@ -222,6 +223,52 @@ def fetch_index_quote(ticker: str):
         return {"price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2)}
     except:
         return None
+
+@st.cache_data(ttl=30)
+def fetch_gift_nifty():
+    """Fetch live GIFT Nifty from Moneycontrol"""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.moneycontrol.com/",
+        }
+        url = "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx"
+        r = requests.get(url, headers=headers, timeout=12)
+        if r.status_code != 200:
+            return None
+
+        text = r.text
+
+        # Multiple patterns to extract price and change
+        price = None
+        change = 0.0
+        pct = 0.0
+
+        # Pattern 1: Look for number followed by change in parentheses
+        match = re.search(r'([\d,]+\.\d{2})\s*([+-]?[\d,]+\.\d{2})\s*\(\s*([+-]?[\d.]+)\s*%\s*\)', text)
+        if match:
+            price = float(match.group(1).replace(",", ""))
+            change = float(match.group(2).replace(",", ""))
+            pct = float(match.group(3))
+        else:
+            # Fallback: just try to find a large number around 20k-30k range
+            numbers = re.findall(r'([\d,]{5,}\.\d{2})', text)
+            for num in numbers:
+                val = float(num.replace(",", ""))
+                if 18000 < val < 35000:  # reasonable GIFT Nifty range
+                    price = val
+                    break
+
+        if price is not None:
+            return {
+                "price": round(price, 2),
+                "change": round(change, 2),
+                "pct": round(pct, 2)
+            }
+    except Exception:
+        pass
+    return None
 
 @st.cache_data(ttl=45)
 def fetch_stock_data(symbol: str):
@@ -589,7 +636,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: Yahoo Finance + NSE • Options refresh every 30s")
+    st.caption("Data: Yahoo Finance + NSE + Moneycontrol • Options refresh every 30s")
 
 # -------------------------------------------------
 # Header + Time
@@ -613,6 +660,8 @@ with col3:
         st.session_state.last_options_refresh = time.time()
         st.rerun()
 
+st.markdown("---")
+
 # -------------------------------------------------
 # Market Indices + Global Instruments (6 cards per row)
 # -------------------------------------------------
@@ -622,7 +671,7 @@ instruments = {
     "NIFTY 50": "^NSEI",
     "BANK NIFTY": "^NSEBANK",
     "MIDCAP 150": "NIFTYMIDCAP150.NS",
-    "GIFT NIFTY": "GIFT_NIFTY_SPECIAL",      # special handling
+    "GIFT NIFTY": "GIFT_NIFTY_SPECIAL",
     "MIDCAP SELECT": "NIFTY_MID_SELECT.NS",
     "INDIA VIX": "^INDIAVIX",
     "CRUDE OIL WTI": "CL=F",
@@ -648,7 +697,6 @@ for i in range(0, len(items), 6):
     cols = st.columns(6)
     
     for j, (name, ticker) in enumerate(row_items):
-        # Special case for GIFT Nifty
         if ticker == "GIFT_NIFTY_SPECIAL":
             data = fetch_gift_nifty()
         else:
@@ -688,6 +736,7 @@ for i in range(0, len(items), 6):
                 """, unsafe_allow_html=True)
 
 st.markdown("---")
+
 # -------------------------------------------------
 # Stock Analytics
 # -------------------------------------------------
