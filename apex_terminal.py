@@ -672,10 +672,10 @@ with col2:
     auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=False)
 with col3:
     st.markdown("<br>", unsafe_allow_html=True)
-    if     st.button("Refresh Now", use_container_width=True):
-         st.cache_data.clear()
+    if st.button("Refresh Now", use_container_width=True):
+        st.cache_data.clear()
         st.session_state.last_options_refresh = time.time()
-       st.rerun()
+        st.rerun()
 
 st.markdown("---")
 
