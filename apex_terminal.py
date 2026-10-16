@@ -43,7 +43,7 @@ if "last_options_refresh" not in st.session_state:
     st.session_state.last_options_refresh = time.time()
 
 # -------------------------------------------------
-# Theme CSS
+# Theme CSS  (updated with smaller metric cards)
 # -------------------------------------------------
 def apply_theme(theme: str):
     if theme == "dark":
@@ -62,14 +62,31 @@ def apply_theme(theme: str):
             .metric-card {
                 background: linear-gradient(145deg, rgba(30,41,59,0.9), rgba(15,23,42,0.95));
                 border: 1px solid rgba(99,102,241,0.3);
-                border-radius: 16px;
-                padding: 18px 14px;
+                border-radius: 12px;
+                padding: 10px 8px;
                 text-align: center;
-                box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+                box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+                min-height: 95px;
             }
-            .index-title { font-size: 12px; font-weight: 600; color: #94a3b8; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 6px; }
-            .index-price { font-size: 24px; font-weight: 700; color: #f8fafc; }
-            .index-change { font-size: 13px; font-weight: 600; }
+            .index-title { 
+                font-size: 11px; 
+                font-weight: 600; 
+                color: #94a3b8; 
+                letter-spacing: 0.4px; 
+                text-transform: uppercase; 
+                margin-bottom: 4px; 
+            }
+            .index-price { 
+                font-size: 18px; 
+                font-weight: 700; 
+                color: #f8fafc; 
+                line-height: 1.2;
+            }
+            .index-change { 
+                font-size: 12px; 
+                font-weight: 600; 
+                margin-top: 2px;
+            }
             .pos { color: #34d399; }
             .neg { color: #f87171; }
             .section-header {
@@ -119,14 +136,31 @@ def apply_theme(theme: str):
             .metric-card {
                 background: linear-gradient(145deg, #ffffff, #f1f5f9);
                 border: 1px solid #c7d2fe;
-                border-radius: 16px;
-                padding: 18px 14px;
+                border-radius: 12px;
+                padding: 10px 8px;
                 text-align: center;
-                box-shadow: 0 4px 20px rgba(99,102,241,0.1);
+                box-shadow: 0 4px 15px rgba(99,102,241,0.1);
+                min-height: 95px;
             }
-            .index-title { font-size: 12px; font-weight: 600; color: #64748b; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 6px; }
-            .index-price { font-size: 24px; font-weight: 700; color: #0f172a; }
-            .index-change { font-size: 13px; font-weight: 600; }
+            .index-title { 
+                font-size: 11px; 
+                font-weight: 600; 
+                color: #64748b; 
+                letter-spacing: 0.4px; 
+                text-transform: uppercase; 
+                margin-bottom: 4px; 
+            }
+            .index-price { 
+                font-size: 18px; 
+                font-weight: 700; 
+                color: #0f172a; 
+                line-height: 1.2;
+            }
+            .index-change { 
+                font-size: 12px; 
+                font-weight: 600; 
+                margin-top: 2px;
+            }
             .pos { color: #059669; }
             .neg { color: #dc2626; }
             .section-header {
@@ -316,9 +350,7 @@ def analyze_renko_signal(symbol: str, timeframe: str):
     candles = get_ohlc_data(symbol, interval=interval, period=period)
     if candles is None or candles.empty or len(candles) < 22:
         return None
-
     candles = candles.tail(120 if interval == "1h" else 150).copy().reset_index(drop=True)
-
     # Drop still-forming bar
     if not candles.empty:
         last_time = pd.Timestamp(candles["Date"].iloc[-1])
@@ -329,31 +361,25 @@ def analyze_renko_signal(symbol: str, timeframe: str):
         bar_length = pd.Timedelta(hours=1 if interval == "1h" else 0, minutes=30 if interval == "30m" else 0)
         if last_time + bar_length > pd.Timestamp.now(tz="Asia/Kolkata") and len(candles) > 1:
             candles = candles.iloc[:-1].reset_index(drop=True)
-
     if len(candles) < 22:
         return None
-
     candles["EMA20"] = calculate_ema(candles["Close"], 20)
     price = float(candles["Close"].iloc[-1])
     ema20 = float(candles["EMA20"].iloc[-1])
-
     daily_atr = get_daily_atr(symbol, 14, 7)
     if not daily_atr or daily_atr <= 0:
         daily_atr = get_daily_atr(symbol, 14, 14)
     if not daily_atr or daily_atr <= 0:
         daily_atr = price * 0.005
-
     box_size = daily_atr / 5 if interval == "1h" else daily_atr / 10
     bricks = generate_renko(candles, box_size)
     if bricks.empty or len(bricks) < 2:
         return None
-
     first, second = bricks.iloc[-2], bricks.iloc[-1]
     first_green = float(first["Close"]) > float(first["Open"])
     second_green = float(second["Close"]) > float(second["Open"])
     first_red = float(first["Close"]) < float(first["Open"])
     second_red = float(second["Close"]) < float(second["Open"])
-
     if first_green and second_green:
         direction = "BULLISH"
         action = "BUY" if price > ema20 else "BULLISH"
@@ -366,17 +392,14 @@ def analyze_renko_signal(symbol: str, timeframe: str):
         exit_price = float(first["High"])
     else:
         return None
-
     last_brick_ts = pd.Timestamp(bricks["Date"].iloc[-1])
     if last_brick_ts.tzinfo is None:
         last_brick_ts = last_brick_ts.tz_localize("Asia/Kolkata")
     else:
         last_brick_ts = last_brick_ts.tz_convert("Asia/Kolkata")
-
     now = pd.Timestamp.now(tz="Asia/Kolkata")
     age_minutes = (now - last_brick_ts).total_seconds() / 60.0
     just_entered = age_minutes <= 20
-
     return {
         "Stock": symbol,
         "Timeframe": timeframe,
@@ -409,19 +432,15 @@ def scan_renko_universe(universe_tuple: tuple):
                 continue
     if not rows:
         return pd.DataFrame()
-
     result_df = pd.DataFrame(rows)
     tf_order = {"30 Minutes": 0, "1 Hour": 1}
     signal_order = {"BUY": 0, "SELL": 1, "BULLISH": 2, "BEARISH": 3}
-
     result_df["_tf"] = result_df["Timeframe"].map(tf_order)
     result_df["_sig"] = result_df["Signal"].map(signal_order).fillna(9)
-
     result_df = result_df.sort_values(
         by=["_tf", "Last Brick TS", "_sig"],
         ascending=[True, False, True]
     ).drop(columns=["_tf", "_sig"]).reset_index(drop=True)
-
     return result_df
 
 @st.cache_data(ttl=30)   # Options refresh every 30 seconds
@@ -441,14 +460,12 @@ def get_options_chain(ltp: float, symbol: str):
         r = session.get(url, headers=headers, timeout=10)
         if r.status_code != 200:
             raise Exception(f"NSE status {r.status_code}")
-
         data = r.json()
         records = data.get("records", {})
         underlying = records.get("underlyingValue", ltp)
         options = records.get("data", [])
         if not options:
             raise Exception("Empty chain")
-
         strike_map = {}
         for item in options:
             strike = item.get("strikePrice")
@@ -462,12 +479,10 @@ def get_options_chain(ltp: float, symbol: str):
             }
         if not strike_map:
             raise Exception("No strikes")
-
         strikes = sorted(strike_map.keys())
         atm = min(strikes, key=lambda x: abs(x - underlying))
         atm_idx = strikes.index(atm)
         selected_strikes = strikes[max(0, atm_idx - 2): atm_idx + 3]
-
         rows = []
         for s in selected_strikes:
             rows.append({
@@ -503,12 +518,10 @@ def get_stock_universe():
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://www.nseindia.com/",
     }
-
     urls = [
         "https://archives.nseindia.com/content/indices/ind_nifty50list.csv",
         "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv",
     ]
-
     for url in urls:
         try:
             session = requests.Session()
@@ -521,8 +534,7 @@ def get_stock_universe():
                     return sorted(symbols)
         except Exception:
             continue
-
-    # Fallback – recent Nifty 50 (Oct 2026). Overwritten once live fetch works.
+    # Fallback – recent Nifty 50
     return [
         "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
         "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL", "BHARTIARTL",
@@ -559,10 +571,8 @@ with st.sidebar:
     if new_theme != st.session_state.theme:
         st.session_state.theme = new_theme
         st.rerun()
-
     st.markdown("---")
     st.markdown("### ⭐ Watchlist")
-
     if "selected" in st.session_state:
         c1, c2 = st.columns(2)
         with c1:
@@ -575,13 +585,11 @@ with st.sidebar:
                 if st.session_state.selected in st.session_state.watchlist:
                     st.session_state.watchlist.remove(st.session_state.selected)
                     st.info(f"Removed {st.session_state.selected}")
-
     if st.session_state.watchlist:
         chips = " ".join([f'<span class="watchlist-chip">{s}</span>' for s in st.session_state.watchlist])
         st.markdown(chips, unsafe_allow_html=True)
     else:
         st.caption("Watchlist is empty")
-
     st.markdown("---")
     st.caption("Data: Yahoo Finance + NSE • Options refresh every 30s")
 
@@ -610,26 +618,70 @@ with col3:
 st.markdown("---")
 
 # -------------------------------------------------
-# Indices
+# Market Indices + Global Instruments (6 cards per row)
 # -------------------------------------------------
-st.markdown('<div class="section-header">Market Indices</div>', unsafe_allow_html=True)
-indices = {"NIFTY 50": "^NSEI", "BANK NIFTY": "^NSEBANK", "NIFTY MIDCAP 150": "NIFTYMIDCAP150.NS"}
-cols = st.columns(3)
-for i, (name, ticker) in enumerate(indices.items()):
-    data = fetch_index_quote(ticker)
-    with cols[i]:
-        if data:
-            sign = "+" if data["change"] >= 0 else ""
-            color = "pos" if data["change"] >= 0 else "neg"
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="index-title">{name}</div>
-                <div class="index-price">₹{data['price']:,.2f}</div>
-                <div class="index-change {color}">{sign}{data['change']:.2f} ({sign}{data['pct']:.2f}%)</div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.error(f"{name} unavailable")
+st.markdown('<div class="section-header">Market Indices & Global Instruments</div>', unsafe_allow_html=True)
+
+# All instruments with their Yahoo tickers
+instruments = {
+    "NIFTY 50": "^NSEI",
+    "BANK NIFTY": "^NSEBANK",
+    "MIDCAP 150": "NIFTYMIDCAP150.NS",
+    "GIFT NIFTY": "GIFTNIFTY",          # May not always work on Yahoo
+    "MIDCAP SELECT": "NIFTY_MID_SELECT.NS",
+    "CRUDE OIL WTI": "CL=F",
+    "CRUDE OIL BRENT": "BZ=F",
+    "NATURAL GAS": "NG=F",
+    "USD / INR": "INR=X",
+    "US 10Y BOND": "^TNX",
+    "US 30Y BOND": "^TYX",
+    "US TECH 100": "^NDX",
+    "GOLD": "GC=F",
+    "SILVER": "SI=F",
+    "COPPER": "HG=F",
+    "BITCOIN": "BTC-USD",
+}
+
+# Instruments that should show as % (yields)
+yield_tickers = {"^TNX", "^TYX"}
+
+# Group into rows of 6
+items = list(instruments.items())
+for i in range(0, len(items), 6):
+    row_items = items[i:i+6]
+    cols = st.columns(6)
+    for j, (name, ticker) in enumerate(row_items):
+        data = fetch_index_quote(ticker)
+        with cols[j]:
+            if data:
+                sign = "+" if data["change"] >= 0 else ""
+                color = "pos" if data["change"] >= 0 else "neg"
+
+                # Formatting based on instrument type
+                if ticker in yield_tickers:
+                    price_str = f"{data['price']:.2f}%"
+                    change_str = f"{sign}{data['change']:.2f}"
+                elif ticker in ["CL=F", "BZ=F", "NG=F", "GC=F", "SI=F", "HG=F", "BTC-USD", "INR=X"]:
+                    price_str = f"{data['price']:,.2f}"
+                    change_str = f"{sign}{data['change']:.2f}"
+                else:
+                    price_str = f"₹{data['price']:,.2f}"
+                    change_str = f"{sign}{data['change']:.2f}"
+
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="index-title">{name}</div>
+                    <div class="index-price">{price_str}</div>
+                    <div class="index-change {color}">{change_str} ({sign}{data['pct']:.2f}%)</div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="index-title">{name}</div>
+                    <div class="index-price" style="font-size:14px; color:#94a3b8;">Unavailable</div>
+                </div>
+                """, unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -699,7 +751,6 @@ else:
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03,
         row_heights=[0.72, 0.28], subplot_titles=(f"{selected} • {timeframe}", "Volume")
     )
-
     fig.add_trace(go.Candlestick(
         x=candle_df["x"], open=candle_df["Open"], high=candle_df["High"],
         low=candle_df["Low"], close=candle_df["Close"], name="OHLC",
@@ -707,12 +758,10 @@ else:
         increasing_fillcolor="#34d399", decreasing_fillcolor="#f87171",
         text=candle_df["hover"], hoverinfo="text+y"
     ), row=1, col=1)
-
     fig.add_trace(go.Scatter(
         x=candle_df["x"], y=candle_df["EMA20"], mode="lines", name="EMA 20",
         line=dict(color="#fbbf24", width=1.8), hoverinfo="skip"
     ), row=1, col=1)
-
     fig.add_trace(go.Scatter(
         x=candle_df["x"], y=candle_df["EMA50"], mode="lines", name="EMA 50",
         line=dict(color="#60a5fa", width=2.0), hoverinfo="skip"
@@ -733,7 +782,6 @@ else:
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color=axis_color), dragmode=False
     )
-
     if use_sequential:
         n = len(candle_df)
         step = max(1, n // 7)
@@ -745,7 +793,6 @@ else:
         )
     else:
         fig.update_xaxes(tickformat="%d %b", tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
-
     fig.update_yaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
     st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
 
@@ -767,7 +814,6 @@ else:
 
     st.caption(f"Renko Box Size: **{box_label}**  |  Timeframe: **{timeframe}**")
     renko_df = generate_renko(candle_df, box_size)
-
     if renko_df.empty:
         st.info("Not enough price movement to generate Renko bricks.")
     else:
@@ -848,7 +894,6 @@ else:
     sc5.metric("⚡ Just Entered", just_entered_count)
 
     display_df = signal_df.copy()
-
     def format_signal(row):
         base = {
             "BUY": "🟢 BUY",
@@ -859,7 +904,6 @@ else:
         if row["Just Entered"]:
             return f"⚡{base}"
         return base
-
     display_df["Signal"] = display_df.apply(format_signal, axis=1)
 
     def highlight_just_entered(row):
@@ -871,10 +915,8 @@ else:
         "Stock", "Timeframe", "Signal", "Price", "EMA 20",
         "Entry", "Exit", "Box Size", "Last Brick Time", "Age Minutes"
     ]
-
     styled = display_df[cols_to_show].style.apply(highlight_just_entered, axis=1)
     st.dataframe(styled, use_container_width=True, hide_index=True)
-
     st.caption("⚡ = Just entered (last Renko brick ≤ 20 min ago) • Yellow highlight = fresh signal")
 
     st.download_button(
@@ -907,7 +949,6 @@ styled = options_df.style.format({
     "Strike Price": "₹{:,.0f}",
     "Put Price (PE)": "₹{:,.2f}"
 }).apply(highlight_atm, axis=1)
-
 st.dataframe(styled, use_container_width=True, hide_index=True)
 
 # Force options to stay fresh every 30 seconds
