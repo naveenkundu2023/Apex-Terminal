@@ -122,7 +122,6 @@ def apply_theme(theme: str):
             .stCaption, [data-testid="stCaption"] {
                 color: #cbd5e1 !important;
             }
-            /* High visibility styling for Chart Controls / Radio elements */
             .row-widget.stRadio label p, div[data-testid="stRadio"] label p, .stRadio label span {
                 color: #ffffff !important;
                 font-weight: 600 !important;
@@ -202,7 +201,6 @@ def apply_theme(theme: str):
                 padding: 4px 12px; border-radius: 20px; margin: 3px;
                 font-size: 13px; font-weight: 500;
             }
-            /* High visibility styling for Chart Controls / Radio elements */
             .row-widget.stRadio label p, div[data-testid="stRadio"] label p, .stRadio label span {
                 color: #1e293b !important;
                 font-weight: 700 !important;
@@ -213,7 +211,7 @@ def apply_theme(theme: str):
 apply_theme(st.session_state.theme)
 
 # -------------------------------------------------
-# Data Helpers (Optimized low TTL for live feeds)
+# Data Helpers
 # -------------------------------------------------
 @st.cache_data(ttl=15)
 def fetch_index_quote(ticker: str):
@@ -251,7 +249,6 @@ def fetch_index_quote(ticker: str):
 
 @st.cache_data(ttl=15)
 def fetch_gift_nifty():
-    """Fetch live GIFT Nifty from Moneycontrol with fallback"""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -277,8 +274,6 @@ def fetch_gift_nifty():
                     return {"price": round(val, 2), "change": 0.0, "pct": 0.0}
     except Exception:
         pass
-    
-    # Fallback to yfinance ticker if web scrape fails
     return fetch_index_quote("^NSEI")
 
 @st.cache_data(ttl=15)
@@ -737,35 +732,59 @@ v1.metric("Session Volume", f"{metrics['volume']:,}")
 v2.metric("20-Day Avg Volume", f"{metrics['avg_volume']:,}")
 
 # -------------------------------------------------
-# Price Chart & Controls (Legible High Contrast Labels)
+# Price Chart & Controls (Restored with EMAs & Renko toggle)
 # -------------------------------------------------
-st.markdown("#### 📊 Price Chart")
-tf_col1, tf_col2 = st.columns([2, 1])
+st.markdown("#### 📊 Price & Renko Chart")
+tf_col1, tf_col2, tf_col3 = st.columns([1.5, 1.5, 1])
 with tf_col1:
-    chart_interval = st.radio("Timeframe", ["Daily", "1Hr", "30 Min"], horizontal=True, index=0, key="chart_tf")
+    chart_type = st.radio("Chart Type", ["Candlestick", "Renko"], horizontal=True, index=0, key="chart_type")
 with tf_col2:
-    chart_period = st.radio("Chart Period", ["1 Mo", "3 Mo", "6 Mo"], horizontal=True, index=1, key="chart_period")
+    chart_interval = st.radio("Timeframe", ["Daily", "1Hr", "30 Min"], horizontal=True, index=0, key="chart_tf")
+with tf_col3:
+    show_emas = st.checkbox("Show EMA 20/50", value=True)
 
 interval_map = {"Daily": "1d", "1Hr": "1h", "30 Min": "30m"}
-period_map = {"1 Mo": "1mo", "3 Mo": "3mo", "6 Mo": "6mo"}
+df_chart = get_ohlc_data(selected, interval=interval_map[chart_interval], period="3mo")
 
-df_chart = get_ohlc_data(selected, interval=interval_map[chart_interval], period=period_map[chart_period])
 if df_chart is not None and not df_chart.empty:
+    if show_emas:
+        df_chart["EMA20"] = calculate_ema(df_chart["Close"], 20)
+        df_chart["EMA50"] = calculate_ema(df_chart["Close"], 50)
+
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.03)
-    fig.add_trace(go.Candlestick(
-        x=df_chart["Date"], open=df_chart["Open"], high=df_chart["High"],
-        low=df_chart["Low"], close=df_chart["Close"], name="OHLC"
-    ), row=1, col=1)
+
+    if chart_type == "Candlestick":
+        fig.add_trace(go.Candlestick(
+            x=df_chart["Date"], open=df_chart["Open"], high=df_chart["High"],
+            low=df_chart["Low"], close=df_chart["Close"], name="OHLC"
+        ), row=1, col=1)
+        if show_emas:
+            fig.add_trace(go.Scatter(x=df_chart["Date"], y=df_chart["EMA20"], name="EMA 20", line=dict(color="#facc15", width=1.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_chart["Date"], y=df_chart["EMA50"], name="EMA 50", line=dict(color="#38bdf8", width=1.5)), row=1, col=1)
+    else:
+        daily_atr = get_daily_atr(selected, 14, 14) or (df_chart["Close"].iloc[-1] * 0.005)
+        box_size = daily_atr / 5
+        renko_df = generate_renko(df_chart, box_size)
+        if not renko_df.empty:
+            colors = ["#34d399" if row["Close"] > row["Open"] else "#f87171" for _, row in renko_df.iterrows()]
+            fig.add_trace(go.Bar(
+                x=renko_df["Date"], y=renko_df["Close"] - renko_df["Open"],
+                base=renko_df["Open"], name="Renko Bricks", marker_color=colors
+            ), row=1, col=1)
+        else:
+            st.warning("Insufficient data to build Renko chart.")
+
     fig.add_trace(go.Bar(
         x=df_chart["Date"], y=df_chart["Volume"], name="Volume",
         marker_color="rgba(99,102,241,0.6)"
     ), row=2, col=1)
+
     fig.update_layout(
         template="plotly_dark" if st.session_state.theme == "dark" else "plotly_white",
         margin=dict(l=10, r=10, t=10, b=10),
-        height=450,
+        height=480,
         xaxis_rangeslider_visible=False,
-        showlegend=False
+        showlegend=True
     )
     st.plotly_chart(fig, use_container_width=True)
 else:
@@ -774,21 +793,19 @@ else:
 st.markdown("---")
 
 # -------------------------------------------------
-# Renko / Scan Signal Section (Restricted to 2 Decimals)
+# Renko / Scan Signal Section (Automatic on Load)
 # -------------------------------------------------
 st.markdown('<div class="section-header">⚡ Renko Strategy Scanner (30M & 1H)</div>', unsafe_allow_html=True)
-if st.button("Run Nifty 50 Renko Scan", use_container_width=True):
-    with st.spinner("Scanning Nifty 50 universe..."):
-        scan_df = scan_renko_universe(tuple(universe))
-        if not scan_df.empty:
-            # Format float columns to restrict to 2 decimals
-            float_cols = ["Price", "EMA 20", "Entry", "Exit", "Box Size"]
-            for col in float_cols:
-                if col in scan_df.columns:
-                    scan_df[col] = scan_df[col].apply(lambda x: f"{x:.2f}")
-            st.dataframe(scan_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("No active setups found matching scan criteria.")
+with st.spinner("Scanning Nifty 50 universe..."):
+    scan_df = scan_renko_universe(tuple(universe))
+    if not scan_df.empty:
+        float_cols = ["Price", "EMA 20", "Entry", "Exit", "Box Size"]
+        for col in float_cols:
+            if col in scan_df.columns:
+                scan_df[col] = scan_df[col].apply(lambda x: f"{x:.2f}")
+        st.dataframe(scan_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No active setups found matching scan criteria.")
 
 st.markdown("---")
 
