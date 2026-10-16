@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
@@ -10,6 +10,7 @@ import pytz
 import requests
 from io import StringIO
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # -------------------------------------------------
 # Page Config
@@ -44,7 +45,7 @@ if "last_options_refresh" not in st.session_state:
     st.session_state.last_options_refresh = time.time()
 
 # -------------------------------------------------
-# Theme CSS (Compact cards)
+# Theme CSS
 # -------------------------------------------------
 def apply_theme(theme: str):
     if theme == "dark":
@@ -70,26 +71,15 @@ def apply_theme(theme: str):
                 min-height: 78px !important;
             }
             .index-title { 
-                font-size: 10px !important; 
-                font-weight: 600; 
-                color: #94a3b8; 
-                letter-spacing: 0.3px; 
-                text-transform: uppercase; 
-                margin-bottom: 3px !important;
-                line-height: 1.1;
+                font-size: 10px !important; font-weight: 600; color: #94a3b8; 
+                letter-spacing: 0.3px; text-transform: uppercase; 
+                margin-bottom: 3px !important; line-height: 1.1;
             }
             .index-price { 
-                font-size: 15px !important; 
-                font-weight: 700; 
-                color: #f8fafc; 
-                line-height: 1.15 !important;
-                margin: 2px 0 !important;
+                font-size: 15px !important; font-weight: 700; color: #f8fafc; 
+                line-height: 1.15 !important; margin: 2px 0 !important;
             }
-            .index-change { 
-                font-size: 11px !important; 
-                font-weight: 600; 
-                margin-top: 1px !important;
-            }
+            .index-change { font-size: 11px !important; font-weight: 600; margin-top: 1px !important; }
             .pos { color: #34d399 !important; }
             .neg { color: #f87171 !important; }
             .section-header {
@@ -119,9 +109,12 @@ def apply_theme(theme: str):
                 padding: 4px 12px; border-radius: 20px; margin: 3px;
                 font-size: 13px; font-weight: 500;
             }
-            .stCaption, [data-testid="stCaption"] {
-                color: #cbd5e1 !important;
+            .analysis-box {
+                background: linear-gradient(145deg, rgba(30,41,59,0.9), rgba(15,23,42,0.95));
+                border: 1px solid rgba(99,102,241,0.4);
+                border-radius: 12px; padding: 16px; margin-bottom: 12px;
             }
+            .stCaption, [data-testid="stCaption"] { color: #cbd5e1 !important; }
         </style>
         """, unsafe_allow_html=True)
     else:
@@ -147,26 +140,15 @@ def apply_theme(theme: str):
                 min-height: 78px !important;
             }
             .index-title { 
-                font-size: 10px !important; 
-                font-weight: 600; 
-                color: #64748b; 
-                letter-spacing: 0.3px; 
-                text-transform: uppercase; 
-                margin-bottom: 3px !important;
-                line-height: 1.1;
+                font-size: 10px !important; font-weight: 600; color: #64748b; 
+                letter-spacing: 0.3px; text-transform: uppercase; 
+                margin-bottom: 3px !important; line-height: 1.1;
             }
             .index-price { 
-                font-size: 15px !important; 
-                font-weight: 700; 
-                color: #0f172a; 
-                line-height: 1.15 !important;
-                margin: 2px 0 !important;
+                font-size: 15px !important; font-weight: 700; color: #0f172a; 
+                line-height: 1.15 !important; margin: 2px 0 !important;
             }
-            .index-change { 
-                font-size: 11px !important; 
-                font-weight: 600; 
-                margin-top: 1px !important;
-            }
+            .index-change { font-size: 11px !important; font-weight: 600; margin-top: 1px !important; }
             .pos { color: #059669 !important; }
             .neg { color: #dc2626 !important; }
             .section-header {
@@ -176,8 +158,7 @@ def apply_theme(theme: str):
                 margin-bottom: 8px;
             }
             div[data-testid="stMetric"] {
-                background: white;
-                border: 1px solid #e2e8f0;
+                background: white; border: 1px solid #e2e8f0;
                 border-radius: 12px; padding: 14px;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.05);
             }
@@ -197,54 +178,49 @@ def apply_theme(theme: str):
                 padding: 4px 12px; border-radius: 20px; margin: 3px;
                 font-size: 13px; font-weight: 500;
             }
+            .analysis-box {
+                background: white; border: 1px solid #c7d2fe;
+                border-radius: 12px; padding: 16px; margin-bottom: 12px;
+                box-shadow: 0 2px 8px rgba(99,102,241,0.08);
+            }
         </style>
         """, unsafe_allow_html=True)
 
 apply_theme(st.session_state.theme)
 
 # -------------------------------------------------
-# Data Helpers
+# Data Helpers - Improved Live Fetching
 # -------------------------------------------------
-@st.cache_data(ttl=45)
 @st.cache_data(ttl=20)
 def fetch_index_quote(ticker: str):
     try:
         t = yf.Ticker(ticker)
-        
-        # Prefer history (more reliable for commodities, crypto, indices)
+        # Primary: history (most reliable)
         hist = t.history(period="5d")
         if not hist.empty and len(hist) >= 1:
             price = float(hist["Close"].iloc[-1])
             prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
             change = price - prev
             pct = (change / prev) * 100 if prev else 0
-            return {
-                "price": round(price, 2),
-                "change": round(change, 2),
-                "pct": round(pct, 2)
-            }
+            return {"price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2)}
         
-        # Fallback to fast_info
+        # Fallback: fast_info
         info = t.fast_info
         price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
         prev = getattr(info, "previous_close", None)
-        
         if price is not None:
             if prev is None:
                 prev = price
             change = price - prev
             pct = (change / prev) * 100 if prev else 0
-            return {
-                "price": round(float(price), 2),
-                "change": round(float(change), 2),
-                "pct": round(float(pct), 2)
-            }
+            return {"price": round(float(price), 2), "change": round(float(change), 2), "pct": round(float(pct), 2)}
     except Exception:
         pass
     return None
+
 @st.cache_data(ttl=20)
 def fetch_gift_nifty():
-    """Fetch live GIFT Nifty from Moneycontrol"""
+    """Improved GIFT Nifty scraper from Moneycontrol"""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -253,40 +229,29 @@ def fetch_gift_nifty():
         }
         url = "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx"
         r = requests.get(url, headers=headers, timeout=12)
-        
         if r.status_code != 200:
             return None
-
         text = r.text.replace(",", "")
-
-        price = None
-        change = 0.0
-        pct = 0.0
-
-        # Pattern 1: price + change + percentage
+        
+        # Primary pattern
         match = re.search(r'(\d+\.\d{2})\s*([+-]?\d+\.\d{2})\s*\(\s*([+-]?\d+\.\d+)\s*%\s*\)', text)
         if match:
-            price = float(match.group(1))
-            change = float(match.group(2))
-            pct = float(match.group(3))
-        else:
-            # Fallback: find number in GIFT Nifty range
-            candidates = re.findall(r'(\d{5}\.\d{2})', text)
-            for cand in candidates:
-                val = float(cand)
-                if 18000 < val < 35000:
-                    price = val
-                    break
-
-        if price is not None:
             return {
-                "price": round(price, 2),
-                "change": round(change, 2),
-                "pct": round(pct, 2)
+                "price": round(float(match.group(1)), 2),
+                "change": round(float(match.group(2)), 2),
+                "pct": round(float(match.group(3)), 2)
             }
+        
+        # Fallback range search
+        candidates = re.findall(r'(\d{5}\.\d{2})', text)
+        for cand in candidates:
+            val = float(cand)
+            if 18000 < val < 35000:
+                return {"price": round(val, 2), "change": 0.0, "pct": 0.0}
     except Exception:
         pass
     return None
+
 @st.cache_data(ttl=45)
 def fetch_stock_data(symbol: str):
     try:
@@ -356,22 +321,12 @@ def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
     for i in range(1, len(prices)):
         price, date = prices[i], dates[i]
         while price >= current_brick + box_size:
-            bricks.append({
-                "Date": date,
-                "Open": current_brick,
-                "High": current_brick + box_size,
-                "Low": current_brick,
-                "Close": current_brick + box_size
-            })
+            bricks.append({"Date": date, "Open": current_brick, "High": current_brick + box_size,
+                           "Low": current_brick, "Close": current_brick + box_size})
             current_brick += box_size
         while price <= current_brick - box_size:
-            bricks.append({
-                "Date": date,
-                "Open": current_brick,
-                "High": current_brick,
-                "Low": current_brick - box_size,
-                "Close": current_brick - box_size
-            })
+            bricks.append({"Date": date, "Open": current_brick, "High": current_brick,
+                           "Low": current_brick - box_size, "Close": current_brick - box_size})
             current_brick -= box_size
     if not bricks:
         return pd.DataFrame()
@@ -395,12 +350,7 @@ def get_top_movers(universe: list):
                     continue
                 last, prev = float(close.iloc[-1]), float(close.iloc[-2])
                 chg = last - prev
-                rows.append({
-                    "Symbol": sym,
-                    "LTP": round(last, 2),
-                    "Change": round(chg, 2),
-                    "% Chg": round((chg / prev) * 100, 2)
-                })
+                rows.append({"Symbol": sym, "LTP": round(last, 2), "Change": round(chg, 2), "% Chg": round((chg / prev) * 100, 2)})
             except:
                 continue
         df = pd.DataFrame(rows)
@@ -434,11 +384,7 @@ def analyze_renko_signal(symbol: str, timeframe: str):
     candles["EMA20"] = calculate_ema(candles["Close"], 20)
     price = float(candles["Close"].iloc[-1])
     ema20 = float(candles["EMA20"].iloc[-1])
-    daily_atr = get_daily_atr(symbol, 14, 7)
-    if not daily_atr or daily_atr <= 0:
-        daily_atr = get_daily_atr(symbol, 14, 14)
-    if not daily_atr or daily_atr <= 0:
-        daily_atr = price * 0.005
+    daily_atr = get_daily_atr(symbol, 14, 7) or get_daily_atr(symbol, 14, 14) or (price * 0.005)
     box_size = daily_atr / 5 if interval == "1h" else daily_atr / 10
     bricks = generate_renko(candles, box_size)
     if bricks.empty or len(bricks) < 2:
@@ -469,24 +415,17 @@ def analyze_renko_signal(symbol: str, timeframe: str):
     age_minutes = (now - last_brick_ts).total_seconds() / 60.0
     just_entered = age_minutes <= 20
     return {
-        "Stock": symbol,
-        "Timeframe": timeframe,
-        "Signal": action,
-        "Renko": direction,
-        "Price": round(price, 2),
-        "EMA 20": round(ema20, 2),
-        "Entry": round(entry, 2),
-        "Exit": round(exit_price, 2),
+        "Stock": symbol, "Timeframe": timeframe, "Signal": action, "Renko": direction,
+        "Price": round(price, 2), "EMA 20": round(ema20, 2),
+        "Entry": round(entry, 2), "Exit": round(exit_price, 2),
         "Box Size": round(float(box_size), 2),
         "Last Brick Time": last_brick_ts.strftime("%d %b %H:%M"),
-        "Last Brick TS": last_brick_ts,
-        "Age Minutes": round(age_minutes, 1),
+        "Last Brick TS": last_brick_ts, "Age Minutes": round(age_minutes, 1),
         "Just Entered": just_entered
     }
 
 @st.cache_data(ttl=90, show_spinner=False)
 def scan_renko_universe(universe_tuple: tuple):
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     jobs = [(symbol, timeframe) for symbol in universe_tuple for timeframe in ("30 Minutes", "1 Hour")]
     rows = []
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -505,10 +444,7 @@ def scan_renko_universe(universe_tuple: tuple):
     signal_order = {"BUY": 0, "SELL": 1, "BULLISH": 2, "BEARISH": 3}
     result_df["_tf"] = result_df["Timeframe"].map(tf_order)
     result_df["_sig"] = result_df["Signal"].map(signal_order).fillna(9)
-    result_df = result_df.sort_values(
-        by=["_tf", "Last Brick TS", "_sig"],
-        ascending=[True, False, True]
-    ).drop(columns=["_tf", "_sig"]).reset_index(drop=True)
+    result_df = result_df.sort_values(by=["_tf", "Last Brick TS", "_sig"], ascending=[True, False, True]).drop(columns=["_tf", "_sig"]).reset_index(drop=True)
     return result_df
 
 @st.cache_data(ttl=30)
@@ -566,11 +502,7 @@ def get_options_chain(ltp: float, symbol: str):
         for s in strikes:
             ce = max(1, (ltp - s) + np.random.uniform(5, 25)) if s <= ltp else np.random.uniform(2, 20)
             pe = max(1, (s - ltp) + np.random.uniform(5, 25)) if s >= ltp else np.random.uniform(2, 20)
-            rows.append({
-                "Call Price (CE)": round(ce, 2),
-                "Strike Price": s,
-                "Put Price (PE)": round(pe, 2)
-            })
+            rows.append({"Call Price (CE)": round(ce, 2), "Strike Price": s, "Put Price (PE)": round(pe, 2)})
         return pd.DataFrame(rows)
 
 @st.cache_data(ttl=3600)
@@ -610,6 +542,165 @@ def get_stock_universe():
         "TITAN", "ULTRACEMCO", "UPL", "WIPRO", "ETERNAL"
     ]
 
+# ---------- NEW: Index Analytics Helper ----------
+@st.cache_data(ttl=60)
+def get_index_analytics(ticker: str):
+    try:
+        t = yf.Ticker(ticker)
+        hist = t.history(period="10d")
+        if hist.empty or len(hist) < 5:
+            return None
+        last5 = hist.tail(5)
+        current = float(hist["Close"].iloc[-1])
+        prev_close = float(hist["Close"].iloc[-2]) if len(hist) > 1 else current
+        day_high = float(hist["High"].iloc[-1])
+        day_low = float(hist["Low"].iloc[-1])
+        avg_5d = float(last5["Close"].mean())
+        high_5d = float(last5["High"].max())
+        low_5d = float(last5["Low"].min())
+        # Approximate VWAP (typical price * volume)
+        last5 = last5.copy()
+        last5["TP"] = (last5["High"] + last5["Low"] + last5["Close"]) / 3
+        vwap_5d = float((last5["TP"] * last5["Volume"]).sum() / last5["Volume"].sum()) if last5["Volume"].sum() > 0 else avg_5d
+        change = current - prev_close
+        pct = (change / prev_close) * 100 if prev_close else 0
+        return {
+            "current": round(current, 2),
+            "prev_close": round(prev_close, 2),
+            "day_high": round(day_high, 2),
+            "day_low": round(day_low, 2),
+            "avg_5d": round(avg_5d, 2),
+            "high_5d": round(high_5d, 2),
+            "low_5d": round(low_5d, 2),
+            "vwap_5d": round(vwap_5d, 2),
+            "change": round(change, 2),
+            "pct": round(pct, 2),
+            "above_vwap": current > vwap_5d
+        }
+    except:
+        return None
+
+# ---------- NEW: PCR Fetcher ----------
+@st.cache_data(ttl=45)
+def get_pcr(symbol: str = "NIFTY"):
+    """Fetch Put-Call Ratio from NSE Option Chain"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.nseindia.com/option-chain",
+    }
+    session = requests.Session()
+    try:
+        session.get("https://www.nseindia.com", headers=headers, timeout=8)
+        session.get("https://www.nseindia.com/option-chain", headers=headers, timeout=8)
+        if symbol.upper() in ["NIFTY", "NIFTY 50"]:
+            url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
+        elif symbol.upper() in ["BANKNIFTY", "NIFTY BANK", "BANK NIFTY"]:
+            url = "https://www.nseindia.com/api/option-chain-indices?symbol=BANKNIFTY"
+        else:
+            return None
+        r = session.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        records = data.get("records", {})
+        options = records.get("data", [])
+        total_ce_oi = 0
+        total_pe_oi = 0
+        for item in options:
+            ce = item.get("CE", {})
+            pe = item.get("PE", {})
+            total_ce_oi += ce.get("openInterest", 0) or 0
+            total_pe_oi += pe.get("openInterest", 0) or 0
+        if total_ce_oi == 0:
+            return None
+        pcr = total_pe_oi / total_ce_oi
+        return round(pcr, 3)
+    except Exception:
+        return None
+
+# ---------- NEW: Market Breadth ----------
+@st.cache_data(ttl=60)
+def get_market_breadth(universe: list):
+    try:
+        tickers = [f"{s}.NS" for s in universe]
+        data = yf.download(tickers, period="2d", group_by="ticker", progress=False, threads=True)
+        bullish = 0
+        bearish = 0
+        for sym in universe:
+            try:
+                hist = data if len(universe) == 1 else (data[f"{sym}.NS"] if f"{sym}.NS" in data.columns.get_level_values(0) else None)
+                if hist is None or hist.empty or len(hist) < 2:
+                    continue
+                last = float(hist["Close"].iloc[-1])
+                prev = float(hist["Close"].iloc[-2])
+                if last > prev:
+                    bullish += 1
+                elif last < prev:
+                    bearish += 1
+            except:
+                continue
+        return bullish, bearish
+    except:
+        return 0, 0
+
+# ---------- NEW: Stock News + Summary ----------
+@st.cache_data(ttl=120)
+def get_stock_news(symbol: str, limit: int = 4):
+    try:
+        t = yf.Ticker(f"{symbol}.NS")
+        news = t.news
+        if not news:
+            return []
+        items = []
+        for n in news[:limit]:
+            title = n.get("title") or n.get("content", {}).get("title", "No title")
+            link = n.get("link") or n.get("content", {}).get("canonicalUrl", {}).get("url", "")
+            items.append({"title": title, "link": link})
+        return items
+    except:
+        return []
+
+@st.cache_data(ttl=60)
+def get_stock_summary_analytics(symbol: str):
+    try:
+        t = yf.Ticker(f"{symbol}.NS")
+        hist = t.history(period="10d")
+        if hist.empty or len(hist) < 5:
+            return None
+        last5 = hist.tail(5)
+        current = float(hist["Close"].iloc[-1])
+        prev_close = float(hist["Close"].iloc[-2]) if len(hist) > 1 else current
+        day_high = float(hist["High"].iloc[-1])
+        day_low = float(hist["Low"].iloc[-1])
+        avg_5d = float(last5["Close"].mean())
+        high_5d = float(last5["High"].max())
+        low_5d = float(last5["Low"].min())
+        last5 = last5.copy()
+        last5["TP"] = (last5["High"] + last5["Low"] + last5["Close"]) / 3
+        vwap_5d = float((last5["TP"] * last5["Volume"]).sum() / last5["Volume"].sum()) if last5["Volume"].sum() > 0 else avg_5d
+        change = current - prev_close
+        pct = (change / prev_close) * 100 if prev_close else 0
+        # Simple bias
+        bias = "BULLISH" if current > vwap_5d and current > avg_5d else "BEARISH" if current < vwap_5d and current < avg_5d else "NEUTRAL"
+        return {
+            "current": round(current, 2),
+            "prev_close": round(prev_close, 2),
+            "day_high": round(day_high, 2),
+            "day_low": round(day_low, 2),
+            "avg_5d": round(avg_5d, 2),
+            "high_5d": round(high_5d, 2),
+            "low_5d": round(low_5d, 2),
+            "vwap_5d": round(vwap_5d, 2),
+            "change": round(change, 2),
+            "pct": round(pct, 2),
+            "above_vwap": current > vwap_5d,
+            "bias": bias
+        }
+    except:
+        return None
+
 PLOTLY_CONFIG = {
     "displayModeBar": False,
     "scrollZoom": False,
@@ -623,12 +714,7 @@ PLOTLY_CONFIG = {
 # -------------------------------------------------
 with st.sidebar:
     st.markdown("### ⚙️ Controls")
-    theme_choice = st.radio(
-        "Theme",
-        ["🌙 Dark", "☀️ Light"],
-        index=0 if st.session_state.theme == "dark" else 1,
-        horizontal=True
-    )
+    theme_choice = st.radio("Theme", ["🌙 Dark", "☀️ Light"], index=0 if st.session_state.theme == "dark" else 1, horizontal=True)
     new_theme = "dark" if "Dark" in theme_choice else "light"
     if new_theme != st.session_state.theme:
         st.session_state.theme = new_theme
@@ -677,10 +763,41 @@ with col3:
         st.session_state.last_options_refresh = time.time()
         st.rerun()
 
+# ========== STOCK SUMMARY BOX (NEW - right below dropdown) ==========
+st.markdown("---")
+summary = get_stock_summary_analytics(selected)
+news_items = get_stock_news(selected)
+
+if summary:
+    bias_color = "#34d399" if summary["bias"] == "BULLISH" else "#f87171" if summary["bias"] == "BEARISH" else "#fbbf24"
+    st.markdown(f"""
+    <div class="analysis-box">
+        <div style="font-size:16px; font-weight:700; margin-bottom:8px;">📌 {selected} • Instant Snapshot</div>
+        <div style="display:flex; flex-wrap:wrap; gap:18px; font-size:13px;">
+            <div><b>LTP:</b> ₹{summary['current']:,.2f} <span style="color:{'#34d399' if summary['change']>=0 else '#f87171'}">({summary['change']:+.2f} | {summary['pct']:+.2f}%)</span></div>
+            <div><b>Day H/L:</b> ₹{summary['day_high']:,.2f} / ₹{summary['day_low']:,.2f}</div>
+            <div><b>5D Avg:</b> ₹{summary['avg_5d']:,.2f}</div>
+            <div><b>5D High/Low:</b> ₹{summary['high_5d']:,.2f} / ₹{summary['low_5d']:,.2f}</div>
+            <div><b>5D VWAP:</b> ₹{summary['vwap_5d']:,.2f} {'✅ Above' if summary['above_vwap'] else '❌ Below'}</div>
+            <div><b>Bias:</b> <span style="color:{bias_color}; font-weight:700;">{summary['bias']}</span></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if news_items:
+        with st.expander(f"📰 Latest News on {selected}", expanded=False):
+            for n in news_items:
+                if n["link"]:
+                    st.markdown(f"- [{n['title']}]({n['link']})")
+                else:
+                    st.markdown(f"- {n['title']}")
+else:
+    st.info(f"Snapshot for {selected} temporarily unavailable")
+
 st.markdown("---")
 
 # -------------------------------------------------
-# Market Indices + Global Instruments (6 cards per row)
+# Market Indices + Global Instruments
 # -------------------------------------------------
 st.markdown('<div class="section-header">Market Indices & Global Instruments</div>', unsafe_allow_html=True)
 
@@ -706,24 +823,20 @@ instruments = {
 
 yield_tickers = {"^TNX", "^TYX"}
 vix_tickers = {"^INDIAVIX"}
-
 items = list(instruments.items())
 
 for i in range(0, len(items), 6):
     row_items = items[i:i+6]
     cols = st.columns(6)
-    
     for j, (name, ticker) in enumerate(row_items):
         if ticker == "GIFT_NIFTY_SPECIAL":
             data = fetch_gift_nifty()
         else:
             data = fetch_index_quote(ticker)
-        
         with cols[j]:
             if data:
                 sign = "+" if data["change"] >= 0 else ""
                 color = "pos" if data["change"] >= 0 else "neg"
-
                 if ticker in yield_tickers:
                     price_str = f"{data['price']:.2f}%"
                     change_str = f"{sign}{data['change']:.2f}"
@@ -736,7 +849,6 @@ for i in range(0, len(items), 6):
                 else:
                     price_str = f"₹{data['price']:,.2f}"
                     change_str = f"{sign}{data['change']:.2f}"
-
                 st.markdown(f"""
                 <div class="metric-card">
                     <div class="index-title">{name}</div>
@@ -754,6 +866,88 @@ for i in range(0, len(items), 6):
 
 st.markdown("---")
 
+# ========== NEW SECTION: Global Opening Commentary & Analytics ==========
+st.markdown('<div class="section-header">🌍 Global Opening Commentary & Index Analytics</div>', unsafe_allow_html=True)
+
+nifty_an = get_index_analytics("^NSEI")
+bank_an = get_index_analytics("^NSEBANK")
+gift = fetch_gift_nifty()
+
+col_n, col_b = st.columns(2)
+
+with col_n:
+    if nifty_an:
+        bias = "🟢 BUY BIAS" if nifty_an["above_vwap"] and nifty_an["current"] > nifty_an["avg_5d"] else "🔴 SELL BIAS" if not nifty_an["above_vwap"] and nifty_an["current"] < nifty_an["avg_5d"] else "🟡 NEUTRAL"
+        st.markdown(f"""
+        <div class="analysis-box">
+            <b>NIFTY 50 Analytics (Last 5 Days)</b><br>
+            Current: <b>₹{nifty_an['current']:,.2f}</b> ({nifty_an['change']:+.2f} | {nifty_an['pct']:+.2f}%)<br>
+            Prev Close: ₹{nifty_an['prev_close']:,.2f} | Day H/L: ₹{nifty_an['day_high']:,.2f} / ₹{nifty_an['day_low']:,.2f}<br>
+            5D Avg: ₹{nifty_an['avg_5d']:,.2f} | 5D High/Low: ₹{nifty_an['high_5d']:,.2f} / ₹{nifty_an['low_5d']:,.2f}<br>
+            5D VWAP: ₹{nifty_an['vwap_5d']:,.2f} → {'✅ Price ABOVE VWAP' if nifty_an['above_vwap'] else '❌ Price BELOW VWAP'}<br>
+            <b style="font-size:15px;">{bias}</b>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("Nifty analytics loading...")
+
+with col_b:
+    if bank_an:
+        bias = "🟢 BUY BIAS" if bank_an["above_vwap"] and bank_an["current"] > bank_an["avg_5d"] else "🔴 SELL BIAS" if not bank_an["above_vwap"] and bank_an["current"] < bank_an["avg_5d"] else "🟡 NEUTRAL"
+        st.markdown(f"""
+        <div class="analysis-box">
+            <b>BANK NIFTY Analytics (Last 5 Days)</b><br>
+            Current: <b>₹{bank_an['current']:,.2f}</b> ({bank_an['change']:+.2f} | {bank_an['pct']:+.2f}%)<br>
+            Prev Close: ₹{bank_an['prev_close']:,.2f} | Day H/L: ₹{bank_an['day_high']:,.2f} / ₹{bank_an['day_low']:,.2f}<br>
+            5D Avg: ₹{bank_an['avg_5d']:,.2f} | 5D High/Low: ₹{bank_an['high_5d']:,.2f} / ₹{bank_an['low_5d']:,.2f}<br>
+            5D VWAP: ₹{bank_an['vwap_5d']:,.2f} → {'✅ Price ABOVE VWAP' if bank_an['above_vwap'] else '❌ Price BELOW VWAP'}<br>
+            <b style="font-size:15px;">{bias}</b>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("Bank Nifty analytics loading...")
+
+# Sharp Commentary
+st.markdown("#### 🎯 Day's Actionable View")
+commentary = []
+if gift:
+    commentary.append(f"GIFT Nifty at **{gift['price']:,.2f}** ({gift['change']:+.2f}) is giving the first cue for the open.")
+if nifty_an:
+    if nifty_an["above_vwap"] and nifty_an["current"] > nifty_an["avg_5d"]:
+        commentary.append("Nifty is holding **above 5-day VWAP & average** → bulls have short-term control. Prefer **buy-on-dips** near support.")
+    elif not nifty_an["above_vwap"]:
+        commentary.append("Nifty trading **below 5-day VWAP** → caution on longs. Prefer **sell-on-rises** until it reclaims VWAP.")
+if bank_an:
+    if bank_an["above_vwap"]:
+        commentary.append("Bank Nifty also above its 5-day VWAP → banking space supportive for overall market.")
+    else:
+        commentary.append("Bank Nifty lagging below VWAP → watch private banks for relative strength/weakness.")
+
+if commentary:
+    for c in commentary:
+        st.markdown(f"- {c}")
+else:
+    st.info("Commentary will appear once data loads.")
+
+st.markdown("---")
+
+# ========== NEW SECTION: Market Breadth + PCR ==========
+st.markdown('<div class="section-header">📊 Market Breadth & Put-Call Ratio</div>', unsafe_allow_html=True)
+
+bullish_cnt, bearish_cnt = get_market_breadth(universe)
+nifty_pcr = get_pcr("NIFTY")
+bank_pcr = get_pcr("BANKNIFTY")
+
+b1, b2, b3, b4 = st.columns(4)
+b1.metric("🟢 Bullish Stocks (Nifty 50)", bullish_cnt)
+b2.metric("🔴 Bearish Stocks (Nifty 50)", bearish_cnt)
+b3.metric("Nifty PCR (OI)", f"{nifty_pcr:.3f}" if nifty_pcr else "N/A")
+b4.metric("Bank Nifty PCR (OI)", f"{bank_pcr:.3f}" if bank_pcr else "N/A")
+
+st.caption("PCR > 1.2 generally bullish (more put writing) • PCR < 0.8 generally bearish. Breadth based on last two closes of Nifty 50 constituents.")
+
+st.markdown("---")
+
 # -------------------------------------------------
 # Stock Analytics
 # -------------------------------------------------
@@ -768,13 +962,12 @@ m1.metric("Last Traded Price", f"₹{metrics['ltp']:,.2f}")
 m2.metric("Day High", f"₹{metrics['prev_high']:,.2f}")
 m3.metric("Day Low", f"₹{metrics['prev_low']:,.2f}")
 m4.metric("Previous Close", f"₹{metrics['prev_close']:,.2f}")
-
 v1, v2 = st.columns(2)
 v1.metric("Session Volume", f"{metrics['volume']:,}")
 v2.metric("20-Day Avg Volume", f"{metrics['avg_volume']:,}")
 
 # -------------------------------------------------
-# Timeframe
+# Timeframe + Charts
 # -------------------------------------------------
 st.markdown("#### 📊 Price Chart")
 tf_col1, tf_col2 = st.columns([2, 1])
@@ -788,11 +981,8 @@ with tf_col2:
         st.caption(f"Period: **{period}**")
 
 interval = {"Daily": "1d", "1 Hour": "1h", "30 Minutes": "30m"}[timeframe]
-
-# -------------------------------------------------
-# Charts
-# -------------------------------------------------
 candle_df = get_ohlc_data(selected, interval=interval, period=period)
+
 if candle_df is None or candle_df.empty:
     st.info("Chart data temporarily unavailable")
 else:
@@ -800,10 +990,8 @@ else:
         candle_df = candle_df.tail(80).reset_index(drop=True)
     elif timeframe == "30 Minutes":
         candle_df = candle_df.tail(100).reset_index(drop=True)
-
     candle_df["EMA20"] = calculate_ema(candle_df["Close"], 20)
     candle_df["EMA50"] = calculate_ema(candle_df["Close"], 50)
-
     use_sequential = timeframe in ["1 Hour", "30 Minutes"]
     if use_sequential:
         candle_df["x"] = list(range(len(candle_df)))
@@ -811,15 +999,11 @@ else:
     else:
         candle_df["x"] = candle_df["Date"]
         candle_df["hover"] = candle_df["Date"].dt.strftime("%d %b %Y")
-
     is_dark = st.session_state.theme == "dark"
     axis_color = "#e2e8f0" if is_dark else "#1e293b"
     grid_color = "rgba(148,163,184,0.2)" if is_dark else "rgba(100,116,139,0.15)"
-
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-        row_heights=[0.72, 0.28], subplot_titles=(f"{selected} • {timeframe}", "Volume")
-    )
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.72, 0.28],
+                        subplot_titles=(f"{selected} • {timeframe}", "Volume"))
     fig.add_trace(go.Candlestick(
         x=candle_df["x"], open=candle_df["Open"], high=candle_df["High"],
         low=candle_df["Low"], close=candle_df["Close"], name="OHLC",
@@ -827,39 +1011,24 @@ else:
         increasing_fillcolor="#34d399", decreasing_fillcolor="#f87171",
         text=candle_df["hover"], hoverinfo="text+y"
     ), row=1, col=1)
-    fig.add_trace(go.Scatter(
-        x=candle_df["x"], y=candle_df["EMA20"], mode="lines", name="EMA 20",
-        line=dict(color="#fbbf24", width=1.8), hoverinfo="skip"
-    ), row=1, col=1)
-    fig.add_trace(go.Scatter(
-        x=candle_df["x"], y=candle_df["EMA50"], mode="lines", name="EMA 50",
-        line=dict(color="#60a5fa", width=2.0), hoverinfo="skip"
-    ), row=1, col=1)
-
+    fig.add_trace(go.Scatter(x=candle_df["x"], y=candle_df["EMA20"], mode="lines", name="EMA 20",
+                             line=dict(color="#fbbf24", width=1.8), hoverinfo="skip"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=candle_df["x"], y=candle_df["EMA50"], mode="lines", name="EMA 50",
+                             line=dict(color="#60a5fa", width=2.0), hoverinfo="skip"), row=1, col=1)
     colors = ["#34d399" if c >= o else "#f87171" for o, c in zip(candle_df["Open"], candle_df["Close"])]
-    fig.add_trace(go.Bar(
-        x=candle_df["x"], y=candle_df["Volume"], marker_color=colors,
-        name="Volume", opacity=0.7, hoverinfo="skip"
-    ), row=2, col=1)
-
-    fig.update_layout(
-        height=580 if use_sequential else 520,
-        xaxis_rangeslider_visible=False,
-        template="plotly_dark" if is_dark else "plotly_white",
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=axis_color)),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color=axis_color), dragmode=False
-    )
+    fig.add_trace(go.Bar(x=candle_df["x"], y=candle_df["Volume"], marker_color=colors, name="Volume", opacity=0.7, hoverinfo="skip"), row=2, col=1)
+    fig.update_layout(height=580 if use_sequential else 520, xaxis_rangeslider_visible=False,
+                      template="plotly_dark" if is_dark else "plotly_white",
+                      margin=dict(l=10, r=10, t=40, b=10),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=axis_color)),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=axis_color), dragmode=False)
     if use_sequential:
         n = len(candle_df)
         step = max(1, n // 7)
         tickvals = list(range(0, n, step))
         ticktext = [candle_df["Date"].iloc[i].strftime("%d %b<br>%H:%M") for i in tickvals]
-        fig.update_xaxes(
-            type="category", tickmode="array", tickvals=tickvals, ticktext=ticktext,
-            tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True
-        )
+        fig.update_xaxes(type="category", tickmode="array", tickvals=tickvals, ticktext=ticktext,
+                         tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
     else:
         fig.update_xaxes(tickformat="%d %b", tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
     fig.update_yaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
@@ -880,7 +1049,6 @@ else:
         base = daily_atr_7 if daily_atr_7 and daily_atr_7 > 0 else (daily_atr_14 or metrics["ltp"] * 0.005)
         box_size = (base / 5) / 2
         box_label = f"½ of 1h box ≈ ₹{box_size:.2f}"
-
     st.caption(f"Renko Box Size: **{box_label}**  |  Timeframe: **{timeframe}**")
     renko_df = generate_renko(candle_df, box_size)
     if renko_df.empty:
@@ -895,26 +1063,15 @@ else:
             increasing_line_color="#34d399", decreasing_line_color="#f87171",
             increasing_fillcolor="#34d399", decreasing_fillcolor="#f87171"
         ))
-        fig_r.add_trace(go.Scatter(
-            x=renko_df["Brick"], y=renko_df["EMA20"], mode="lines", name="EMA 20",
-            line=dict(color="#fbbf24", width=1.5)
-        ))
-        fig_r.add_trace(go.Scatter(
-            x=renko_df["Brick"], y=renko_df["EMA50"], mode="lines", name="EMA 50",
-            line=dict(color="#60a5fa", width=1.8)
-        ))
-        fig_r.update_layout(
-            height=420,
-            title=dict(text=f"{selected} Renko • {timeframe}  |  Box ≈ ₹{box_size:.2f}", font=dict(color=axis_color, size=16)),
-            xaxis_title=dict(text="Brick #", font=dict(color=axis_color)),
-            yaxis_title=dict(text="Price (₹)", font=dict(color=axis_color)),
-            xaxis_rangeslider_visible=False,
-            template="plotly_dark" if is_dark else "plotly_white",
-            margin=dict(l=20, r=20, t=50, b=20),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=axis_color)),
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color=axis_color), dragmode=False
-        )
+        fig_r.add_trace(go.Scatter(x=renko_df["Brick"], y=renko_df["EMA20"], mode="lines", name="EMA 20", line=dict(color="#fbbf24", width=1.5)))
+        fig_r.add_trace(go.Scatter(x=renko_df["Brick"], y=renko_df["EMA50"], mode="lines", name="EMA 50", line=dict(color="#60a5fa", width=1.8)))
+        fig_r.update_layout(height=420, title=dict(text=f"{selected} Renko • {timeframe}  |  Box ≈ ₹{box_size:.2f}", font=dict(color=axis_color, size=16)),
+                            xaxis_title=dict(text="Brick #", font=dict(color=axis_color)),
+                            yaxis_title=dict(text="Price (₹)", font=dict(color=axis_color)),
+                            xaxis_rangeslider_visible=False, template="plotly_dark" if is_dark else "plotly_white",
+                            margin=dict(l=20, r=20, t=50, b=20),
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=axis_color)),
+                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=axis_color), dragmode=False)
         fig_r.update_xaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
         fig_r.update_yaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
         st.plotly_chart(fig_r, use_container_width=True, config=PLOTLY_CONFIG)
@@ -924,15 +1081,8 @@ st.markdown("---")
 # -------------------------------------------------
 # Intraday Renko Signal Scanner
 # -------------------------------------------------
-st.markdown(
-    '<div class="section-header">🎯 Intraday Renko Signals • 30 Minutes first, then 1 Hour</div>',
-    unsafe_allow_html=True
-)
-st.caption(
-    "Only stocks with the latest two Renko bricks in the same direction are listed. "
-    "BUY/SELL additionally requires the latest timeframe close to be above/below its 20 EMA. "
-    "⚡ = Just entered (last brick ≤ 20 min ago). Sorted by newest entry first."
-)
+st.markdown('<div class="section-header">🎯 Intraday Renko Signals • 30 Minutes first, then 1 Hour</div>', unsafe_allow_html=True)
+st.caption("Only stocks with the latest two Renko bricks in the same direction are listed. BUY/SELL requires close above/below 20 EMA. ⚡ = Just entered (≤ 20 min). Sorted by newest first.")
 
 scan_col1, scan_col2 = st.columns([1, 4])
 with scan_col1:
@@ -943,7 +1093,7 @@ with scan_col1:
 with scan_col2:
     st.caption(f"Scanning {len(universe)} Nifty 50 stocks across 30-minute and 1-hour timeframes.")
 
-with st.spinner("Scanning Renko bricks for the stock universe… first scan may take a little time."):
+with st.spinner("Scanning Renko bricks… first scan may take a little time."):
     signal_df = scan_renko_universe(tuple(universe))
 
 if signal_df.empty:
@@ -954,7 +1104,6 @@ else:
     sell_df = signal_df[signal_df["Signal"] == "SELL"]
     bearish_df = signal_df[signal_df["Signal"] == "BEARISH"]
     just_entered_count = int(signal_df["Just Entered"].sum())
-
     sc1, sc2, sc3, sc4, sc5 = st.columns(5)
     sc1.metric("BUY", len(buy_df))
     sc2.metric("BULLISH", len(bullish_df))
@@ -964,15 +1113,8 @@ else:
 
     display_df = signal_df.copy()
     def format_signal(row):
-        base = {
-            "BUY": "🟢 BUY",
-            "BULLISH": "🟩 BULLISH",
-            "SELL": "🔴 SELL",
-            "BEARISH": "🟥 BEARISH"
-        }.get(row["Signal"], row["Signal"])
-        if row["Just Entered"]:
-            return f"⚡{base}"
-        return base
+        base = {"BUY": "🟢 BUY", "BULLISH": "🟩 BULLISH", "SELL": "🔴 SELL", "BEARISH": "🟥 BEARISH"}.get(row["Signal"], row["Signal"])
+        return f"⚡{base}" if row["Just Entered"] else base
     display_df["Signal"] = display_df.apply(format_signal, axis=1)
 
     def highlight_just_entered(row):
@@ -980,20 +1122,20 @@ else:
             return ["background-color: #fef08a; color: #000; font-weight: 600"] * len(row)
         return [""] * len(row)
 
-    cols_to_show = [
-        "Stock", "Timeframe", "Signal", "Price", "EMA 20",
-        "Entry", "Exit", "Box Size", "Last Brick Time", "Age Minutes"
-    ]
-    styled = display_df[cols_to_show].style.apply(highlight_just_entered, axis=1)
+    cols_to_show = ["Stock", "Timeframe", "Signal", "Price", "EMA 20", "Entry", "Exit", "Box Size", "Last Brick Time", "Age Minutes"]
+    # Ensure 2-decimal formatting
+    for col in ["Price", "EMA 20", "Entry", "Exit", "Box Size"]:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(lambda x: round(float(x), 2) if pd.notnull(x) else x)
+
+    styled = display_df[cols_to_show].style.apply(highlight_just_entered, axis=1).format({
+        "Price": "{:.2f}", "EMA 20": "{:.2f}", "Entry": "{:.2f}", "Exit": "{:.2f}", "Box Size": "{:.2f}", "Age Minutes": "{:.1f}"
+    })
     st.dataframe(styled, use_container_width=True, hide_index=True)
     st.caption("⚡ = Just entered (last Renko brick ≤ 20 min ago) • Yellow highlight = fresh signal")
-
-    st.download_button(
-        "⬇️ Download signal list (CSV)",
-        data=signal_df.drop(columns=["Last Brick TS"], errors="ignore").to_csv(index=False).encode("utf-8"),
-        file_name="intraday_renko_signals.csv",
-        mime="text/csv"
-    )
+    st.download_button("⬇️ Download signal list (CSV)",
+                       data=signal_df.drop(columns=["Last Brick TS"], errors="ignore").to_csv(index=False).encode("utf-8"),
+                       file_name="intraday_renko_signals.csv", mime="text/csv")
 
 st.markdown("---")
 
@@ -1036,19 +1178,15 @@ gcol, lcol = st.columns(2)
 with gcol:
     st.markdown("##### 🟢 Top Gainers")
     if gainers is not None:
-        st.dataframe(
-            gainers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
-            use_container_width=True, hide_index=True
-        )
+        st.dataframe(gainers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
+                     use_container_width=True, hide_index=True)
     else:
         st.info("Loading...")
 with lcol:
     st.markdown("##### 🔴 Top Losers")
     if losers is not None:
-        st.dataframe(
-            losers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
-            use_container_width=True, hide_index=True
-        )
+        st.dataframe(losers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
+                     use_container_width=True, hide_index=True)
     else:
         st.info("Loading...")
 
