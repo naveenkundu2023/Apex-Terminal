@@ -217,169 +217,180 @@ def fetch_index_quote(ticker: str):
         pass
     return None
 
-@st.cache_data(ttl=15)
-def _fetch_html_text(url: str):
-    """Fetch a public page with browser-like headers; cache briefly to reduce load."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cache-Control": "no-cache",
-    }
+@st.cache_data(ttl=20, show_spinner=False)
+def fetch_tradingview_quote(tv_symbol: str):
+    """Best-effort public TradingView scanner quote. Public endpoint is unofficial and may change."""
     try:
-        response = requests.get(url, headers=headers, timeout=8)
-        if response.status_code == 200:
-            return re.sub(r"<script\b.*?</script>|<style\b.*?</style>", " ", response.text,
-                          flags=re.I | re.S)
+        exchange = tv_symbol.split(":", 1)[0].upper()
+        # TradingView scanner endpoints are market-region based, not exchange-code based.
+        region_map = {
+            "NSEIX": "india", "NSE": "india", "MCX": "india", "BSE": "india",
+            "COMEX": "america", "NYMEX": "america", "ICEEUR": "america", "DJ": "america",
+            "NASDAQ": "america", "TVC": "america", "NYSE": "america",
+            "COINBASE": "crypto", "BINANCE": "crypto",
+            "FX_IDC": "forex", "OANDA": "forex",
+            "HSI": "hongkong", "TSE": "japan", "SSE": "china", "KRX": "korea", "ASX": "australia"
+        }
+        region = region_map.get(exchange, "america")
+        url = f"https://scanner.tradingview.com/{region}/scan"
+        payload = {"symbols": {"tickers": [tv_symbol], "query": {"types": []}},
+                   "columns": ["close", "change", "change_abs"]}
+        headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json",
+                   "Origin": "https://www.tradingview.com", "Referer": "https://www.tradingview.com/"}
+        r = requests.post(url, json=payload, headers=headers, timeout=6)
+        if r.status_code != 200:
+            return None
+        rows = r.json().get("data", [])
+        if not rows or not rows[0].get("d"):
+            return None
+        vals = rows[0]["d"]
+        price = vals[0]
+        pct = vals[1]
+        change = vals[2]
+        if price is None or float(price) <= 0:
+            return None
+        if change is None and pct is not None:
+            change = float(price) * float(pct) / 100
+        if pct is None and change is not None:
+            # Without previous close, use change/price as a conservative approximation.
+            pct = (float(change) / (float(price) - float(change)) * 100) if float(price) != float(change) else 0
+        return {"price": round(float(price), 2), "change": round(float(change or 0), 2),
+                "pct": round(float(pct or 0), 2), "source": f"TradingView ({tv_symbol})"}
     except Exception:
-        pass
-    return ""
-
-
-def _parse_gift_page(url: str):
-    """Conservative GIFT Nifty parser; rejects numbers outside a plausible index range."""
-    raw = _fetch_html_text(url)
-    if not raw:
         return None
-    text = re.sub(r"<[^>]+>", " ", raw)
-    text = re.sub(r"&(?:nbsp|amp|quot);", " ", text, flags=re.I)
-    # Look for price values only, not arbitrary five-digit numbers in scripts.
-    values = []
-    for match in re.findall(r"(?<!\d)(2[0-9],[0-9]{3}(?:\.\d{1,2})?|2[0-9]{4}(?:\.\d{1,2})?)(?!\d)", text):
-        try:
-            value = float(match.replace(",", ""))
-            if 20000 <= value <= 30000:
-                values.append(value)
-        except ValueError:
-            pass
-    if not values:
-        # JSON/meta payloads sometimes contain the value even when page text is sparse.
-        for match in re.findall(r"(?<!\d)(2[0-9]{4}\.\d{1,2})(?!\d)", raw):
-            value = float(match)
-            if 20000 <= value <= 30000:
-                values.append(value)
-    if not values:
-        return None
-    # Most frequent/central candidate avoids blindly taking a random page number.
-    price = float(pd.Series(values).round(2).mode().iloc[0])
-    # Extract a nearby signed point change if the page exposes one.
-    change = 0.0
-    around = text[max(0, text.find(str(int(price))) - 120): text.find(str(int(price))) + 250]
-    cm = re.search(r"([+-]\s?\d{1,4}(?:\.\d{1,2})?)", around.replace(",", ""))
-    if cm:
-        try:
-            change = float(cm.group(1).replace(" ", ""))
-        except ValueError:
-            pass
-    return {"price": round(price, 2), "change": round(change, 2),
-            "pct": round(change / (price - change) * 100, 2) if price != change else 0.0,
-            "source": url}
 
-
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=15, show_spinner=False)
 def fetch_gift_nifty():
-    """Cross-check Moneycontrol, GIFTNiftyToday and Quantsapp; never accept implausible quotes."""
-    urls = [
-        "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx",
-        "https://www.moneycontrol.com/indian-indices/gift-nifty-107.html",
-        "https://giftniftytoday.com/",
-        "https://www.quantsapp.com/gift-nifty",
-    ]
-    quotes = []
+    """Try TradingView GIFT Nifty first, then public-page fallbacks; never invent a quote."""
+    for symbol in ("NSEIX:GIFTNIFTY1!", "NSEIX:GIFTNIFTY", "NSEIX:SGX_NIFTY"):
+        quote = fetch_tradingview_quote(symbol)
+        # Sanity range prevents unrelated scanner symbols from being shown as GIFT Nifty.
+        if quote and 15000 < quote["price"] < 35000:
+            return quote
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+               "Accept-Language": "en-US,en;q=0.9", "Cache-Control": "no-cache"}
+    urls = ["https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx",
+            "https://www.moneycontrol.com/indian-indices/gift-nifty-107.html",
+            "https://www.giftniftytoday.com/", "https://www.quantsapp.com/gift-nifty"]
+    candidates = []
     for url in urls:
-        q = _parse_gift_page(url)
-        if q and 20000 <= q["price"] <= 30000:
-            quotes.append(q)
-    if not quotes:
-        # Yahoo is a last fallback only; GIFT symbols vary by provider.
-        for ticker in ["^NSEI", "NIFTY50.NS"]:
-            q = fetch_index_quote(ticker)
-            if q:
-                return {**q, "source": "Yahoo fallback (not a GIFT quote)"}
-        return None
-    # Prefer a pair within 10 points; average the agreeing pair. Otherwise use median.
-    quotes.sort(key=lambda x: x["price"])
-    pair = None
-    for i in range(len(quotes)):
-        for j in range(i + 1, len(quotes)):
-            if abs(quotes[i]["price"] - quotes[j]["price"]) <= 10:
-                pair = (quotes[i], quotes[j])
-                break
-        if pair:
-            break
-    chosen = (pair[0]["price"] + pair[1]["price"]) / 2 if pair else float(np.median([q["price"] for q in quotes]))
-    nearest = min(quotes, key=lambda q: abs(q["price"] - chosen))
-    return {"price": round(chosen, 2), "change": nearest["change"],
-            "pct": round(nearest["pct"], 2),
-            "source": " + ".join([q["source"] for q in pair]) if pair else "Median of valid sources"}
-
-
-@st.cache_data(ttl=20)
-def _fetch_moneycontrol_mcx(commodity: str):
-    """Best-effort Moneycontrol MCX quote extraction; returns None if no trustworthy quote is found."""
-    slugs = {
-        "GOLD": "gold-price",
-        "SILVER": "silver-price",
-        "COPPER": "copper-price",
-        "CRUDE OIL WTI": "crude-oil-price",
-        "NATURAL GAS": "natural-gas-price",
-    }
-    slug = slugs.get(commodity)
-    if not slug:
-        return None
-    urls = [
-        f"https://www.moneycontrol.com/commodity/{slug}.html",
-        f"https://www.moneycontrol.com/commodity/{slug}/",
-    ]
-    for url in urls:
-        raw = _fetch_html_text(url)
-        if not raw:
-            continue
-        # Read only explicitly labeled LTP/price snippets; avoid arbitrary page numbers.
-        patterns = [
-            r'(?:last\s*traded\s*price|current\s*price|mcx\s*price|ltp)[^0-9]{0,80}([0-9,]{2,}(?:\.\d{1,2})?)',
-            r'"(?:lastPrice|ltp|price)"\s*:\s*"?([0-9,]+(?:\.\d{1,2})?)',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, raw, flags=re.I)
-            if match:
+        try:
+            r = requests.get(url, headers=headers, timeout=7)
+            if r.status_code != 200:
+                continue
+            raw = re.sub(r"<script.*?</script>|<style.*?</style>", " ", r.text, flags=re.I|re.S)
+            txt = re.sub(r"<[^>]+>", " ", raw).replace("\u003c", " ")
+            nums = re.findall(r"(?<![\d.])(\d{5}(?:,\d{3})*(?:\.\d{1,2})?)(?![\d.])", txt)
+            for n in nums:
                 try:
-                    price = float(match.group(1).replace(",", ""))
-                    if price > 0:
-                        return {"price": round(price, 2), "change": 0.0, "pct": 0.0,
-                                "source": "Moneycontrol MCX (best effort)"}
+                    val = float(n.replace(",", ""))
+                    if 18000 < val < 32000:
+                        candidates.append((val, url))
+                        break
                 except ValueError:
                     pass
+        except Exception:
+            continue
+    if candidates:
+        # Prefer consensus; if sources disagree materially, use median rather than first arbitrary page.
+        vals = sorted(v for v, _ in candidates)
+        price = vals[len(vals)//2] if len(vals) % 2 else (vals[len(vals)//2-1] + vals[len(vals)//2]) / 2
+        return {"price": round(price, 2), "change": 0.0, "pct": 0.0, "source": "Public GIFT Nifty pages (change unavailable)"}
     return None
 
-
-@st.cache_data(ttl=20)
-def fetch_commodity_live(ticker: str, label: str = ""):
-    """Prefer MCX quotes for Indian commodity futures; Yahoo 1-minute data is fallback."""
-    mcx_labels = {"GOLD", "SILVER", "COPPER", "CRUDE OIL WTI", "NATURAL GAS"}
-    if label in mcx_labels:
-        mcx = _fetch_moneycontrol_mcx(label)
-        if mcx:
-            return mcx
-    # Pull intraday data first. Daily history can be stale and should not override it.
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_investing_quote(ticker: str):
+    """Best-effort Investing.com page parser used only when TradingView quote is unavailable."""
+    slugs = {
+        "CL=F": "commodities/crude-oil", "BZ=F": "commodities/brent-oil",
+        "NG=F": "commodities/natural-gas", "GC=F": "commodities/gold",
+        "SI=F": "commodities/silver", "HG=F": "commodities/copper",
+        "INR=X": "currencies/usd-inr", "BTC-USD": "crypto/bitcoin",
+        "^DJI": "indices/us-30", "^NDX": "indices/nq-100",
+        "^HSI": "indices/hang-seng-40", "^N225": "indices/nikkei-225",
+        "DX-Y.NYB": "indices/us-dollar-index"
+    }
+    slug = slugs.get(ticker)
+    if not slug:
+        return None
     try:
-        hist = yf.Ticker(ticker).history(period="1d", interval="1m", auto_adjust=False)
+        url = "https://www.investing.com/" + slug
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+                   "Accept-Language": "en-US,en;q=0.9"}
+        r = requests.get(url, headers=headers, timeout=4)
+        if r.status_code != 200:
+            return None
+        html = r.text
+        def extract(pattern):
+            m = re.search(pattern, html, flags=re.I|re.S)
+            return re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else None
+        price_text = extract(r'data-test=["\']instrument-price-last["\'][^>]*>(.*?)</')
+        change_text = extract(r'data-test=["\']instrument-price-change["\'][^>]*>(.*?)</')
+        pct_text = extract(r'data-test=["\']instrument-price-change-percent["\'][^>]*>(.*?)</')
+        if not price_text:
+            m = re.search(r'["\']last["\']\s*:\s*["\']?([0-9,]+\.?[0-9]*)', html, flags=re.I)
+            price_text = m.group(1) if m else None
+        if not price_text:
+            return None
+        def number(value):
+            if not value:
+                return None
+            cleaned = re.sub(r"[^0-9.+-]", "", value.replace(",", ""))
+            try:
+                return float(cleaned) if cleaned not in ("", "+", "-") else None
+            except ValueError:
+                return None
+        price = number(price_text)
+        change = number(change_text)
+        pct = number(pct_text)
+        if price is None or price <= 0:
+            return None
+        if change is None:
+            change = 0.0
+        if pct is None:
+            pct = 0.0
+        return {"price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2),
+                "source": f"Investing.com ({slug})"}
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def fetch_commodity_live(ticker: str, tv_symbols=()):
+    """Prefer the same TradingView instrument where configured; Yahoo is fallback only."""
+    if isinstance(tv_symbols, str):
+        tv_symbols = (tv_symbols,)
+    for symbol in tv_symbols:
+        quote = fetch_tradingview_quote(symbol)
+        if quote:
+            return quote
+    # Secondary independent public-page fallback. Page markup/availability can change.
+    investing_quote = fetch_investing_quote(ticker)
+    if investing_quote:
+        return investing_quote
+    # Yahoo quote is a final fallback and may be delayed; keep source explicit in UI caption.
+    try:
+        t = yf.Ticker(ticker)
+        hist = t.history(period="5d", interval="5m", prepost=True)
+        if hist is None or hist.empty:
+            hist = t.history(period="5d", interval="1m", prepost=True)
         if hist is not None and not hist.empty:
             hist = hist.dropna(subset=["Close"])
-            if not hist.empty:
-                price = float(hist["Close"].iloc[-1])
+            price = float(hist["Close"].iloc[-1])
+            daily = t.history(period="5d", interval="1d")
+            # Use previous daily close for a daily change, not the last one-minute move.
+            if daily is not None and not daily.empty and len(daily) >= 2:
+                prev = float(daily["Close"].iloc[-2])
+            elif daily is not None and not daily.empty:
+                prev = float(daily["Close"].iloc[-1])
+            else:
                 prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
-                change = price - prev
-                return {"price": round(price, 2), "change": round(change, 2),
-                        "pct": round(change / prev * 100, 2) if prev else 0.0,
-                        "source": "Yahoo Finance 1-minute"}
+            return {"price": round(price, 2), "change": round(price-prev, 2),
+                    "pct": round((price-prev)/prev*100, 2) if prev else 0,
+                    "source": f"Yahoo Finance fallback ({ticker})"}
     except Exception:
         pass
-    # Fallback to latest available history; label it as fallback, not guaranteed live.
-    data = fetch_index_quote(ticker)
-    if data and data["price"] > 0:
-        return {**data, "source": "Yahoo Finance history fallback"}
     return None
-
 
 @st.cache_data(ttl=45)
 def fetch_stock_data(symbol: str):
@@ -873,27 +884,9 @@ st.caption(f"Live Indian Equities & Indices • **{current_time}**")
 
 # ========== MAIN CONTROLS ==========
 universe = get_stock_universe()
-
-# Approximate Nifty 50 free-float weights (indicative, not exchange-live). Review/update periodically.
-NIFTY50_WEIGHT = {
-    "HDFCBANK": 12.8, "RELIANCE": 9.2, "ICICIBANK": 8.1, "INFY": 5.6,
-    "BHARTIARTL": 4.7, "LT": 4.2, "ITC": 3.6, "TCS": 3.5,
-    "SBIN": 3.1, "AXISBANK": 2.9, "KOTAKBANK": 2.7, "M&M": 2.5,
-    "HINDUNILVR": 2.3, "BAJFINANCE": 2.2, "SUNPHARMA": 2.0,
-    "MARUTI": 1.8, "TATAMOTORS": 1.7, "NTPC": 1.6, "HCLTECH": 1.6,
-    "TITAN": 1.5, "ULTRACEMCO": 1.4, "ONGC": 1.3, "POWERGRID": 1.3,
-    "TATASTEEL": 1.2, "BEL": 1.2, "JSWSTEEL": 1.1, "ADANIPORTS": 1.0,
-    "BAJAJFINSV": 1.0, "ASIANPAINT": 0.9, "COALINDIA": 0.9,
-    "GRASIM": 0.8, "INDUSINDBK": 0.8, "NESTLEIND": 0.8, "WIPRO": 0.7,
-    "TECHM": 0.7, "EICHERMOT": 0.7, "HINDALCO": 0.7, "TATACONSUM": 0.7,
-    "CIPLA": 0.7, "DRREDDY": 0.6, "APOLLOHOSP": 0.6, "BAJAJ-AUTO": 0.6,
-    "DIVISLAB": 0.6, "BRITANNIA": 0.5, "HEROMOTOCO": 0.5, "HDFCLIFE": 0.5,
-    "SBILIFE": 0.5, "ADANIENT": 0.5, "ETERNAL": 0.5, "SHRIRAMFIN": 0.5,
-}
-universe = sorted(universe, key=lambda symbol: (-NIFTY50_WEIGHT.get(symbol, 0), symbol))
 col1, col2, col3 = st.columns([2.2, 1.2, 1])
 with col1:
-    selected = st.selectbox("🔍 Select Stock (NSE) — Nifty weight: highest first", options=universe, index=0, key="selected")
+    selected = st.selectbox("🔍 Select Stock (NSE)", options=universe, index=0, key="selected")
 with col2:
     auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=False)
 with col3:
@@ -942,25 +935,32 @@ st.markdown("---")
 st.markdown('<div class="section-header">Market Indices & Global Instruments</div>', unsafe_allow_html=True)
 
 instruments = {
-    "NIFTY 50": "^NSEI",
-    "US 30": "^DJI",
-    "DXY (US Dollar Index)": "DX-Y.NYB",
-    "BANK NIFTY": "^NSEBANK",
-    "MIDCAP 150": "NIFTYMIDCAP150.NS",
-    "GIFT NIFTY": "GIFT_NIFTY_SPECIAL",
-    "MIDCAP SELECT": "NIFTY_MID_SELECT.NS",
-    "INDIA VIX": "^INDIAVIX",
-    "CRUDE OIL WTI": "CL=F",
-    "CRUDE OIL BRENT": "BZ=F",
-    "NATURAL GAS": "NG=F",
-    "USD / INR": "INR=X",
-    "US 10Y BOND": "^TNX",
-    "US 30Y BOND": "^TYX",
-    "US TECH 100": "^NDX",
-    "GOLD": "GC=F",
-    "SILVER": "SI=F",
-    "COPPER": "HG=F",
-    "BITCOIN": "BTC-USD",
+    # Requested display order: India -> FX/USD -> US indices/yields -> commodities -> crypto
+    "INDIA VIX": ("^INDIAVIX", ("NSE:INDIAVIX",)),
+    "GIFT NIFTY": ("GIFT_NIFTY_SPECIAL", ()),
+    "NIFTY 50": ("^NSEI", ("NSE:NIFTY",)),
+    "BANK NIFTY": ("^NSEBANK", ("NSE:BANKNIFTY",)),
+    "MIDCAP 150": ("NIFTYMIDCAP150.NS", ("NSE:MIDCAP150",)),
+    "MIDCAP SELECT": ("NIFTY_MID_SELECT.NS", ("NSE:MIDCPNIFTY",)),
+    "USD / INR": ("INR=X", ("FX_IDC:USDINR", "OANDA:USDINR")),
+    "DXY (US DOLLAR INDEX)": ("DX-Y.NYB", ("TVC:DXY",)),
+    "US TECH 100": ("^NDX", ("NASDAQ:NDX",)),
+    "US 30 (DOW)": ("^DJI", ("DJ:DJI",)),
+    "US 10Y BOND": ("^TNX", ("TVC:US10Y",)),
+    "US 30Y BOND": ("^TYX", ("TVC:US30Y",)),
+    "CRUDE OIL WTI": ("CL=F", ("TVC:USOIL", "NYMEX:CL1!")),
+    "CRUDE OIL BRENT": ("BZ=F", ("TVC:UKOIL", "ICEEUR:BRN1!")),
+    "NATURAL GAS": ("NG=F", ("NYMEX:NG1!",)),
+    "GOLD": ("GC=F", ("MCX:GOLD1!", "COMEX:GC1!")),
+    "SILVER": ("SI=F", ("MCX:SILVER1!", "COMEX:SI1!")),
+    "COPPER": ("HG=F", ("MCX:COPPER1!", "COMEX:HG1!")),
+    "BITCOIN": ("BTC-USD", ("COINBASE:BTCUSD", "BINANCE:BTCUSDT")),
+    # Additional Asian-market gauges for the Global Macro panel
+    "HANG SENG": ("^HSI", ("HSI:HSI",)),
+    "NIKKEI 225": ("^N225", ("TVC:NI225",)),
+    "SHANGHAI COMPOSITE": ("000001.SS", ("SSE:000001",)),
+    "KOSPI": ("^KS11", ("KRX:KOSPI",)),
+    "ASX 200": ("^AXJO", ("ASX:XJO",)),
 }
 
 yield_tickers = {"^TNX", "^TYX"}
@@ -970,13 +970,16 @@ items = list(instruments.items())
 for i in range(0, len(items), 6):
     row_items = items[i:i+6]
     cols = st.columns(6)
-    for j, (name, ticker) in enumerate(row_items):
+    for j, (name, instrument) in enumerate(row_items):
+        ticker, tv_symbols = instrument
         if ticker == "GIFT_NIFTY_SPECIAL":
             data = fetch_gift_nifty()
-        elif ticker in ["CL=F", "BZ=F", "GC=F", "SI=F", "HG=F", "INR=X", "BTC-USD", "NG=F"]:
-            data = fetch_commodity_live(ticker, name)
+        elif tv_symbols or ticker in ["CL=F", "BZ=F", "GC=F", "SI=F", "HG=F", "INR=X", "BTC-USD", "NG=F"]:
+            data = fetch_commodity_live(ticker, tv_symbols)
         else:
             data = fetch_index_quote(ticker)
+        if data and not data.get("source"):
+            data["source"] = f"Yahoo Finance ({ticker})"
         
         with cols[j]:
             if data:
@@ -988,7 +991,7 @@ for i in range(0, len(items), 6):
                 elif ticker in vix_tickers or ticker == "GIFT_NIFTY_SPECIAL":
                     price_str = f"{data['price']:,.2f}"
                     change_str = f"{sign}{data['change']:.2f}"
-                elif ticker in ["CL=F", "BZ=F", "NG=F", "GC=F", "SI=F", "HG=F", "BTC-USD", "INR=X"]:
+                elif ticker in ["CL=F", "BZ=F", "NG=F", "GC=F", "SI=F", "HG=F", "BTC-USD", "INR=X", "DX-Y.NYB", "^NDX", "^DJI", "^HSI", "^N225", "000001.SS", "^KS11", "^AXJO"]:
                     price_str = f"{data['price']:,.2f}"
                     change_str = f"{sign}{data['change']:.2f}"
                 else:
@@ -1001,6 +1004,7 @@ for i in range(0, len(items), 6):
                     <div class="index-change {color}">{change_str} ({sign}{data['pct']:.2f}%)</div>
                 </div>
                 """, unsafe_allow_html=True)
+                st.caption(data.get("source", "Quote source not reported"))
             else:
                 st.markdown(f"""
                 <div class="metric-card">
@@ -1009,8 +1013,7 @@ for i in range(0, len(items), 6):
                 </div>
                 """, unsafe_allow_html=True)
 
-st.caption("Quote sources: GIFT Nifty cross-checks Moneycontrol, GIFTNiftyToday and Quantsapp; commodities try Moneycontrol MCX first where available, then Yahoo 1-minute/history. Public websites may delay, block scraping, or publish different contract expiries—verify with your broker before trading.")
-
+st.caption("Quote priority: TradingView public scanner for configured symbols, then Yahoo Finance. Public TradingView data may be delayed and the scanner endpoint is unofficial; ticker/contract must match the reference chart. Spot CFDs, futures, continuous contracts and MCX contracts can differ.")
 st.markdown("---")
 
 # ========== Global Opening Commentary & Analytics ==========
@@ -1054,64 +1057,105 @@ with col_b:
     else:
         st.info("Bank Nifty analytics loading...")
 
-# Global macro snapshot: current market data plus fresh headlines where accessible.
-st.markdown("#### 🌐 Global Market & Macro Commentary")
-global_quotes = {
-    "S&P 500": "^GSPC", "Nasdaq": "^IXIC", "Dow Jones": "^DJI",
-    "US 10Y yield": "^TNX", "WTI crude": "CL=F", "DXY": "DX-Y.NYB",
-    "Hang Seng": "^HSI",
-}
-global_lines = []
-for label, ticker in global_quotes.items():
-    quote = fetch_index_quote(ticker)
-    if quote:
-        unit = "%" if label == "US 10Y yield" else ""
-        global_lines.append(f"**{label}:** {quote['price']:,.2f}{unit} ({quote['change']:+.2f}, {quote['pct']:+.2f}%).")
-# Headlines offer context for Fed, US data, China and bonds; source availability varies by deployment.
-try:
-    rss_url = "https://news.google.com/rss/search?q=US+Federal+Reserve+inflation+jobs+Treasury+yields+China+economy+oil&hl=en-US&gl=US&ceid=US:en"
-    rss = requests.get(rss_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6).text
-    headline_items = re.findall(r"<item>.*?<title>(.*?)</title>.*?</item>", rss, flags=re.I | re.S)
-    headlines = []
-    for item in headline_items[:3]:
-        clean = re.sub(r"<[^>]+>", "", item)
-        clean = clean.replace("&amp;", "&").replace("&quot;", '"').replace("&#39;", "'")
-        if clean and clean not in headlines:
-            headlines.append(clean)
-except Exception:
-    headlines = []
-if global_lines:
-    # Keep the global commentary compact: approximately 5–6 readable lines.
-    for line in global_lines[:4]:
-        st.markdown(f"- {line}")
-if headlines:
-    st.markdown("**Macro news:**")
-    for headline in headlines[:2]:
-        st.markdown(f"- {headline}")
-else:
-    st.markdown("- Macro headlines could not be fetched; use the market/yield readings above as context.")
-st.caption("This is a market snapshot, not a claim that a specific Fed decision or economic release occurred today. Quotes/headlines can be delayed and should be verified.")
+st.markdown("#### 🌏 Global Macro Dashboard — US, China & Asia")
 
-st.markdown("#### 🎯 Day's Actionable View")
-commentary = []
-if gift:
-    commentary.append(f"GIFT Nifty at **{gift['price']:,.2f}** ({gift['change']:+.2f}) is giving the first cue for the open.")
+# Pull the same provider-first quotes used by the index strip for a consistent macro snapshot.
+macro_specs = [
+    ("US Tech 100", "^NDX", ("NASDAQ:NDX",)),
+    ("US 30", "^DJI", ("DJ:DJI",)),
+    ("US 10Y yield", "^TNX", ("TVC:US10Y",)),
+    ("DXY", "DX-Y.NYB", ("TVC:DXY",)),
+    ("WTI crude", "CL=F", ("TVC:USOIL", "NYMEX:CL1!")),
+    ("Hang Seng", "^HSI", ("HSI:HSI",)),
+    ("Nikkei 225", "^N225", ("TVC:NI225",)),
+    ("Shanghai Composite", "000001.SS", ("SSE:000001",)),
+    ("KOSPI", "^KS11", ("KRX:KOSPI",)),
+    ("ASX 200", "^AXJO", ("ASX:XJO",)),
+]
+macro_quotes = {}
+for label, ticker, tv_symbols in macro_specs:
+    macro_quotes[label] = fetch_commodity_live(ticker, tv_symbols)
+
+macro_cols = st.columns(5)
+for idx, label in enumerate(["Hang Seng", "Nikkei 225", "Shanghai Composite", "KOSPI", "ASX 200"]):
+    q = macro_quotes.get(label)
+    with macro_cols[idx]:
+        if q:
+            st.metric(label, f"{q['price']:,.2f}", f"{q['change']:+.2f} ({q['pct']:+.2f}%)")
+        else:
+            st.metric(label, "N/A")
+
+# News feed: China / Asia / US macro. Headlines are context, not a sentiment model.
+news_items = []
+try:
+    rss_url = "https://news.google.com/rss/search?q=(China+OR+Asian+markets+OR+Japan+OR+Hong+Kong+OR+Federal+Reserve+OR+US+inflation+OR+Treasury+yields+OR+crude+oil)+when:2d&hl=en-IN&gl=IN&ceid=IN:en"
+    nr = requests.get(rss_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=7)
+    if nr.ok:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(nr.content)
+        for item in root.findall(".//item")[:6]:
+            title = item.findtext("title")
+            link = item.findtext("link")
+            if title:
+                news_items.append({"title": title, "link": link or ""})
+except Exception:
+    pass
+
+st.markdown("**Macro pointers**")
+macro_lines = []
+for label in ["US Tech 100", "US 30", "US 10Y yield", "DXY", "WTI crude"]:
+    q = macro_quotes.get(label)
+    if q:
+        macro_lines.append(f"**{label}:** {q['price']:,.2f} ({q['change']:+.2f}, {q['pct']:+.2f}%).")
+for label in ["Hang Seng", "Nikkei 225", "Shanghai Composite"]:
+    q = macro_quotes.get(label)
+    if q:
+        macro_lines.append(f"**{label}:** {q['price']:,.2f} ({q['change']:+.2f}, {q['pct']:+.2f}%). Asian risk appetite can affect FII flows and opening sentiment.")
+if news_items:
+    macro_lines.append("**Latest US/China/Asia headlines:** " + " | ".join(x["title"] for x in news_items[:2]))
+if macro_lines:
+    for line in macro_lines[:6]:
+        st.markdown(f"- {line}")
+else:
+    st.info("Global macro quotes are temporarily unavailable; check the source sites directly.")
+
+# Transparent, rule-based bias: only directional when multiple independent cues agree.
+score = 0
+signals = []
 if nifty_an:
     if nifty_an["above_vwap"] and nifty_an["current"] > nifty_an["avg_5d"]:
-        commentary.append("Nifty is holding **above 5-day VWAP & average** → bulls have short-term control. Prefer **buy-on-dips** near support.")
-    elif not nifty_an["above_vwap"]:
-        commentary.append("Nifty trading **below 5-day VWAP** → caution on longs. Prefer **sell-on-rises** until it reclaims VWAP.")
-if bank_an:
-    if bank_an["above_vwap"]:
-        commentary.append("Bank Nifty also above its 5-day VWAP → banking space supportive for overall market.")
-    else:
-        commentary.append("Bank Nifty lagging below VWAP → watch private banks for relative strength/weakness.")
-
-if commentary:
-    for c in commentary:
-        st.markdown(f"- {c}")
+        score += 2; signals.append("Nifty above 5-day VWAP and average (+2)")
+    elif (not nifty_an["above_vwap"]) and nifty_an["current"] < nifty_an["avg_5d"]:
+        score -= 2; signals.append("Nifty below 5-day VWAP and average (-2)")
+if gift and gift.get("pct", 0) != 0:
+    score += 1 if gift["pct"] > 0 else -1
+    signals.append(f"GIFT Nifty change {gift['pct']:+.2f}%")
+for label in ["US Tech 100", "US 30", "Hang Seng", "Nikkei 225", "Shanghai Composite"]:
+    q = macro_quotes.get(label)
+    if q and abs(q.get("pct", 0)) >= 0.15:
+        score += 1 if q["pct"] > 0 else -1
+        signals.append(f"{label} {q['pct']:+.2f}%")
+# Stronger dollar and rising oil are often headwinds for India; direction is only a modest factor.
+for label, weight in [("DXY", -1), ("WTI crude", -1)]:
+    q = macro_quotes.get(label)
+    if q and q.get("pct", 0) >= 0.5:
+        score += weight; signals.append(f"{label} rising {q['pct']:+.2f}% (India headwind)")
+    elif q and q.get("pct", 0) <= -0.5:
+        score -= weight; signals.append(f"{label} falling {q['pct']:+.2f}% (India tailwind)")
+if score >= 2:
+    global_bias = "🟢 BUY BIAS"
+    bias_explain = "The available technical and global cues lean positive. Prefer confirmation at the open; avoid chasing gaps."
+elif score <= -2:
+    global_bias = "🔴 SELL BIAS"
+    bias_explain = "The available technical and global cues lean negative. Avoid fresh longs until price action improves."
 else:
-    st.info("Commentary will appear once data loads.")
+    global_bias = "🟡 NEUTRAL / WAIT"
+    bias_explain = "Signals are mixed or insufficient; wait for Nifty/Bank Nifty confirmation rather than forcing a directional trade."
+st.markdown(f"### Global Bias for the Day: {global_bias}")
+st.write(bias_explain)
+if signals:
+    st.caption("Bias inputs: " + "; ".join(signals[:8]))
+st.caption("This is a transparent rule-based indicator, not a prediction or financial advice. Quote sources may be delayed; headlines are not automatically scored. Confirm prices with your broker before trading.")
 
 st.markdown("---")
 
