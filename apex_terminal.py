@@ -1,3 +1,11 @@
+# APEX MARKET TERMINAL — CORRECTED BUILD 2026-10-17
+# Verified requirements in this build:
+# 1) No data-source/website labels are rendered beneath Market Indices cards.
+# 2) Nifty 50 stock dropdown alone is ordered by indicative index weight (highest first).
+# 3) Renko scanner sorts 30 Minutes first, then 1 Hour; newest signal first within each timeframe.
+# 4) PCR uses NSE option-chain OI and retains last successful value in Streamlit session state.
+# 5) Global Macro section shows macro pointers/headlines and bias, not duplicate Asian quote cards.
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -580,11 +588,14 @@ def scan_renko_universe(universe_tuple: tuple):
     if not rows:
         return pd.DataFrame()
     result_df = pd.DataFrame(rows)
+    # 30-minute signals first, newest qualifying brick first; then 1-hour signals newest first.
+    # Do not sort scanner rows alphabetically or by index weightage.
     tf_order = {"30 Minutes": 0, "1 Hour": 1}
-    signal_order = {"BUY": 0, "SELL": 1, "BULLISH": 2, "BEARISH": 3}
-    result_df["_tf"] = result_df["Timeframe"].map(tf_order)
-    result_df["_sig"] = result_df["Signal"].map(signal_order).fillna(9)
-    result_df = result_df.sort_values(by=["_tf", "Last Brick TS", "_sig"], ascending=[True, False, True]).drop(columns=["_tf", "_sig"]).reset_index(drop=True)
+    result_df["_tf"] = result_df["Timeframe"].map(tf_order).fillna(9)
+    result_df = result_df.sort_values(
+        by=["_tf", "Age Minutes", "Last Brick TS"],
+        ascending=[True, True, False], kind="stable"
+    ).drop(columns=["_tf"]).reset_index(drop=True)
     return result_df
 
 @st.cache_data(ttl=30)
@@ -682,6 +693,21 @@ def get_stock_universe():
         "TITAN", "ULTRACEMCO", "UPL", "WIPRO", "ETERNAL"
     ]
 
+# Indicative Nifty 50 weights used ONLY for stock-selector ordering (highest first).
+# Approximate/static guide; not live index weightage.
+NIFTY50_WEIGHT = {
+    "HDFCBANK":12.8,"ICICIBANK":8.4,"RELIANCE":8.0,"BHARTIARTL":5.0,"INFY":4.8,
+    "SBIN":4.0,"ITC":3.6,"TCS":3.5,"AXISBANK":3.2,"KOTAKBANK":2.8,"LT":2.7,
+    "BAJFINANCE":2.5,"HINDUNILVR":2.3,"M&M":2.2,"TATAMOTORS":1.9,"SUNPHARMA":1.8,
+    "MARUTI":1.8,"HCLTECH":1.7,"NTPC":1.6,"TITAN":1.5,"ULTRACEMCO":1.4,
+    "POWERGRID":1.4,"TATASTEEL":1.3,"ONGC":1.2,"JSWSTEEL":1.2,"BEL":1.2,
+    "ASIANPAINT":1.1,"ADANIPORTS":1.1,"BAJAJFINSV":1.0,"COALINDIA":1.0,
+    "INDUSINDBK":0.9,"GRASIM":0.9,"TATACONSUM":0.8,"NESTLEIND":0.8,"WIPRO":0.8,
+    "TECHM":0.7,"HINDALCO":0.7,"DRREDDY":0.7,"CIPLA":0.7,"EICHERMOT":0.6,
+    "APOLLOHOSP":0.6,"DIVISLAB":0.6,"SBILIFE":0.6,"HDFCLIFE":0.6,"BRITANNIA":0.5,
+    "HEROMOTOCO":0.5,"BAJAJ-AUTO":0.5,"ADANIENT":0.5,"ETERNAL":0.5,"UPL":0.3
+}
+
 @st.cache_data(ttl=60)
 def get_index_analytics(ticker: str):
     try:
@@ -718,43 +744,45 @@ def get_index_analytics(ticker: str):
     except:
         return None
 
-@st.cache_data(ttl=45)
+@st.cache_data(ttl=20, show_spinner=False)
 def get_pcr(symbol: str = "NIFTY"):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.nseindia.com/option-chain",
-    }
-    session = requests.Session()
-    try:
-        session.get("https://www.nseindia.com", headers=headers, timeout=8)
-        session.get("https://www.nseindia.com/option-chain", headers=headers, timeout=8)
-        if symbol.upper() in ["NIFTY", "NIFTY 50"]:
-            url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
-        elif symbol.upper() in ["BANKNIFTY", "NIFTY BANK", "BANK NIFTY"]:
-            url = "https://www.nseindia.com/api/option-chain-indices?symbol=BANKNIFTY"
-        else:
-            return None
-        r = session.get(url, headers=headers, timeout=10)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        records = data.get("records", {})
-        options = records.get("data", [])
-        total_ce_oi = 0
-        total_pe_oi = 0
-        for item in options:
-            ce = item.get("CE", {})
-            pe = item.get("PE", {})
-            total_ce_oi += ce.get("openInterest", 0) or 0
-            total_pe_oi += pe.get("openInterest", 0) or 0
-        if total_ce_oi == 0:
-            return None
-        pcr = total_pe_oi / total_ce_oi
-        return round(pcr, 3)
-    except Exception:
+    """Latest whole-chain PCR = total put OI / total call OI, from NSE option-chain API."""
+    sym = symbol.upper().replace(" ", "")
+    if sym in ["NIFTY", "NIFTY50"]:
+        nse_symbol = "NIFTY"
+    elif sym in ["BANKNIFTY", "NIFTYBANK"]:
+        nse_symbol = "BANKNIFTY"
+    else:
         return None
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*", "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
+        "Referer": "https://www.nseindia.com/option-chain", "Origin": "https://www.nseindia.com",
+        "Connection": "keep-alive"
+    }
+    url = f"https://www.nseindia.com/api/option-chain-indices?symbol={nse_symbol}"
+    for _ in range(2):
+        session = requests.Session()
+        try:
+            session.get("https://www.nseindia.com", headers=headers, timeout=6)
+            session.get("https://www.nseindia.com/option-chain", headers=headers, timeout=6)
+            response = session.get(url, headers=headers, timeout=8)
+            if response.status_code == 200:
+                records = response.json().get("records", {})
+                ce_oi = pe_oi = 0
+                for item in records.get("data", []):
+                    ce_oi += int((item.get("CE") or {}).get("openInterest") or 0)
+                    pe_oi += int((item.get("PE") or {}).get("openInterest") or 0)
+                if ce_oi > 0 and pe_oi > 0:
+                    pcr = pe_oi / ce_oi
+                    if 0.05 < pcr < 10:
+                        return round(pcr, 3)
+        except Exception:
+            pass
+        finally:
+            try: session.close()
+            except Exception: pass
+    return None
 
 @st.cache_data(ttl=60)
 def get_market_breadth(universe: list):
@@ -884,9 +912,11 @@ st.caption(f"Live Indian Equities & Indices • **{current_time}**")
 
 # ========== MAIN CONTROLS ==========
 universe = get_stock_universe()
+# The stock dropdown is weight-ranked; scanner ordering remains based only on signal freshness.
+dropdown_universe = sorted(universe, key=lambda sym: (-NIFTY50_WEIGHT.get(sym, 0.0), sym))
 col1, col2, col3 = st.columns([2.2, 1.2, 1])
 with col1:
-    selected = st.selectbox("🔍 Select Stock (NSE)", options=universe, index=0, key="selected")
+    selected = st.selectbox("🔍 Select Stock (NSE)", options=dropdown_universe, index=0, key="selected")
 with col2:
     auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=False)
 with col3:
@@ -997,6 +1027,7 @@ for i in range(0, len(items), 6):
                 else:
                     price_str = f"₹{data['price']:,.2f}"
                     change_str = f"{sign}{data['change']:.2f}"
+                # Intentionally do not render data['source'] here: source labels clutter the index cards.
                 st.markdown(f"""
                 <div class="metric-card">
                     <div class="index-title">{name}</div>
@@ -1004,7 +1035,6 @@ for i in range(0, len(items), 6):
                     <div class="index-change {color}">{change_str} ({sign}{data['pct']:.2f}%)</div>
                 </div>
                 """, unsafe_allow_html=True)
-                st.caption(data.get("source", "Quote source not reported"))
             else:
                 st.markdown(f"""
                 <div class="metric-card">
@@ -1013,7 +1043,6 @@ for i in range(0, len(items), 6):
                 </div>
                 """, unsafe_allow_html=True)
 
-st.caption("Quote priority: TradingView public scanner for configured symbols, then Yahoo Finance. Public TradingView data may be delayed and the scanner endpoint is unofficial; ticker/contract must match the reference chart. Spot CFDs, futures, continuous contracts and MCX contracts can differ.")
 st.markdown("---")
 
 # ========== Global Opening Commentary & Analytics ==========
@@ -1057,6 +1086,7 @@ with col_b:
     else:
         st.info("Bank Nifty analytics loading...")
 
+# Corrected build: Asian market quotes remain in the indices strip; macro section is pointers/headlines/bias only.
 st.markdown("#### 🌏 Global Macro Dashboard — US, China & Asia")
 
 # Pull the same provider-first quotes used by the index strip for a consistent macro snapshot.
@@ -1075,15 +1105,6 @@ macro_specs = [
 macro_quotes = {}
 for label, ticker, tv_symbols in macro_specs:
     macro_quotes[label] = fetch_commodity_live(ticker, tv_symbols)
-
-macro_cols = st.columns(5)
-for idx, label in enumerate(["Hang Seng", "Nikkei 225", "Shanghai Composite", "KOSPI", "ASX 200"]):
-    q = macro_quotes.get(label)
-    with macro_cols[idx]:
-        if q:
-            st.metric(label, f"{q['price']:,.2f}", f"{q['change']:+.2f} ({q['pct']:+.2f}%)")
-        else:
-            st.metric(label, "N/A")
 
 # News feed: China / Asia / US macro. Headlines are context, not a sentiment model.
 news_items = []
@@ -1107,12 +1128,10 @@ for label in ["US Tech 100", "US 30", "US 10Y yield", "DXY", "WTI crude"]:
     q = macro_quotes.get(label)
     if q:
         macro_lines.append(f"**{label}:** {q['price']:,.2f} ({q['change']:+.2f}, {q['pct']:+.2f}%).")
-for label in ["Hang Seng", "Nikkei 225", "Shanghai Composite"]:
-    q = macro_quotes.get(label)
-    if q:
-        macro_lines.append(f"**{label}:** {q['price']:,.2f} ({q['change']:+.2f}, {q['pct']:+.2f}%). Asian risk appetite can affect FII flows and opening sentiment.")
+# Asian index prices are already shown above; avoid duplicating their quote figures here.
+macro_lines.append("**China & Asia:** Track China growth/stimulus news, regional risk appetite and overnight Asian-market direction for potential effects on FII flows and India's opening sentiment.")
 if news_items:
-    macro_lines.append("**Latest US/China/Asia headlines:** " + " | ".join(x["title"] for x in news_items[:2]))
+    macro_lines.append("**Latest US/China/Asia headlines:** " + " | ".join(x["title"] for x in news_items[:3]))
 if macro_lines:
     for line in macro_lines[:6]:
         st.markdown(f"- {line}")
@@ -1165,14 +1184,24 @@ st.markdown('<div class="section-header">📊 Market Breadth & Put-Call Ratio</d
 bullish_cnt, bearish_cnt = get_market_breadth(universe)
 nifty_pcr = get_pcr("NIFTY")
 bank_pcr = get_pcr("BANKNIFTY")
+# Keep the most recently fetched valid PCR visible if NSE temporarily throttles the next refresh.
+# The caption below identifies the value as last available when a refresh fails.
+if nifty_pcr is not None:
+    st.session_state["last_nifty_pcr"] = nifty_pcr
+elif st.session_state.get("last_nifty_pcr") is not None:
+    nifty_pcr = st.session_state["last_nifty_pcr"]
+if bank_pcr is not None:
+    st.session_state["last_bank_pcr"] = bank_pcr
+elif st.session_state.get("last_bank_pcr") is not None:
+    bank_pcr = st.session_state["last_bank_pcr"]
 
 b1, b2, b3, b4 = st.columns(4)
 b1.metric("🟢 Bullish Stocks (Nifty 50)", bullish_cnt)
 b2.metric("🔴 Bearish Stocks (Nifty 50)", bearish_cnt)
-b3.metric("Nifty PCR (OI)", f"{nifty_pcr:.3f}" if nifty_pcr else "N/A")
-b4.metric("Bank Nifty PCR (OI)", f"{bank_pcr:.3f}" if bank_pcr else "N/A")
+b3.metric("Nifty PCR (OI)", f"{nifty_pcr:.3f}" if nifty_pcr is not None else "Unavailable")
+b4.metric("Bank Nifty PCR (OI)", f"{bank_pcr:.3f}" if bank_pcr is not None else "Unavailable")
 
-st.caption("PCR > 1.2 generally bullish (more put writing) • PCR < 0.8 generally bearish. Breadth based on last two closes of Nifty 50 constituents.")
+st.caption("PCR = total put OI ÷ total call OI. If NSE temporarily blocks refresh, the last successfully fetched PCR remains visible. PCR > 1.2 can indicate stronger put OI; PCR < 0.8 can indicate stronger call OI. Breadth uses Nifty 50 constituents.")
 
 st.markdown("---")
 
