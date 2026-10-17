@@ -218,67 +218,168 @@ def fetch_index_quote(ticker: str):
     return None
 
 @st.cache_data(ttl=15)
-def fetch_gift_nifty():
-    """Robust GIFT Nifty scraper – targets current ~23,xxx range"""
+def _fetch_html_text(url: str):
+    """Fetch a public page with browser-like headers; cache briefly to reduce load."""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.moneycontrol.com/",
         "Cache-Control": "no-cache",
     }
+    try:
+        response = requests.get(url, headers=headers, timeout=8)
+        if response.status_code == 200:
+            return re.sub(r"<script\b.*?</script>|<style\b.*?</style>", " ", response.text,
+                          flags=re.I | re.S)
+    except Exception:
+        pass
+    return ""
+
+
+def _parse_gift_page(url: str):
+    """Conservative GIFT Nifty parser; rejects numbers outside a plausible index range."""
+    raw = _fetch_html_text(url)
+    if not raw:
+        return None
+    text = re.sub(r"<[^>]+>", " ", raw)
+    text = re.sub(r"&(?:nbsp|amp|quot);", " ", text, flags=re.I)
+    # Look for price values only, not arbitrary five-digit numbers in scripts.
+    values = []
+    for match in re.findall(r"(?<!\d)(2[0-9],[0-9]{3}(?:\.\d{1,2})?|2[0-9]{4}(?:\.\d{1,2})?)(?!\d)", text):
+        try:
+            value = float(match.replace(",", ""))
+            if 20000 <= value <= 30000:
+                values.append(value)
+        except ValueError:
+            pass
+    if not values:
+        # JSON/meta payloads sometimes contain the value even when page text is sparse.
+        for match in re.findall(r"(?<!\d)(2[0-9]{4}\.\d{1,2})(?!\d)", raw):
+            value = float(match)
+            if 20000 <= value <= 30000:
+                values.append(value)
+    if not values:
+        return None
+    # Most frequent/central candidate avoids blindly taking a random page number.
+    price = float(pd.Series(values).round(2).mode().iloc[0])
+    # Extract a nearby signed point change if the page exposes one.
+    change = 0.0
+    around = text[max(0, text.find(str(int(price))) - 120): text.find(str(int(price))) + 250]
+    cm = re.search(r"([+-]\s?\d{1,4}(?:\.\d{1,2})?)", around.replace(",", ""))
+    if cm:
+        try:
+            change = float(cm.group(1).replace(" ", ""))
+        except ValueError:
+            pass
+    return {"price": round(price, 2), "change": round(change, 2),
+            "pct": round(change / (price - change) * 100, 2) if price != change else 0.0,
+            "source": url}
+
+
+@st.cache_data(ttl=15)
+def fetch_gift_nifty():
+    """Cross-check Moneycontrol, GIFTNiftyToday and Quantsapp; never accept implausible quotes."""
     urls = [
         "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx",
         "https://www.moneycontrol.com/indian-indices/gift-nifty-107.html",
+        "https://giftniftytoday.com/",
+        "https://www.quantsapp.com/gift-nifty",
     ]
+    quotes = []
     for url in urls:
-        try:
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code != 200:
-                continue
-            text = r.text.replace(",", "").replace(" ", "")
-            
-            # Strong pattern for price + change + %
-            match = re.search(
-                r'(\d{5}\.\d{1,2})\s*([+-]?\d+\.?\d*)\s*\(?\s*([+-]?\d+\.?\d*)\s*%?\s*\)?',
-                text
-            )
-            if match:
-                price = float(match.group(1))
-                if 22000 < price < 28000:  # valid 2026 GIFT range
-                    change = float(match.group(2) or 0)
-                    pct = float(match.group(3) or 0)
-                    return {"price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2)}
-            
-            # Fallback: any number in valid range
-            candidates = re.findall(r'(\d{5}\.\d{1,2})', text)
-            for cand in candidates:
-                val = float(cand)
-                if 22000 < val < 28000:
-                    return {"price": round(val, 2), "change": 0.0, "pct": 0.0}
-        except Exception:
-            continue
-    return None
+        q = _parse_gift_page(url)
+        if q and 20000 <= q["price"] <= 30000:
+            quotes.append(q)
+    if not quotes:
+        # Yahoo is a last fallback only; GIFT symbols vary by provider.
+        for ticker in ["^NSEI", "NIFTY50.NS"]:
+            q = fetch_index_quote(ticker)
+            if q:
+                return {**q, "source": "Yahoo fallback (not a GIFT quote)"}
+        return None
+    # Prefer a pair within 10 points; average the agreeing pair. Otherwise use median.
+    quotes.sort(key=lambda x: x["price"])
+    pair = None
+    for i in range(len(quotes)):
+        for j in range(i + 1, len(quotes)):
+            if abs(quotes[i]["price"] - quotes[j]["price"]) <= 10:
+                pair = (quotes[i], quotes[j])
+                break
+        if pair:
+            break
+    chosen = (pair[0]["price"] + pair[1]["price"]) / 2 if pair else float(np.median([q["price"] for q in quotes]))
+    nearest = min(quotes, key=lambda q: abs(q["price"] - chosen))
+    return {"price": round(chosen, 2), "change": nearest["change"],
+            "pct": round(nearest["pct"], 2),
+            "source": " + ".join([q["source"] for q in pair]) if pair else "Median of valid sources"}
+
 
 @st.cache_data(ttl=20)
-def fetch_commodity_live(ticker: str):
-    """Extra push for oil, metals, forex, crypto"""
+def _fetch_moneycontrol_mcx(commodity: str):
+    """Best-effort Moneycontrol MCX quote extraction; returns None if no trustworthy quote is found."""
+    slugs = {
+        "GOLD": "gold-price",
+        "SILVER": "silver-price",
+        "COPPER": "copper-price",
+        "CRUDE OIL WTI": "crude-oil-price",
+        "NATURAL GAS": "natural-gas-price",
+    }
+    slug = slugs.get(commodity)
+    if not slug:
+        return None
+    urls = [
+        f"https://www.moneycontrol.com/commodity/{slug}.html",
+        f"https://www.moneycontrol.com/commodity/{slug}/",
+    ]
+    for url in urls:
+        raw = _fetch_html_text(url)
+        if not raw:
+            continue
+        # Read only explicitly labeled LTP/price snippets; avoid arbitrary page numbers.
+        patterns = [
+            r'(?:last\s*traded\s*price|current\s*price|mcx\s*price|ltp)[^0-9]{0,80}([0-9,]{2,}(?:\.\d{1,2})?)',
+            r'"(?:lastPrice|ltp|price)"\s*:\s*"?([0-9,]+(?:\.\d{1,2})?)',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, raw, flags=re.I)
+            if match:
+                try:
+                    price = float(match.group(1).replace(",", ""))
+                    if price > 0:
+                        return {"price": round(price, 2), "change": 0.0, "pct": 0.0,
+                                "source": "Moneycontrol MCX (best effort)"}
+                except ValueError:
+                    pass
+    return None
+
+
+@st.cache_data(ttl=20)
+def fetch_commodity_live(ticker: str, label: str = ""):
+    """Prefer MCX quotes for Indian commodity futures; Yahoo 1-minute data is fallback."""
+    mcx_labels = {"GOLD", "SILVER", "COPPER", "CRUDE OIL WTI", "NATURAL GAS"}
+    if label in mcx_labels:
+        mcx = _fetch_moneycontrol_mcx(label)
+        if mcx:
+            return mcx
+    # Pull intraday data first. Daily history can be stale and should not override it.
+    try:
+        hist = yf.Ticker(ticker).history(period="1d", interval="1m", auto_adjust=False)
+        if hist is not None and not hist.empty:
+            hist = hist.dropna(subset=["Close"])
+            if not hist.empty:
+                price = float(hist["Close"].iloc[-1])
+                prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
+                change = price - prev
+                return {"price": round(price, 2), "change": round(change, 2),
+                        "pct": round(change / prev * 100, 2) if prev else 0.0,
+                        "source": "Yahoo Finance 1-minute"}
+    except Exception:
+        pass
+    # Fallback to latest available history; label it as fallback, not guaranteed live.
     data = fetch_index_quote(ticker)
     if data and data["price"] > 0:
-        return data
-    try:
-        t = yf.Ticker(ticker)
-        hist = t.history(period="1d", interval="1m")
-        if not hist.empty:
-            price = float(hist["Close"].iloc[-1])
-            prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
-            return {
-                "price": round(price, 2),
-                "change": round(price - prev, 2),
-                "pct": round((price - prev) / prev * 100, 2) if prev else 0
-            }
-    except:
-        pass
+        return {**data, "source": "Yahoo Finance history fallback"}
     return None
+
 
 @st.cache_data(ttl=45)
 def fetch_stock_data(symbol: str):
@@ -772,9 +873,27 @@ st.caption(f"Live Indian Equities & Indices • **{current_time}**")
 
 # ========== MAIN CONTROLS ==========
 universe = get_stock_universe()
+
+# Approximate Nifty 50 free-float weights (indicative, not exchange-live). Review/update periodically.
+NIFTY50_WEIGHT = {
+    "HDFCBANK": 12.8, "RELIANCE": 9.2, "ICICIBANK": 8.1, "INFY": 5.6,
+    "BHARTIARTL": 4.7, "LT": 4.2, "ITC": 3.6, "TCS": 3.5,
+    "SBIN": 3.1, "AXISBANK": 2.9, "KOTAKBANK": 2.7, "M&M": 2.5,
+    "HINDUNILVR": 2.3, "BAJFINANCE": 2.2, "SUNPHARMA": 2.0,
+    "MARUTI": 1.8, "TATAMOTORS": 1.7, "NTPC": 1.6, "HCLTECH": 1.6,
+    "TITAN": 1.5, "ULTRACEMCO": 1.4, "ONGC": 1.3, "POWERGRID": 1.3,
+    "TATASTEEL": 1.2, "BEL": 1.2, "JSWSTEEL": 1.1, "ADANIPORTS": 1.0,
+    "BAJAJFINSV": 1.0, "ASIANPAINT": 0.9, "COALINDIA": 0.9,
+    "GRASIM": 0.8, "INDUSINDBK": 0.8, "NESTLEIND": 0.8, "WIPRO": 0.7,
+    "TECHM": 0.7, "EICHERMOT": 0.7, "HINDALCO": 0.7, "TATACONSUM": 0.7,
+    "CIPLA": 0.7, "DRREDDY": 0.6, "APOLLOHOSP": 0.6, "BAJAJ-AUTO": 0.6,
+    "DIVISLAB": 0.6, "BRITANNIA": 0.5, "HEROMOTOCO": 0.5, "HDFCLIFE": 0.5,
+    "SBILIFE": 0.5, "ADANIENT": 0.5, "ETERNAL": 0.5, "SHRIRAMFIN": 0.5,
+}
+universe = sorted(universe, key=lambda symbol: (-NIFTY50_WEIGHT.get(symbol, 0), symbol))
 col1, col2, col3 = st.columns([2.2, 1.2, 1])
 with col1:
-    selected = st.selectbox("🔍 Select Stock (NSE)", options=universe, index=0, key="selected")
+    selected = st.selectbox("🔍 Select Stock (NSE) — Nifty weight: highest first", options=universe, index=0, key="selected")
 with col2:
     auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=False)
 with col3:
@@ -824,6 +943,8 @@ st.markdown('<div class="section-header">Market Indices & Global Instruments</di
 
 instruments = {
     "NIFTY 50": "^NSEI",
+    "US 30": "^DJI",
+    "DXY (US Dollar Index)": "DX-Y.NYB",
     "BANK NIFTY": "^NSEBANK",
     "MIDCAP 150": "NIFTYMIDCAP150.NS",
     "GIFT NIFTY": "GIFT_NIFTY_SPECIAL",
@@ -853,7 +974,7 @@ for i in range(0, len(items), 6):
         if ticker == "GIFT_NIFTY_SPECIAL":
             data = fetch_gift_nifty()
         elif ticker in ["CL=F", "BZ=F", "GC=F", "SI=F", "HG=F", "INR=X", "BTC-USD", "NG=F"]:
-            data = fetch_commodity_live(ticker)
+            data = fetch_commodity_live(ticker, name)
         else:
             data = fetch_index_quote(ticker)
         
@@ -887,6 +1008,8 @@ for i in range(0, len(items), 6):
                     <div class="index-price" style="font-size:12px; color:#94a3b8; padding-top:8px;">Unavailable</div>
                 </div>
                 """, unsafe_allow_html=True)
+
+st.caption("Quote sources: GIFT Nifty cross-checks Moneycontrol, GIFTNiftyToday and Quantsapp; commodities try Moneycontrol MCX first where available, then Yahoo 1-minute/history. Public websites may delay, block scraping, or publish different contract expiries—verify with your broker before trading.")
 
 st.markdown("---")
 
@@ -930,6 +1053,44 @@ with col_b:
         """, unsafe_allow_html=True)
     else:
         st.info("Bank Nifty analytics loading...")
+
+# Global macro snapshot: current market data plus fresh headlines where accessible.
+st.markdown("#### 🌐 Global Market & Macro Commentary")
+global_quotes = {
+    "S&P 500": "^GSPC", "Nasdaq": "^IXIC", "Dow Jones": "^DJI",
+    "US 10Y yield": "^TNX", "WTI crude": "CL=F", "DXY": "DX-Y.NYB",
+    "Hang Seng": "^HSI",
+}
+global_lines = []
+for label, ticker in global_quotes.items():
+    quote = fetch_index_quote(ticker)
+    if quote:
+        unit = "%" if label == "US 10Y yield" else ""
+        global_lines.append(f"**{label}:** {quote['price']:,.2f}{unit} ({quote['change']:+.2f}, {quote['pct']:+.2f}%).")
+# Headlines offer context for Fed, US data, China and bonds; source availability varies by deployment.
+try:
+    rss_url = "https://news.google.com/rss/search?q=US+Federal+Reserve+inflation+jobs+Treasury+yields+China+economy+oil&hl=en-US&gl=US&ceid=US:en"
+    rss = requests.get(rss_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6).text
+    headline_items = re.findall(r"<item>.*?<title>(.*?)</title>.*?</item>", rss, flags=re.I | re.S)
+    headlines = []
+    for item in headline_items[:3]:
+        clean = re.sub(r"<[^>]+>", "", item)
+        clean = clean.replace("&amp;", "&").replace("&quot;", '"').replace("&#39;", "'")
+        if clean and clean not in headlines:
+            headlines.append(clean)
+except Exception:
+    headlines = []
+if global_lines:
+    # Keep the global commentary compact: approximately 5–6 readable lines.
+    for line in global_lines[:4]:
+        st.markdown(f"- {line}")
+if headlines:
+    st.markdown("**Macro news:**")
+    for headline in headlines[:2]:
+        st.markdown(f"- {headline}")
+else:
+    st.markdown("- Macro headlines could not be fetched; use the market/yield readings above as context.")
+st.caption("This is a market snapshot, not a claim that a specific Fed decision or economic release occurred today. Quotes/headlines can be delayed and should be verified.")
 
 st.markdown("#### 🎯 Day's Actionable View")
 commentary = []
