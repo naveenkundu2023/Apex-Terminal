@@ -487,46 +487,121 @@ def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None, ya
 
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_gift_nifty_50():
-    """GIFT Nifty 50 Index Futures continuous (NIFTY1!). Yahoo is not reliable here."""
+    """GIFT Nifty 50 — TradingView first, then Moneycontrol live page (primary reliable source)."""
+    # 1) TradingView continuous futures
     for symbol in ("NSEIX:NIFTY1!", "NSEIX:NIFTY2!", "NSEIX:GIFTNIFTY1!", "NSEIX:GIFTNIFTY"):
         quote = fetch_tradingview_quote(symbol)
         if quote and 15000 < quote["price"] < 40000:
             quote["source"] = f"TradingView ({symbol})"
             return quote
+
+    # 2) Moneycontrol live GIFT Nifty page (user-confirmed working source)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://www.moneycontrol.com/",
+    }
+    mc_url = "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx"
+    try:
+        r = requests.get(mc_url, headers=headers, timeout=8)
+        if r.status_code == 200:
+            html = r.text
+            # Prefer structured fields from the overview table
+            prev_m = re.search(r"Previous\s*Close\s*</[^>]*>\s*<[^>]*>\s*([\d,]+\.?\d*)", html, re.I | re.S)
+            open_m = re.search(r">\s*Open\s*</[^>]*>\s*<[^>]*>\s*([\d,]+\.?\d*)", html, re.I | re.S)
+            high_m = re.search(r"Day\s*High\s*</[^>]*>\s*<[^>]*>\s*([\d,]+\.?\d*)", html, re.I | re.S)
+            low_m = re.search(r"Day\s*Low\s*</[^>]*>\s*<[^>]*>\s*([\d,]+\.?\d*)", html, re.I | re.S)
+            # Change pattern like: 28.00 ( 0.12 %) or -45.50 ( -0.20 %)
+            chg_m = re.search(
+                r"([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*\(\s*([+-]?\d+\.?\d*)\s*%\s*\)",
+                html,
+            )
+            # Last price: look near "As on" or big number in range
+            price = None
+            # Try explicit last-price patterns first
+            for pat in [
+                r'data-price=["\']([\d,]+\.?\d*)["\']',
+                r'["\']last_price["\']\s*[:=]\s*["\']?([\d,]+\.?\d*)',
+                r'id=["\'][^"\']*last[^"\']*["\'][^>]*>\s*([\d,]+\.?\d*)',
+            ]:
+                m = re.search(pat, html, re.I)
+                if m:
+                    try:
+                        cand = float(m.group(1).replace(",", ""))
+                        if 18000 < cand < 35000:
+                            price = cand
+                            break
+                    except ValueError:
+                        pass
+            # Fallback: numbers in page that sit in GIFT range; prefer one near prev close
+            if price is None:
+                nums = []
+                for n in re.findall(r"(?<![\d.])(\d{2},\d{3}(?:\.\d{1,2})?|\d{5}(?:\.\d{1,2})?)(?![\d.])", html):
+                    try:
+                        v = float(n.replace(",", ""))
+                        if 18000 < v < 35000:
+                            nums.append(v)
+                    except ValueError:
+                        pass
+                prev_val = None
+                if prev_m:
+                    try:
+                        prev_val = float(prev_m.group(1).replace(",", ""))
+                    except ValueError:
+                        pass
+                if nums:
+                    if prev_val:
+                        # pick closest to prev close among candidates (current LTP)
+                        price = min(nums, key=lambda x: abs(x - prev_val))
+                    else:
+                        # most common / median
+                        nums_s = sorted(nums)
+                        price = nums_s[len(nums_s) // 2]
+            if price is not None:
+                change = pct = 0.0
+                if chg_m:
+                    try:
+                        change = float(chg_m.group(1).replace(",", ""))
+                        pct = float(chg_m.group(2))
+                    except ValueError:
+                        pass
+                elif prev_m:
+                    try:
+                        prev = float(prev_m.group(1).replace(",", ""))
+                        change = price - prev
+                        pct = (change / prev * 100) if prev else 0
+                    except ValueError:
+                        pass
+                return {
+                    "price": round(price, 2),
+                    "change": round(change, 2),
+                    "pct": round(pct, 2),
+                    "source": "Moneycontrol GIFT Nifty",
+                }
+    except Exception:
+        pass
+
+    # 3) Investing.com
     inv = fetch_investing_quote("indices/sgx-nifty")
     if inv and 15000 < inv["price"] < 40000:
         return inv
-    # Extra public-page scrape (same idea as original moneycontrol/giftniftytoday fallback)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    urls = [
-        "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx",
-        "https://www.giftniftytoday.com/",
-    ]
-    candidates = []
-    for url in urls:
-        try:
-            r = requests.get(url, headers=headers, timeout=7)
-            if r.status_code != 200:
-                continue
-            raw = re.sub(r"<script.*?</script>|<style.*?</style>", " ", r.text, flags=re.I | re.S)
-            txt = re.sub(r"<[^>]+>", " ", raw)
+
+    # 4) giftniftytoday simple scrape
+    try:
+        r = requests.get("https://www.giftniftytoday.com/", headers=headers, timeout=7)
+        if r.status_code == 200:
+            txt = re.sub(r"<[^>]+>", " ", re.sub(r"<script.*?</script>", " ", r.text, flags=re.I | re.S))
             nums = re.findall(r"(?<![\d.])(\d{5}(?:,\d{3})*(?:\.\d{1,2})?)(?![\d.])", txt)
             for n in nums:
                 try:
                     val = float(n.replace(",", ""))
                     if 18000 < val < 35000:
-                        candidates.append(val)
-                        break
+                        return {"price": round(val, 2), "change": 0.0, "pct": 0.0, "source": "giftniftytoday"}
                 except ValueError:
                     pass
-        except Exception:
-            continue
-    if candidates:
-        price = sorted(candidates)[len(candidates) // 2]
-        return {"price": round(price, 2), "change": 0.0, "pct": 0.0, "source": "Public GIFT Nifty pages"}
+    except Exception:
+        pass
     return None
 
 @st.cache_data(ttl=45)
@@ -717,12 +792,20 @@ def scan_renko_universe(universe_tuple: tuple):
     if not rows:
         return pd.DataFrame()
     result_df = pd.DataFrame(rows)
+    # Required order:
+    #   1) 30 Minutes — BUY / BULLISH (newest first)
+    #   2) 30 Minutes — SELL / BEARISH (newest first)
+    #   3) 1 Hour     — BUY / BULLISH (newest first)
+    #   4) 1 Hour     — SELL / BEARISH (newest first)
     tf_order = {"30 Minutes": 0, "1 Hour": 1}
+    sig_order = {"BUY": 0, "BULLISH": 1, "SELL": 2, "BEARISH": 3}
     result_df["_tf"] = result_df["Timeframe"].map(tf_order).fillna(9)
+    result_df["_sig"] = result_df["Signal"].map(sig_order).fillna(9)
     result_df = result_df.sort_values(
-        by=["_tf", "Age Minutes", "Last Brick TS"],
-        ascending=[True, True, False], kind="stable"
-    ).drop(columns=["_tf"]).reset_index(drop=True)
+        by=["_tf", "_sig", "Age Minutes", "Last Brick TS"],
+        ascending=[True, True, True, False],
+        kind="stable"
+    ).drop(columns=["_tf", "_sig"]).reset_index(drop=True)
     return result_df
 
 @st.cache_data(ttl=30)
@@ -859,16 +942,31 @@ def get_index_analytics(ticker: str):
     except Exception:
         return None
 
-@st.cache_data(ttl=20, show_spinner=False)
-def get_pcr(symbol: str = "NIFTY"):
-    """Latest whole-chain PCR = total put OI / total call OI from NSE option-chain API."""
+@st.cache_data(ttl=45, show_spinner=False)
+def get_option_sentiment(symbol: str = "NIFTY"):
+    """
+    Returns dict: pcr, max_pain, atm_iv, source.
+    Priority: NSE option-chain OI → Quantsapp max-pain page → niftytrader snapshot.
+    """
     sym = symbol.upper().replace(" ", "")
     if sym in ["NIFTY", "NIFTY50"]:
         nse_symbol = "NIFTY"
+        qa_paths = [
+            "https://www.quantsapp.com/max-pain/nifty",
+            "https://web.quantsapp.com/option-pain/NIFTY",
+        ]
     elif sym in ["BANKNIFTY", "NIFTYBANK"]:
         nse_symbol = "BANKNIFTY"
+        qa_paths = [
+            "https://www.quantsapp.com/max-pain/banknifty",
+            "https://web.quantsapp.com/option-pain/BANKNIFTY",
+        ]
     else:
         return None
+
+    out = {"pcr": None, "max_pain": None, "atm_iv": None, "source": None}
+
+    # ---- 1) NSE option-chain (authoritative PCR during market hours) ----
     headers = nse_session_headers()
     url = f"https://www.nseindia.com/api/option-chain-indices?symbol={nse_symbol}"
     for _ in range(2):
@@ -878,15 +976,47 @@ def get_pcr(symbol: str = "NIFTY"):
             session.get("https://www.nseindia.com/option-chain", headers=headers, timeout=6)
             response = session.get(url, headers=headers, timeout=8)
             if response.status_code == 200:
-                records = response.json().get("records", {})
+                data = response.json()
+                records = data.get("records", {})
                 ce_oi = pe_oi = 0
+                # Also compute simple max-pain from nearest expiry OI if available
+                strike_oi = {}  # strike -> (ce_oi, pe_oi)
                 for item in records.get("data", []):
-                    ce_oi += int((item.get("CE") or {}).get("openInterest") or 0)
-                    pe_oi += int((item.get("PE") or {}).get("openInterest") or 0)
+                    ce = item.get("CE") or {}
+                    pe = item.get("PE") or {}
+                    c_oi = int(ce.get("openInterest") or 0)
+                    p_oi = int(pe.get("openInterest") or 0)
+                    ce_oi += c_oi
+                    pe_oi += p_oi
+                    strike = item.get("strikePrice")
+                    if strike is not None:
+                        strike_oi[float(strike)] = (
+                            strike_oi.get(float(strike), (0, 0))[0] + c_oi,
+                            strike_oi.get(float(strike), (0, 0))[1] + p_oi,
+                        )
                 if ce_oi > 0 and pe_oi > 0:
                     pcr = pe_oi / ce_oi
                     if 0.05 < pcr < 10:
-                        return round(pcr, 3)
+                        out["pcr"] = round(pcr, 3)
+                        out["source"] = "NSE"
+                # Max pain: strike minimising sum of ITM call+put payout proxy
+                if strike_oi:
+                    strikes = sorted(strike_oi.keys())
+                    best_s, best_pain = None, None
+                    for s in strikes:
+                        pain = 0.0
+                        for k, (c, p) in strike_oi.items():
+                            if k < s:
+                                pain += (s - k) * c
+                            elif k > s:
+                                pain += (k - s) * p
+                        if best_pain is None or pain < best_pain:
+                            best_pain = pain
+                            best_s = s
+                    if best_s is not None:
+                        out["max_pain"] = int(best_s) if best_s == int(best_s) else round(best_s, 1)
+                if out["pcr"] is not None:
+                    return out
         except Exception:
             pass
         finally:
@@ -894,7 +1024,87 @@ def get_pcr(symbol: str = "NIFTY"):
                 session.close()
             except Exception:
                 pass
-    return None
+
+    # ---- 2) Quantsapp (PCR + Max Pain + ATM IV) ----
+    qa_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    for qa_url in qa_paths:
+        try:
+            r = requests.get(qa_url, headers=qa_headers, timeout=8)
+            if r.status_code != 200:
+                continue
+            text = re.sub(r"<script.*?</script>", " ", r.text, flags=re.I | re.S)
+            plain = re.sub(r"<[^>]+>", " ", text)
+            plain = re.sub(r"\s+", " ", plain)
+
+            # PCR (OI) 1.11 or PCR (OI) **1.11**
+            m = re.search(r"PCR\s*\(?\s*OI\s*\)?\s*[:\*]?\s*([0-9]+\.?[0-9]*)", plain, re.I)
+            if not m:
+                m = re.search(r"PCR[^0-9]{0,20}([0-9]+\.[0-9]{1,3})", plain, re.I)
+            if m:
+                try:
+                    p = float(m.group(1))
+                    if 0.05 < p < 10:
+                        out["pcr"] = round(p, 3)
+                except ValueError:
+                    pass
+
+            # Max pain
+            m = re.search(r"Max\s*pain\s*[:\*]?\s*([0-9]{2,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)", plain, re.I)
+            if m:
+                try:
+                    out["max_pain"] = float(m.group(1).replace(",", ""))
+                except ValueError:
+                    pass
+
+            # ATM IV
+            m = re.search(r"ATM\s*IV\s*[:\*]?\s*([0-9]+\.?[0-9]*)\s*%?", plain, re.I)
+            if m:
+                try:
+                    out["atm_iv"] = round(float(m.group(1)), 1)
+                except ValueError:
+                    pass
+
+            if out["pcr"] is not None or out["max_pain"] is not None:
+                out["source"] = "Quantsapp"
+                return out
+        except Exception:
+            continue
+
+    # ---- 3) niftytrader.in snapshot page ----
+    try:
+        r = requests.get("https://www.niftytrader.in/nse-option-chain", headers=qa_headers, timeout=8)
+        if r.status_code == 200:
+            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
+            # Look for NIFTY / BANK NIFTY blocks
+            label = "NIFTY 50" if nse_symbol == "NIFTY" else "BANK NIFTY"
+            # crude: PCR then MAX PAIN near label
+            idx = plain.upper().find(nse_symbol if nse_symbol != "NIFTY" else "NIFTY 50")
+            chunk = plain[idx: idx + 400] if idx >= 0 else plain
+            m = re.search(r"PCR\s*([0-9]+\.?[0-9]*)", chunk, re.I)
+            if m:
+                p = float(m.group(1))
+                if 0.05 < p < 10:
+                    out["pcr"] = round(p, 3)
+            m = re.search(r"MAX\s*PAIN\s*([0-9]{2,3}(?:,?[0-9]{3})*)", chunk, re.I)
+            if m:
+                out["max_pain"] = float(m.group(1).replace(",", ""))
+            if out["pcr"] is not None:
+                out["source"] = "NiftyTrader"
+                return out
+    except Exception:
+        pass
+
+    return out if (out["pcr"] is not None or out["max_pain"] is not None) else None
+
+
+def get_pcr(symbol: str = "NIFTY"):
+    """Backward-compatible PCR-only helper."""
+    data = get_option_sentiment(symbol)
+    return data.get("pcr") if data else None
 
 @st.cache_data(ttl=60)
 def get_market_breadth(universe: list):
@@ -1471,27 +1681,50 @@ st.caption("Transparent rule-based indicator only — not financial advice. Conf
 
 st.markdown("---")
 
-# ========== Market Breadth + PCR ==========
-st.markdown('<div class="section-header">📊 Market Breadth & Put-Call Ratio</div>', unsafe_allow_html=True)
+# ========== Market Breadth + PCR / Max Pain / IV ==========
+st.markdown('<div class="section-header">📊 Market Breadth, PCR, Max Pain & IV</div>', unsafe_allow_html=True)
 
 bullish_cnt, bearish_cnt = get_market_breadth(universe)
-nifty_pcr = get_pcr("NIFTY")
-bank_pcr = get_pcr("BANKNIFTY")
+nifty_sent = get_option_sentiment("NIFTY") or {}
+bank_sent = get_option_sentiment("BANKNIFTY") or {}
 
-# Persist last successful PCR; keep showing it post-market until next session
+nifty_pcr = nifty_sent.get("pcr")
+bank_pcr = bank_sent.get("pcr")
+nifty_mp = nifty_sent.get("max_pain")
+bank_mp = bank_sent.get("max_pain")
+nifty_iv = nifty_sent.get("atm_iv")
+bank_iv = bank_sent.get("atm_iv")
+
+# Persist last successful readings post-market
 if nifty_pcr is not None:
     st.session_state["last_nifty_pcr"] = nifty_pcr
     st.session_state["last_pcr_time"] = datetime.now(ist).strftime("%d %b %H:%M IST")
+    if nifty_mp is not None:
+        st.session_state["last_nifty_mp"] = nifty_mp
+    if nifty_iv is not None:
+        st.session_state["last_nifty_iv"] = nifty_iv
 elif st.session_state.get("last_nifty_pcr") is not None:
     nifty_pcr = st.session_state["last_nifty_pcr"]
+    nifty_mp = st.session_state.get("last_nifty_mp", nifty_mp)
+    nifty_iv = st.session_state.get("last_nifty_iv", nifty_iv)
+
 if bank_pcr is not None:
     st.session_state["last_bank_pcr"] = bank_pcr
+    if bank_mp is not None:
+        st.session_state["last_bank_mp"] = bank_mp
+    if bank_iv is not None:
+        st.session_state["last_bank_iv"] = bank_iv
 elif st.session_state.get("last_bank_pcr") is not None:
     bank_pcr = st.session_state["last_bank_pcr"]
+    bank_mp = st.session_state.get("last_bank_mp", bank_mp)
+    bank_iv = st.session_state.get("last_bank_iv", bank_iv)
 
 pcr_note = ""
 if not is_nse_market_hours() and st.session_state.get("last_nifty_pcr") is not None:
     pcr_note = f" (last live value @ {st.session_state.get('last_pcr_time', 'prior session')} — refreshes after 09:15 IST)"
+
+src_n = nifty_sent.get("source") or ("cached" if nifty_pcr is not None else None)
+src_b = bank_sent.get("source") or ("cached" if bank_pcr is not None else None)
 
 b1, b2, b3, b4 = st.columns(4)
 b1.metric("🟢 Bullish Stocks (Nifty 50)", bullish_cnt)
@@ -1499,9 +1732,17 @@ b2.metric("🔴 Bearish Stocks (Nifty 50)", bearish_cnt)
 b3.metric("Nifty PCR (OI)", f"{nifty_pcr:.3f}" if nifty_pcr is not None else "Unavailable")
 b4.metric("Bank Nifty PCR (OI)", f"{bank_pcr:.3f}" if bank_pcr is not None else "Unavailable")
 
+# Max Pain + ATM IV row
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Nifty Max Pain", f"{nifty_mp:,.0f}" if nifty_mp is not None else "—")
+m2.metric("Nifty ATM IV", f"{nifty_iv:.1f}%" if nifty_iv is not None else "—")
+m3.metric("Bank Nifty Max Pain", f"{bank_mp:,.0f}" if bank_mp is not None else "—")
+m4.metric("Bank Nifty ATM IV", f"{bank_iv:.1f}%" if bank_iv is not None else "—")
+
 st.caption(
-    "PCR = total put OI ÷ total call OI (NSE option-chain). "
-    "During market hours the value refreshes live; after close the last successful reading is retained until the next open."
+    "PCR = total put OI ÷ total call OI. Sources: NSE → Quantsapp → NiftyTrader. "
+    "Max Pain = strike where option writers’ payout is lowest. ATM IV from Quantsapp when available. "
+    f"Nifty source: {src_n or 'n/a'} · Bank Nifty source: {src_b or 'n/a'}."
     + pcr_note
 )
 
@@ -1640,8 +1881,8 @@ st.markdown("---")
 # -------------------------------------------------
 # Intraday Renko Signal Scanner
 # -------------------------------------------------
-st.markdown('<div class="section-header">🎯 Intraday Renko Signals • 30 Minutes first, then 1 Hour</div>', unsafe_allow_html=True)
-st.caption("Only stocks with the latest two Renko bricks in the same direction are listed. BUY/SELL requires close above/below 20 EMA. ⚡ = Just entered (≤ 20 min). Sorted by newest first.")
+st.markdown('<div class="section-header">🎯 Intraday Renko Signals • 30M BUY/Bullish → 30M SELL/Bearish → 1H BUY/Bullish → 1H SELL/Bearish</div>', unsafe_allow_html=True)
+st.caption("Only stocks with the latest two Renko bricks in the same direction are listed. BUY/SELL requires close above/below 20 EMA. ⚡ = Just entered (≤ 20 min). Within each group: newest signal on top.")
 
 scan_col1, scan_col2 = st.columns([1, 4])
 with scan_col1:
