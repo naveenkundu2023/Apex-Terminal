@@ -1,11 +1,11 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-19
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-19 (v2 — robust fallbacks)
 # Changes in this build:
 # 1) GIFT Nifty replaced with GIFT Nifty 50 Futures (NSEIX:NIFTY1!).
 # 2) US Tech 100 → US Tech 100 Futures; US 30 → US 30 Futures.
-# 3) Investing.com is now the FINAL fallback (Yahoo removed as last resort). Works 24h.
-# 4) BSE Sensex index card added. Nifty / Bank Nifty / Midcap 150 / Midcap Select / Sensex keep existing Yahoo path.
+# 3) Data priority: TradingView → Investing.com → Yahoo Finance (Yahoo restored as reliable final fallback).
+# 4) BSE Sensex index card added. Nifty / Bank Nifty / Midcap 150 / Midcap Select / Sensex keep Yahoo path.
 # 5) Green ▲ / Red ▼ triangles on Market Indices cards vs previous close.
-# 6) PCR from NSE option-chain OI; last successful value retained post-market until 09:00 IST refresh.
+# 6) PCR from NSE option-chain OI; last successful value retained post-market until next open.
 # 7) Most Active Stocks by Value & by Volume (top 10) from NSE — new section below Gainers/Losers.
 # 8) Nifty 50 Heatmap section.
 # 9) Corporate Actions for Nifty 50 constituents from NSE.
@@ -242,29 +242,69 @@ def is_nse_market_hours():
     return dtime(9, 15) <= t <= dtime(15, 30)
 
 @st.cache_data(ttl=15)
-def fetch_index_quote(ticker: str):
-    """Yahoo for Indian cash indices (Nifty, Bank Nifty, Midcaps, Sensex, VIX)."""
+def fetch_yahoo_quote(ticker: str):
+    """Robust Yahoo Finance quote — used for cash indices AND as final fallback for futures/commodities."""
+    if not ticker or ticker in ("GIFT_NIFTY", "US_TECH_FUT", "US_30_FUT"):
+        return None
     try:
         t = yf.Ticker(ticker)
-        hist = t.history(period="5d")
-        if hist is None or hist.empty:
-            hist = t.history(period="1d")
-        if not hist.empty and len(hist) >= 1:
-            price = float(hist["Close"].iloc[-1])
-            prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
-            change = price - prev
-            pct = (change / prev * 100) if prev else 0
-            return {"price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2)}
+        # Prefer short intraday history for live-ish price
+        hist = None
+        for period, interval in [("5d", "5m"), ("5d", "1m"), ("5d", None), ("1d", None)]:
+            try:
+                if interval:
+                    hist = t.history(period=period, interval=interval, prepost=True)
+                else:
+                    hist = t.history(period=period)
+                if hist is not None and not hist.empty:
+                    break
+            except Exception:
+                continue
+        if hist is not None and not hist.empty:
+            hist = hist.dropna(subset=["Close"])
+            if not hist.empty:
+                price = float(hist["Close"].iloc[-1])
+                # Prefer previous daily close for change when available
+                try:
+                    daily = t.history(period="5d", interval="1d")
+                    if daily is not None and not daily.empty and len(daily) >= 2:
+                        prev = float(daily["Close"].iloc[-2])
+                    elif len(hist) > 1:
+                        prev = float(hist["Close"].iloc[-2])
+                    else:
+                        prev = price
+                except Exception:
+                    prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
+                change = price - prev
+                pct = (change / prev * 100) if prev else 0
+                return {
+                    "price": round(price, 2),
+                    "change": round(change, 2),
+                    "pct": round(pct, 2),
+                    "source": f"Yahoo Finance ({ticker})"
+                }
+        # fast_info fallback
         info = t.fast_info
         price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
         prev = getattr(info, "previous_close", None) or price
         if price is not None:
             change = float(price) - float(prev)
             pct = (change / float(prev) * 100) if prev else 0
-            return {"price": round(float(price), 2), "change": round(change, 2), "pct": round(pct, 2)}
+            return {
+                "price": round(float(price), 2),
+                "change": round(change, 2),
+                "pct": round(pct, 2),
+                "source": f"Yahoo Finance ({ticker})"
+            }
     except Exception:
         pass
     return None
+
+
+@st.cache_data(ttl=15)
+def fetch_index_quote(ticker: str):
+    """Yahoo for Indian cash indices (Nifty, Bank Nifty, Midcaps, Sensex, VIX)."""
+    return fetch_yahoo_quote(ticker)
 
 @st.cache_data(ttl=20, show_spinner=False)
 def fetch_tradingview_quote(tv_symbol: str):
@@ -309,7 +349,7 @@ def fetch_tradingview_quote(tv_symbol: str):
 
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_investing_quote(slug: str):
-    """Investing.com page parser — FINAL fallback (24h coverage)."""
+    """Investing.com page parser — secondary fallback (24h coverage when it works)."""
     try:
         url = "https://www.investing.com/" + slug
         headers = {
@@ -358,7 +398,7 @@ def fetch_investing_quote(slug: str):
     except Exception:
         return None
 
-# Expanded Investing.com slug map (final fallback for 24h instruments)
+# Investing.com slug map (secondary fallback)
 INVESTING_SLUGS = {
     "GIFT_NIFTY": "indices/sgx-nifty",
     "US_TECH_FUT": "indices/nq-100-futures",
@@ -381,31 +421,73 @@ INVESTING_SLUGS = {
     "^AXJO": "indices/asx-200",
     "^NDX": "indices/nq-100",
     "^DJI": "indices/us-30",
+    "^IXIC": "indices/nasdaq-composite",
+}
+
+# Yahoo tickers used as FINAL reliable fallback (matches your suggested table)
+YAHOO_FALLBACK = {
+    "GIFT_NIFTY": None,          # not reliable on Yahoo
+    "US_TECH_FUT": "^NDX",       # Nasdaq-100 index (closest liquid proxy)
+    "US_30_FUT": "^DJI",         # Dow Jones
+    "CL=F": "CL=F",
+    "BZ=F": "BZ=F",
+    "NG=F": "NG=F",
+    "GC=F": "GC=F",
+    "SI=F": "SI=F",
+    "HG=F": "HG=F",
+    "INR=X": "INR=X",
+    "BTC-USD": "BTC-USD",
+    "DX-Y.NYB": "DX-Y.NYB",
+    "^TNX": "^TNX",
+    "^TYX": "^TYX",
+    "^HSI": "^HSI",
+    "^N225": "^N225",
+    "000001.SS": "000001.SS",
+    "^KS11": "^KS11",
+    "^AXJO": "^AXJO",
+    "^NDX": "^NDX",
+    "^DJI": "^DJI",
+    "^IXIC": "^IXIC",
 }
 
 @st.cache_data(ttl=20, show_spinner=False)
-def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None):
+def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None, yahoo_ticker: str = None):
     """
-    Priority: TradingView → Investing.com (FINAL).
-    Yahoo is intentionally NOT used as last fallback for these 24h instruments.
+    Priority (most reliable first for each source):
+      1) TradingView scanner
+      2) Investing.com page parse
+      3) Yahoo Finance  ← restored as final fallback (worked for most instruments earlier)
     """
     if isinstance(tv_symbols, str):
         tv_symbols = (tv_symbols,)
+    # 1) TradingView
     for symbol in tv_symbols:
         quote = fetch_tradingview_quote(symbol)
         if quote:
             return quote
+    # 2) Investing.com
     slug_key = investing_key or key
     slug = INVESTING_SLUGS.get(slug_key)
     if slug:
         inv = fetch_investing_quote(slug)
         if inv:
             return inv
+    # 3) Yahoo Finance (final reliable fallback)
+    y_ticker = yahoo_ticker or YAHOO_FALLBACK.get(key) or YAHOO_FALLBACK.get(slug_key)
+    if y_ticker:
+        yq = fetch_yahoo_quote(y_ticker)
+        if yq:
+            return yq
+    # Last-ditch: try the raw key itself on Yahoo if it looks like a ticker
+    if key and key not in ("GIFT_NIFTY", "US_TECH_FUT", "US_30_FUT") and ("=" in key or key.startswith("^") or key.endswith(".SS")):
+        yq = fetch_yahoo_quote(key)
+        if yq:
+            return yq
     return None
 
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_gift_nifty_50():
-    """GIFT Nifty 50 Index Futures continuous (NIFTY1!)."""
+    """GIFT Nifty 50 Index Futures continuous (NIFTY1!). Yahoo is not reliable here."""
     for symbol in ("NSEIX:NIFTY1!", "NSEIX:NIFTY2!", "NSEIX:GIFTNIFTY1!", "NSEIX:GIFTNIFTY"):
         quote = fetch_tradingview_quote(symbol)
         if quote and 15000 < quote["price"] < 40000:
@@ -414,6 +496,37 @@ def fetch_gift_nifty_50():
     inv = fetch_investing_quote("indices/sgx-nifty")
     if inv and 15000 < inv["price"] < 40000:
         return inv
+    # Extra public-page scrape (same idea as original moneycontrol/giftniftytoday fallback)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    urls = [
+        "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx",
+        "https://www.giftniftytoday.com/",
+    ]
+    candidates = []
+    for url in urls:
+        try:
+            r = requests.get(url, headers=headers, timeout=7)
+            if r.status_code != 200:
+                continue
+            raw = re.sub(r"<script.*?</script>|<style.*?</style>", " ", r.text, flags=re.I | re.S)
+            txt = re.sub(r"<[^>]+>", " ", raw)
+            nums = re.findall(r"(?<![\d.])(\d{5}(?:,\d{3})*(?:\.\d{1,2})?)(?![\d.])", txt)
+            for n in nums:
+                try:
+                    val = float(n.replace(",", ""))
+                    if 18000 < val < 35000:
+                        candidates.append(val)
+                        break
+                except ValueError:
+                    pass
+        except Exception:
+            continue
+    if candidates:
+        price = sorted(candidates)[len(candidates) // 2]
+        return {"price": round(price, 2), "change": 0.0, "pct": 0.0, "source": "Public GIFT Nifty pages"}
     return None
 
 @st.cache_data(ttl=45)
@@ -1096,7 +1209,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TradingView → Investing.com (24h) • NSE • Yahoo (cash indices only)")
+    st.caption("Data: TradingView → Investing.com → Yahoo Finance • NSE")
 
 # -------------------------------------------------
 # Header + Time
@@ -1160,32 +1273,33 @@ st.markdown("---")
 st.markdown('<div class="section-header">Market Indices & Global Instruments</div>', unsafe_allow_html=True)
 
 # Display order: India → FX/USD → US futures → yields → commodities → crypto → Asia
+# Tuple: (mode, key, tv_symbols, investing_key, yahoo_ticker)
 instruments = {
-    "INDIA VIX": ("cash", "^INDIAVIX", (), None),
-    "GIFT NIFTY 50 FUT": ("gift", "GIFT_NIFTY", ("NSEIX:NIFTY1!",), "GIFT_NIFTY"),
-    "NIFTY 50": ("cash", "^NSEI", (), None),
-    "BANK NIFTY": ("cash", "^NSEBANK", (), None),
-    "BSE SENSEX": ("cash", "^BSESN", (), None),
-    "MIDCAP 150": ("cash", "NIFTYMIDCAP150.NS", (), None),
-    "MIDCAP SELECT": ("cash", "NIFTY_MID_SELECT.NS", (), None),
-    "USD / INR": ("live", "INR=X", ("FX_IDC:USDINR", "OANDA:USDINR"), "INR=X"),
-    "DXY (US DOLLAR INDEX)": ("live", "DX-Y.NYB", ("TVC:DXY",), "DX-Y.NYB"),
-    "US TECH 100 FUT": ("live", "US_TECH_FUT", ("CME_MINI:NQ1!", "CME:NQ1!", "TVC:NDX"), "US_TECH_FUT"),
-    "US 30 FUT": ("live", "US_30_FUT", ("CBOT:YM1!", "CME_MINI:YM1!", "TVC:DJI"), "US_30_FUT"),
-    "US 10Y BOND": ("live", "^TNX", ("TVC:US10Y",), "^TNX"),
-    "US 30Y BOND": ("live", "^TYX", ("TVC:US30Y",), "^TYX"),
-    "CRUDE OIL WTI": ("live", "CL=F", ("TVC:USOIL", "NYMEX:CL1!"), "CL=F"),
-    "CRUDE OIL BRENT": ("live", "BZ=F", ("TVC:UKOIL", "ICEEUR:BRN1!"), "BZ=F"),
-    "NATURAL GAS": ("live", "NG=F", ("NYMEX:NG1!",), "NG=F"),
-    "GOLD": ("live", "GC=F", ("MCX:GOLD1!", "COMEX:GC1!"), "GC=F"),
-    "SILVER": ("live", "SI=F", ("MCX:SILVER1!", "COMEX:SI1!"), "SI=F"),
-    "COPPER": ("live", "HG=F", ("MCX:COPPER1!", "COMEX:HG1!"), "HG=F"),
-    "BITCOIN": ("live", "BTC-USD", ("COINBASE:BTCUSD", "BINANCE:BTCUSDT"), "BTC-USD"),
-    "HANG SENG": ("live", "^HSI", ("HSI:HSI",), "^HSI"),
-    "NIKKEI 225": ("live", "^N225", ("TVC:NI225",), "^N225"),
-    "SHANGHAI COMPOSITE": ("live", "000001.SS", ("SSE:000001",), "000001.SS"),
-    "KOSPI": ("live", "^KS11", ("KRX:KOSPI",), "^KS11"),
-    "ASX 200": ("live", "^AXJO", ("ASX:XJO",), "^AXJO"),
+    "INDIA VIX": ("cash", "^INDIAVIX", (), None, "^INDIAVIX"),
+    "GIFT NIFTY 50 FUT": ("gift", "GIFT_NIFTY", ("NSEIX:NIFTY1!", "NSEIX:NIFTY2!"), "GIFT_NIFTY", None),
+    "NIFTY 50": ("cash", "^NSEI", (), None, "^NSEI"),
+    "BANK NIFTY": ("cash", "^NSEBANK", (), None, "^NSEBANK"),
+    "BSE SENSEX": ("cash", "^BSESN", (), None, "^BSESN"),
+    "MIDCAP 150": ("cash", "NIFTYMIDCAP150.NS", (), None, "NIFTYMIDCAP150.NS"),
+    "MIDCAP SELECT": ("cash", "NIFTY_MID_SELECT.NS", (), None, "NIFTY_MID_SELECT.NS"),
+    "USD / INR": ("live", "INR=X", ("FX_IDC:USDINR", "OANDA:USDINR"), "INR=X", "INR=X"),
+    "DXY (US DOLLAR INDEX)": ("live", "DX-Y.NYB", ("TVC:DXY",), "DX-Y.NYB", "DX-Y.NYB"),
+    "US TECH 100 FUT": ("live", "US_TECH_FUT", ("CME_MINI:NQ1!", "CME:NQ1!", "NASDAQ:NDX", "TVC:NDX"), "US_TECH_FUT", "^NDX"),
+    "US 30 FUT": ("live", "US_30_FUT", ("CBOT:YM1!", "CME_MINI:YM1!", "DJ:DJI", "TVC:DJI"), "US_30_FUT", "^DJI"),
+    "US 10Y BOND": ("live", "^TNX", ("TVC:US10Y",), "^TNX", "^TNX"),
+    "US 30Y BOND": ("live", "^TYX", ("TVC:US30Y",), "^TYX", "^TYX"),
+    "CRUDE OIL WTI": ("live", "CL=F", ("TVC:USOIL", "NYMEX:CL1!"), "CL=F", "CL=F"),
+    "CRUDE OIL BRENT": ("live", "BZ=F", ("TVC:UKOIL", "ICEEUR:BRN1!"), "BZ=F", "BZ=F"),
+    "NATURAL GAS": ("live", "NG=F", ("NYMEX:NG1!",), "NG=F", "NG=F"),
+    "GOLD": ("live", "GC=F", ("MCX:GOLD1!", "COMEX:GC1!", "TVC:GOLD"), "GC=F", "GC=F"),
+    "SILVER": ("live", "SI=F", ("MCX:SILVER1!", "COMEX:SI1!", "TVC:SILVER"), "SI=F", "SI=F"),
+    "COPPER": ("live", "HG=F", ("MCX:COPPER1!", "COMEX:HG1!"), "HG=F", "HG=F"),
+    "BITCOIN": ("live", "BTC-USD", ("COINBASE:BTCUSD", "BINANCE:BTCUSDT"), "BTC-USD", "BTC-USD"),
+    "HANG SENG": ("live", "^HSI", ("HSI:HSI",), "^HSI", "^HSI"),
+    "NIKKEI 225": ("live", "^N225", ("TVC:NI225",), "^N225", "^N225"),
+    "SHANGHAI COMPOSITE": ("live", "000001.SS", ("SSE:000001",), "000001.SS", "000001.SS"),
+    "KOSPI": ("live", "^KS11", ("KRX:KOSPI",), "^KS11", "^KS11"),
+    "ASX 200": ("live", "^AXJO", ("ASX:XJO",), "^AXJO", "^AXJO"),
 }
 
 yield_keys = {"US 10Y BOND", "US 30Y BOND"}
@@ -1196,13 +1310,13 @@ for i in range(0, len(items), 6):
     row_items = items[i:i + 6]
     cols = st.columns(6)
     for j, (name, meta) in enumerate(row_items):
-        mode, key, tv_symbols, inv_key = meta
+        mode, key, tv_symbols, inv_key, yahoo_tk = meta
         if mode == "gift":
             data = fetch_gift_nifty_50()
         elif mode == "cash":
             data = fetch_index_quote(key)
         else:
-            data = fetch_live_instrument(key, tv_symbols, inv_key)
+            data = fetch_live_instrument(key, tv_symbols, inv_key, yahoo_tk)
 
         with cols[j]:
             if data:
@@ -1280,20 +1394,20 @@ with col_b:
 st.markdown("#### 🌏 Global Macro Dashboard — US, China & Asia")
 
 macro_specs = [
-    ("US Tech 100 Fut", "US_TECH_FUT", ("CME_MINI:NQ1!", "CME:NQ1!"), "US_TECH_FUT"),
-    ("US 30 Fut", "US_30_FUT", ("CBOT:YM1!", "CME_MINI:YM1!"), "US_30_FUT"),
-    ("US 10Y yield", "^TNX", ("TVC:US10Y",), "^TNX"),
-    ("DXY", "DX-Y.NYB", ("TVC:DXY",), "DX-Y.NYB"),
-    ("WTI crude", "CL=F", ("TVC:USOIL", "NYMEX:CL1!"), "CL=F"),
-    ("Hang Seng", "^HSI", ("HSI:HSI",), "^HSI"),
-    ("Nikkei 225", "^N225", ("TVC:NI225",), "^N225"),
-    ("Shanghai Composite", "000001.SS", ("SSE:000001",), "000001.SS"),
-    ("KOSPI", "^KS11", ("KRX:KOSPI",), "^KS11"),
-    ("ASX 200", "^AXJO", ("ASX:XJO",), "^AXJO"),
+    ("US Tech 100 Fut", "US_TECH_FUT", ("CME_MINI:NQ1!", "CME:NQ1!", "NASDAQ:NDX"), "US_TECH_FUT", "^NDX"),
+    ("US 30 Fut", "US_30_FUT", ("CBOT:YM1!", "CME_MINI:YM1!", "DJ:DJI"), "US_30_FUT", "^DJI"),
+    ("US 10Y yield", "^TNX", ("TVC:US10Y",), "^TNX", "^TNX"),
+    ("DXY", "DX-Y.NYB", ("TVC:DXY",), "DX-Y.NYB", "DX-Y.NYB"),
+    ("WTI crude", "CL=F", ("TVC:USOIL", "NYMEX:CL1!"), "CL=F", "CL=F"),
+    ("Hang Seng", "^HSI", ("HSI:HSI",), "^HSI", "^HSI"),
+    ("Nikkei 225", "^N225", ("TVC:NI225",), "^N225", "^N225"),
+    ("Shanghai Composite", "000001.SS", ("SSE:000001",), "000001.SS", "000001.SS"),
+    ("KOSPI", "^KS11", ("KRX:KOSPI",), "^KS11", "^KS11"),
+    ("ASX 200", "^AXJO", ("ASX:XJO",), "^AXJO", "^AXJO"),
 ]
 macro_quotes = {}
-for label, key, tv_symbols, inv_key in macro_specs:
-    macro_quotes[label] = fetch_live_instrument(key, tv_symbols, inv_key)
+for label, key, tv_symbols, inv_key, yahoo_tk in macro_specs:
+    macro_quotes[label] = fetch_live_instrument(key, tv_symbols, inv_key, yahoo_tk)
 
 st.markdown("**Macro pointers**")
 macro_lines = []
