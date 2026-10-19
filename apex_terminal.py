@@ -487,121 +487,103 @@ def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None, ya
 
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_gift_nifty_50():
-    """GIFT Nifty 50 — TradingView first, then Moneycontrol live page (primary reliable source)."""
-    # 1) TradingView continuous futures
+    """GIFT Nifty 50 — Upstox primary (https://upstox.com/gift-nifty/), then other fallbacks."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://upstox.com/",
+    }
+
+    # ---------- 1) Upstox (primary) ----------
+    try:
+        r = requests.get("https://upstox.com/gift-nifty/", headers=headers, timeout=8)
+        if r.status_code == 200:
+            html = r.text
+            plain = re.sub(r"<script.*?</script>", " ", html, flags=re.I | re.S)
+            plain = re.sub(r"<[^>]+>", " ", plain)
+            plain = re.sub(r"\s+", " ", plain)
+
+            # Pattern: 23,059.00  -35.50 (-0.15%)
+            m = re.search(
+                r"(2[0-9],\d{3}\.\d{2})\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)\s*\(\s*([+-]?\d+\.?\d*)\s*%\s*\)",
+                plain,
+            )
+            if m:
+                price = float(m.group(1).replace(",", ""))
+                change = float(m.group(2).replace(",", ""))
+                pct = float(m.group(3))
+                if 15000 < price < 40000:
+                    return {
+                        "price": round(price, 2),
+                        "change": round(change, 2),
+                        "pct": round(pct, 2),
+                        "source": "Upstox GIFT Nifty",
+                    }
+
+            prev_m = re.search(r"Previous session close\s*([\d,]+\.?\d*)", plain, re.I)
+            price_m = re.search(r"GIFT NIFTY Live.*?(\d{2},\d{3}\.\d{2})", plain, re.I | re.S)
+            if not price_m:
+                price_m = re.search(r"(2[0-9],\d{3}\.\d{2})", plain)
+            if price_m:
+                price = float(price_m.group(1).replace(",", ""))
+                change = pct = 0.0
+                if prev_m:
+                    prev = float(prev_m.group(1).replace(",", ""))
+                    change = price - prev
+                    pct = (change / prev * 100) if prev else 0
+                if 15000 < price < 40000:
+                    return {
+                        "price": round(price, 2),
+                        "change": round(change, 2),
+                        "pct": round(pct, 2),
+                        "source": "Upstox GIFT Nifty",
+                    }
+    except Exception:
+        pass
+
+    # ---------- 2) TradingView ----------
     for symbol in ("NSEIX:NIFTY1!", "NSEIX:NIFTY2!", "NSEIX:GIFTNIFTY1!", "NSEIX:GIFTNIFTY"):
         quote = fetch_tradingview_quote(symbol)
         if quote and 15000 < quote["price"] < 40000:
             quote["source"] = f"TradingView ({symbol})"
             return quote
 
-    # 2) Moneycontrol live GIFT Nifty page (user-confirmed working source)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://www.moneycontrol.com/",
-    }
-    mc_url = "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx"
+    # ---------- 3) Moneycontrol ----------
     try:
-        r = requests.get(mc_url, headers=headers, timeout=8)
+        r = requests.get(
+            "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx",
+            headers={**headers, "Referer": "https://www.moneycontrol.com/"},
+            timeout=8,
+        )
         if r.status_code == 200:
-            html = r.text
-            # Prefer structured fields from the overview table
-            prev_m = re.search(r"Previous\s*Close\s*</[^>]*>\s*<[^>]*>\s*([\d,]+\.?\d*)", html, re.I | re.S)
-            open_m = re.search(r">\s*Open\s*</[^>]*>\s*<[^>]*>\s*([\d,]+\.?\d*)", html, re.I | re.S)
-            high_m = re.search(r"Day\s*High\s*</[^>]*>\s*<[^>]*>\s*([\d,]+\.?\d*)", html, re.I | re.S)
-            low_m = re.search(r"Day\s*Low\s*</[^>]*>\s*<[^>]*>\s*([\d,]+\.?\d*)", html, re.I | re.S)
-            # Change pattern like: 28.00 ( 0.12 %) or -45.50 ( -0.20 %)
+            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
             chg_m = re.search(
                 r"([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*\(\s*([+-]?\d+\.?\d*)\s*%\s*\)",
-                html,
+                plain,
             )
-            # Last price: look near "As on" or big number in range
-            price = None
-            # Try explicit last-price patterns first
-            for pat in [
-                r'data-price=["\']([\d,]+\.?\d*)["\']',
-                r'["\']last_price["\']\s*[:=]\s*["\']?([\d,]+\.?\d*)',
-                r'id=["\'][^"\']*last[^"\']*["\'][^>]*>\s*([\d,]+\.?\d*)',
-            ]:
-                m = re.search(pat, html, re.I)
-                if m:
-                    try:
-                        cand = float(m.group(1).replace(",", ""))
-                        if 18000 < cand < 35000:
-                            price = cand
-                            break
-                    except ValueError:
-                        pass
-            # Fallback: numbers in page that sit in GIFT range; prefer one near prev close
-            if price is None:
-                nums = []
-                for n in re.findall(r"(?<![\d.])(\d{2},\d{3}(?:\.\d{1,2})?|\d{5}(?:\.\d{1,2})?)(?![\d.])", html):
-                    try:
-                        v = float(n.replace(",", ""))
-                        if 18000 < v < 35000:
-                            nums.append(v)
-                    except ValueError:
-                        pass
-                prev_val = None
-                if prev_m:
-                    try:
-                        prev_val = float(prev_m.group(1).replace(",", ""))
-                    except ValueError:
-                        pass
-                if nums:
-                    if prev_val:
-                        # pick closest to prev close among candidates (current LTP)
-                        price = min(nums, key=lambda x: abs(x - prev_val))
-                    else:
-                        # most common / median
-                        nums_s = sorted(nums)
-                        price = nums_s[len(nums_s) // 2]
-            if price is not None:
+            prev_m = re.search(r"Previous\s*Close\s*([\d,]+\.?\d*)", plain, re.I)
+            nums = re.findall(r"(2[0-9],\d{3}(?:\.\d{1,2})?)", plain)
+            if nums:
+                price = float(nums[0].replace(",", ""))
                 change = pct = 0.0
                 if chg_m:
-                    try:
-                        change = float(chg_m.group(1).replace(",", ""))
-                        pct = float(chg_m.group(2))
-                    except ValueError:
-                        pass
+                    change = float(chg_m.group(1).replace(",", ""))
+                    pct = float(chg_m.group(2))
                 elif prev_m:
-                    try:
-                        prev = float(prev_m.group(1).replace(",", ""))
-                        change = price - prev
-                        pct = (change / prev * 100) if prev else 0
-                    except ValueError:
-                        pass
-                return {
-                    "price": round(price, 2),
-                    "change": round(change, 2),
-                    "pct": round(pct, 2),
-                    "source": "Moneycontrol GIFT Nifty",
-                }
+                    prev = float(prev_m.group(1).replace(",", ""))
+                    change = price - prev
+                    pct = (change / prev * 100) if prev else 0
+                if 15000 < price < 40000:
+                    return {
+                        "price": round(price, 2),
+                        "change": round(change, 2),
+                        "pct": round(pct, 2),
+                        "source": "Moneycontrol GIFT Nifty",
+                    }
     except Exception:
         pass
 
-    # 3) Investing.com
-    inv = fetch_investing_quote("indices/sgx-nifty")
-    if inv and 15000 < inv["price"] < 40000:
-        return inv
-
-    # 4) giftniftytoday simple scrape
-    try:
-        r = requests.get("https://www.giftniftytoday.com/", headers=headers, timeout=7)
-        if r.status_code == 200:
-            txt = re.sub(r"<[^>]+>", " ", re.sub(r"<script.*?</script>", " ", r.text, flags=re.I | re.S))
-            nums = re.findall(r"(?<![\d.])(\d{5}(?:,\d{3})*(?:\.\d{1,2})?)(?![\d.])", txt)
-            for n in nums:
-                try:
-                    val = float(n.replace(",", ""))
-                    if 18000 < val < 35000:
-                        return {"price": round(val, 2), "change": 0.0, "pct": 0.0, "source": "giftniftytoday"}
-                except ValueError:
-                    pass
-    except Exception:
-        pass
     return None
 
 @st.cache_data(ttl=45)
