@@ -1,16 +1,22 @@
-# APEX MARKET TERMINAL — CORRECTED BUILD 2026-10-17
-# Verified requirements in this build:
-# 1) No data-source/website labels are rendered beneath Market Indices cards.
-# 2) Nifty 50 stock dropdown alone is ordered by indicative index weight (highest first).
-# 3) Renko scanner sorts 30 Minutes first, then 1 Hour; newest signal first within each timeframe.
-# 4) PCR uses NSE option-chain OI and retains last successful value in Streamlit session state.
-# 5) Global Macro section shows macro pointers/headlines and bias, not duplicate Asian quote cards.
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-19
+# Changes in this build:
+# 1) GIFT Nifty replaced with GIFT Nifty 50 Futures (NSEIX:NIFTY1!).
+# 2) US Tech 100 → US Tech 100 Futures; US 30 → US 30 Futures.
+# 3) Investing.com is now the FINAL fallback (Yahoo removed as last resort). Works 24h.
+# 4) BSE Sensex index card added. Nifty / Bank Nifty / Midcap 150 / Midcap Select / Sensex keep existing Yahoo path.
+# 5) Green ▲ / Red ▼ triangles on Market Indices cards vs previous close.
+# 6) PCR from NSE option-chain OI; last successful value retained post-market until 09:00 IST refresh.
+# 7) Most Active Stocks by Value & by Volume (top 10) from NSE — new section below Gainers/Losers.
+# 8) Nifty 50 Heatmap section.
+# 9) Corporate Actions for Nifty 50 constituents from NSE.
+# 10) Top 5 market-moving business news (global + India) refreshed every 30 min.
+# 11) Sharper China & Asia macro pointers with deeper headline context.
 
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, time as dtime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
@@ -19,6 +25,7 @@ import requests
 from io import StringIO
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import xml.etree.ElementTree as ET
 
 # -------------------------------------------------
 # Page Config
@@ -51,6 +58,12 @@ if "theme" not in st.session_state:
     st.session_state.theme = "dark"
 if "last_options_refresh" not in st.session_state:
     st.session_state.last_options_refresh = time.time()
+if "last_nifty_pcr" not in st.session_state:
+    st.session_state.last_nifty_pcr = None
+if "last_bank_pcr" not in st.session_state:
+    st.session_state.last_bank_pcr = None
+if "last_pcr_time" not in st.session_state:
+    st.session_state.last_pcr_time = None
 
 # -------------------------------------------------
 # Theme CSS
@@ -123,6 +136,11 @@ def apply_theme(theme: str):
                 border-radius: 12px; padding: 16px; margin-bottom: 12px;
             }
             .stCaption, [data-testid="stCaption"] { color: #cbd5e1 !important; }
+            .heat-cell {
+                display: inline-block; width: 19%; margin: 0.5%; padding: 8px 4px;
+                border-radius: 6px; text-align: center; font-size: 11px; font-weight: 600;
+                color: #fff; min-height: 52px;
+            }
         </style>
         """, unsafe_allow_html=True)
     else:
@@ -191,17 +209,41 @@ def apply_theme(theme: str):
                 border-radius: 12px; padding: 16px; margin-bottom: 12px;
                 box-shadow: 0 2px 8px rgba(99,102,241,0.08);
             }
+            .heat-cell {
+                display: inline-block; width: 19%; margin: 0.5%; padding: 8px 4px;
+                border-radius: 6px; text-align: center; font-size: 11px; font-weight: 600;
+                color: #fff; min-height: 52px;
+            }
         </style>
         """, unsafe_allow_html=True)
 
 apply_theme(st.session_state.theme)
 
 # -------------------------------------------------
-# Improved Live Data Helpers
+# Helpers
 # -------------------------------------------------
+def nse_session_headers():
+    return {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
+        "Referer": "https://www.nseindia.com/option-chain",
+        "Origin": "https://www.nseindia.com",
+        "Connection": "keep-alive",
+    }
+
+def is_nse_market_hours():
+    """Rough NSE cash market hours 09:15–15:30 IST (Mon–Fri)."""
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist)
+    if now.weekday() >= 5:
+        return False
+    t = now.time()
+    return dtime(9, 15) <= t <= dtime(15, 30)
+
 @st.cache_data(ttl=15)
 def fetch_index_quote(ticker: str):
-    """Aggressive live quote – forces recent history"""
+    """Yahoo for Indian cash indices (Nifty, Bank Nifty, Midcaps, Sensex, VIX)."""
     try:
         t = yf.Ticker(ticker)
         hist = t.history(period="5d")
@@ -213,7 +255,6 @@ def fetch_index_quote(ticker: str):
             change = price - prev
             pct = (change / prev * 100) if prev else 0
             return {"price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2)}
-        
         info = t.fast_info
         price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
         prev = getattr(info, "previous_close", None) or price
@@ -227,14 +268,14 @@ def fetch_index_quote(ticker: str):
 
 @st.cache_data(ttl=20, show_spinner=False)
 def fetch_tradingview_quote(tv_symbol: str):
-    """Best-effort public TradingView scanner quote. Public endpoint is unofficial and may change."""
+    """Best-effort public TradingView scanner quote."""
     try:
         exchange = tv_symbol.split(":", 1)[0].upper()
-        # TradingView scanner endpoints are market-region based, not exchange-code based.
         region_map = {
             "NSEIX": "india", "NSE": "india", "MCX": "india", "BSE": "india",
             "COMEX": "america", "NYMEX": "america", "ICEEUR": "america", "DJ": "america",
-            "NASDAQ": "america", "TVC": "america", "NYSE": "america",
+            "NASDAQ": "america", "TVC": "america", "NYSE": "america", "CME": "america",
+            "CBOT": "america", "CME_MINI": "america",
             "COINBASE": "crypto", "BINANCE": "crypto",
             "FX_IDC": "forex", "OANDA": "forex",
             "HSI": "hongkong", "TSE": "japan", "SSE": "china", "KRX": "korea", "ASX": "australia"
@@ -260,78 +301,31 @@ def fetch_tradingview_quote(tv_symbol: str):
         if change is None and pct is not None:
             change = float(price) * float(pct) / 100
         if pct is None and change is not None:
-            # Without previous close, use change/price as a conservative approximation.
             pct = (float(change) / (float(price) - float(change)) * 100) if float(price) != float(change) else 0
         return {"price": round(float(price), 2), "change": round(float(change or 0), 2),
                 "pct": round(float(pct or 0), 2), "source": f"TradingView ({tv_symbol})"}
     except Exception:
         return None
 
-@st.cache_data(ttl=15, show_spinner=False)
-def fetch_gift_nifty():
-    """Try TradingView GIFT Nifty first, then public-page fallbacks; never invent a quote."""
-    for symbol in ("NSEIX:GIFTNIFTY1!", "NSEIX:GIFTNIFTY", "NSEIX:SGX_NIFTY"):
-        quote = fetch_tradingview_quote(symbol)
-        # Sanity range prevents unrelated scanner symbols from being shown as GIFT Nifty.
-        if quote and 15000 < quote["price"] < 35000:
-            return quote
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
-               "Accept-Language": "en-US,en;q=0.9", "Cache-Control": "no-cache"}
-    urls = ["https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx",
-            "https://www.moneycontrol.com/indian-indices/gift-nifty-107.html",
-            "https://www.giftniftytoday.com/", "https://www.quantsapp.com/gift-nifty"]
-    candidates = []
-    for url in urls:
-        try:
-            r = requests.get(url, headers=headers, timeout=7)
-            if r.status_code != 200:
-                continue
-            raw = re.sub(r"<script.*?</script>|<style.*?</style>", " ", r.text, flags=re.I|re.S)
-            txt = re.sub(r"<[^>]+>", " ", raw).replace("\u003c", " ")
-            nums = re.findall(r"(?<![\d.])(\d{5}(?:,\d{3})*(?:\.\d{1,2})?)(?![\d.])", txt)
-            for n in nums:
-                try:
-                    val = float(n.replace(",", ""))
-                    if 18000 < val < 32000:
-                        candidates.append((val, url))
-                        break
-                except ValueError:
-                    pass
-        except Exception:
-            continue
-    if candidates:
-        # Prefer consensus; if sources disagree materially, use median rather than first arbitrary page.
-        vals = sorted(v for v, _ in candidates)
-        price = vals[len(vals)//2] if len(vals) % 2 else (vals[len(vals)//2-1] + vals[len(vals)//2]) / 2
-        return {"price": round(price, 2), "change": 0.0, "pct": 0.0, "source": "Public GIFT Nifty pages (change unavailable)"}
-    return None
-
 @st.cache_data(ttl=30, show_spinner=False)
-def fetch_investing_quote(ticker: str):
-    """Best-effort Investing.com page parser used only when TradingView quote is unavailable."""
-    slugs = {
-        "CL=F": "commodities/crude-oil", "BZ=F": "commodities/brent-oil",
-        "NG=F": "commodities/natural-gas", "GC=F": "commodities/gold",
-        "SI=F": "commodities/silver", "HG=F": "commodities/copper",
-        "INR=X": "currencies/usd-inr", "BTC-USD": "crypto/bitcoin",
-        "^DJI": "indices/us-30", "^NDX": "indices/nq-100",
-        "^HSI": "indices/hang-seng-40", "^N225": "indices/nikkei-225",
-        "DX-Y.NYB": "indices/us-dollar-index"
-    }
-    slug = slugs.get(ticker)
-    if not slug:
-        return None
+def fetch_investing_quote(slug: str):
+    """Investing.com page parser — FINAL fallback (24h coverage)."""
     try:
         url = "https://www.investing.com/" + slug
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
-                   "Accept-Language": "en-US,en;q=0.9"}
-        r = requests.get(url, headers=headers, timeout=4)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        r = requests.get(url, headers=headers, timeout=6)
         if r.status_code != 200:
             return None
         html = r.text
+
         def extract(pattern):
-            m = re.search(pattern, html, flags=re.I|re.S)
+            m = re.search(pattern, html, flags=re.I | re.S)
             return re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else None
+
         price_text = extract(r'data-test=["\']instrument-price-last["\'][^>]*>(.*?)</')
         change_text = extract(r'data-test=["\']instrument-price-change["\'][^>]*>(.*?)</')
         pct_text = extract(r'data-test=["\']instrument-price-change-percent["\'][^>]*>(.*?)</')
@@ -340,6 +334,7 @@ def fetch_investing_quote(ticker: str):
             price_text = m.group(1) if m else None
         if not price_text:
             return None
+
         def number(value):
             if not value:
                 return None
@@ -348,56 +343,77 @@ def fetch_investing_quote(ticker: str):
                 return float(cleaned) if cleaned not in ("", "+", "-") else None
             except ValueError:
                 return None
+
         price = number(price_text)
-        change = number(change_text)
-        pct = number(pct_text)
+        change = number(change_text) or 0.0
+        pct = number(pct_text) or 0.0
         if price is None or price <= 0:
             return None
-        if change is None:
-            change = 0.0
-        if pct is None:
-            pct = 0.0
-        return {"price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2),
-                "source": f"Investing.com ({slug})"}
+        return {
+            "price": round(price, 2),
+            "change": round(change, 2),
+            "pct": round(pct, 2),
+            "source": f"Investing.com ({slug})"
+        }
     except Exception:
         return None
 
+# Expanded Investing.com slug map (final fallback for 24h instruments)
+INVESTING_SLUGS = {
+    "GIFT_NIFTY": "indices/sgx-nifty",
+    "US_TECH_FUT": "indices/nq-100-futures",
+    "US_30_FUT": "indices/us-30-futures",
+    "CL=F": "commodities/crude-oil",
+    "BZ=F": "commodities/brent-oil",
+    "NG=F": "commodities/natural-gas",
+    "GC=F": "commodities/gold",
+    "SI=F": "commodities/silver",
+    "HG=F": "commodities/copper",
+    "INR=X": "currencies/usd-inr",
+    "BTC-USD": "crypto/bitcoin",
+    "DX-Y.NYB": "indices/usdollar-index",
+    "^TNX": "rates-bonds/u.s.-10-year-bond-yield",
+    "^TYX": "rates-bonds/u.s.-30-year-bond-yield",
+    "^HSI": "indices/hang-sen-40",
+    "^N225": "indices/japan-ni225",
+    "000001.SS": "indices/shanghai-composite",
+    "^KS11": "indices/kospi",
+    "^AXJO": "indices/asx-200",
+    "^NDX": "indices/nq-100",
+    "^DJI": "indices/us-30",
+}
 
 @st.cache_data(ttl=20, show_spinner=False)
-def fetch_commodity_live(ticker: str, tv_symbols=()):
-    """Prefer the same TradingView instrument where configured; Yahoo is fallback only."""
+def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None):
+    """
+    Priority: TradingView → Investing.com (FINAL).
+    Yahoo is intentionally NOT used as last fallback for these 24h instruments.
+    """
     if isinstance(tv_symbols, str):
         tv_symbols = (tv_symbols,)
     for symbol in tv_symbols:
         quote = fetch_tradingview_quote(symbol)
         if quote:
             return quote
-    # Secondary independent public-page fallback. Page markup/availability can change.
-    investing_quote = fetch_investing_quote(ticker)
-    if investing_quote:
-        return investing_quote
-    # Yahoo quote is a final fallback and may be delayed; keep source explicit in UI caption.
-    try:
-        t = yf.Ticker(ticker)
-        hist = t.history(period="5d", interval="5m", prepost=True)
-        if hist is None or hist.empty:
-            hist = t.history(period="5d", interval="1m", prepost=True)
-        if hist is not None and not hist.empty:
-            hist = hist.dropna(subset=["Close"])
-            price = float(hist["Close"].iloc[-1])
-            daily = t.history(period="5d", interval="1d")
-            # Use previous daily close for a daily change, not the last one-minute move.
-            if daily is not None and not daily.empty and len(daily) >= 2:
-                prev = float(daily["Close"].iloc[-2])
-            elif daily is not None and not daily.empty:
-                prev = float(daily["Close"].iloc[-1])
-            else:
-                prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
-            return {"price": round(price, 2), "change": round(price-prev, 2),
-                    "pct": round((price-prev)/prev*100, 2) if prev else 0,
-                    "source": f"Yahoo Finance fallback ({ticker})"}
-    except Exception:
-        pass
+    slug_key = investing_key or key
+    slug = INVESTING_SLUGS.get(slug_key)
+    if slug:
+        inv = fetch_investing_quote(slug)
+        if inv:
+            return inv
+    return None
+
+@st.cache_data(ttl=15, show_spinner=False)
+def fetch_gift_nifty_50():
+    """GIFT Nifty 50 Index Futures continuous (NIFTY1!)."""
+    for symbol in ("NSEIX:NIFTY1!", "NSEIX:NIFTY2!", "NSEIX:GIFTNIFTY1!", "NSEIX:GIFTNIFTY"):
+        quote = fetch_tradingview_quote(symbol)
+        if quote and 15000 < quote["price"] < 40000:
+            quote["source"] = f"TradingView ({symbol})"
+            return quote
+    inv = fetch_investing_quote("indices/sgx-nifty")
+    if inv and 15000 < inv["price"] < 40000:
+        return inv
     return None
 
 @st.cache_data(ttl=45)
@@ -422,7 +438,7 @@ def fetch_stock_data(symbol: str):
             "volume": int(volume),
             "avg_volume": avg_vol
         }
-    except:
+    except Exception:
         return None
 
 @st.cache_data(ttl=60)
@@ -438,7 +454,7 @@ def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
         if "Datetime" in df.columns:
             df = df.rename(columns={"Datetime": "Date"})
         return df
-    except:
+    except Exception:
         return None
 
 @st.cache_data(ttl=90)
@@ -453,7 +469,7 @@ def get_daily_atr(symbol: str, atr_period: int = 14, lookback_days: int = 30):
         atr = tr.rolling(window=atr_period).mean()
         recent = atr.dropna().tail(lookback_days)
         return float(recent.mean()) if not recent.empty else None
-    except:
+    except Exception:
         return None
 
 def calculate_ema(series: pd.Series, span: int) -> pd.Series:
@@ -499,7 +515,7 @@ def get_top_movers(universe: list):
                 last, prev = float(close.iloc[-1]), float(close.iloc[-2])
                 chg = last - prev
                 rows.append({"Symbol": sym, "LTP": round(last, 2), "Change": round(chg, 2), "% Chg": round((chg / prev) * 100, 2)})
-            except:
+            except Exception:
                 continue
         df = pd.DataFrame(rows)
         if df.empty:
@@ -508,7 +524,7 @@ def get_top_movers(universe: list):
             df.sort_values("% Chg", ascending=False).head(8).reset_index(drop=True),
             df.sort_values("% Chg", ascending=True).head(8).reset_index(drop=True)
         )
-    except:
+    except Exception:
         return None, None
 
 def analyze_renko_signal(symbol: str, timeframe: str):
@@ -588,8 +604,6 @@ def scan_renko_universe(universe_tuple: tuple):
     if not rows:
         return pd.DataFrame()
     result_df = pd.DataFrame(rows)
-    # 30-minute signals first, newest qualifying brick first; then 1-hour signals newest first.
-    # Do not sort scanner rows alphabetically or by index weightage.
     tf_order = {"30 Minutes": 0, "1 Hour": 1}
     result_df["_tf"] = result_df["Timeframe"].map(tf_order).fillna(9)
     result_df = result_df.sort_values(
@@ -600,12 +614,7 @@ def scan_renko_universe(universe_tuple: tuple):
 
 @st.cache_data(ttl=30)
 def get_options_chain(ltp: float, symbol: str):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.nseindia.com/option-chain",
-    }
+    headers = nse_session_headers()
     session = requests.Session()
     try:
         session.get("https://www.nseindia.com", headers=headers, timeout=8)
@@ -658,12 +667,7 @@ def get_options_chain(ltp: float, symbol: str):
 
 @st.cache_data(ttl=3600)
 def get_stock_universe():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/csv,application/json,text/plain,*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.nseindia.com/",
-    }
+    headers = nse_session_headers()
     urls = [
         "https://archives.nseindia.com/content/indices/ind_nifty50list.csv",
         "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv",
@@ -693,19 +697,17 @@ def get_stock_universe():
         "TITAN", "ULTRACEMCO", "UPL", "WIPRO", "ETERNAL"
     ]
 
-# Indicative Nifty 50 weights used ONLY for stock-selector ordering (highest first).
-# Approximate/static guide; not live index weightage.
 NIFTY50_WEIGHT = {
-    "HDFCBANK":12.8,"ICICIBANK":8.4,"RELIANCE":8.0,"BHARTIARTL":5.0,"INFY":4.8,
-    "SBIN":4.0,"ITC":3.6,"TCS":3.5,"AXISBANK":3.2,"KOTAKBANK":2.8,"LT":2.7,
-    "BAJFINANCE":2.5,"HINDUNILVR":2.3,"M&M":2.2,"TATAMOTORS":1.9,"SUNPHARMA":1.8,
-    "MARUTI":1.8,"HCLTECH":1.7,"NTPC":1.6,"TITAN":1.5,"ULTRACEMCO":1.4,
-    "POWERGRID":1.4,"TATASTEEL":1.3,"ONGC":1.2,"JSWSTEEL":1.2,"BEL":1.2,
-    "ASIANPAINT":1.1,"ADANIPORTS":1.1,"BAJAJFINSV":1.0,"COALINDIA":1.0,
-    "INDUSINDBK":0.9,"GRASIM":0.9,"TATACONSUM":0.8,"NESTLEIND":0.8,"WIPRO":0.8,
-    "TECHM":0.7,"HINDALCO":0.7,"DRREDDY":0.7,"CIPLA":0.7,"EICHERMOT":0.6,
-    "APOLLOHOSP":0.6,"DIVISLAB":0.6,"SBILIFE":0.6,"HDFCLIFE":0.6,"BRITANNIA":0.5,
-    "HEROMOTOCO":0.5,"BAJAJ-AUTO":0.5,"ADANIENT":0.5,"ETERNAL":0.5,"UPL":0.3
+    "HDFCBANK": 12.8, "ICICIBANK": 8.4, "RELIANCE": 8.0, "BHARTIARTL": 5.0, "INFY": 4.8,
+    "SBIN": 4.0, "ITC": 3.6, "TCS": 3.5, "AXISBANK": 3.2, "KOTAKBANK": 2.8, "LT": 2.7,
+    "BAJFINANCE": 2.5, "HINDUNILVR": 2.3, "M&M": 2.2, "TATAMOTORS": 1.9, "SUNPHARMA": 1.8,
+    "MARUTI": 1.8, "HCLTECH": 1.7, "NTPC": 1.6, "TITAN": 1.5, "ULTRACEMCO": 1.4,
+    "POWERGRID": 1.4, "TATASTEEL": 1.3, "ONGC": 1.2, "JSWSTEEL": 1.2, "BEL": 1.2,
+    "ASIANPAINT": 1.1, "ADANIPORTS": 1.1, "BAJAJFINSV": 1.0, "COALINDIA": 1.0,
+    "INDUSINDBK": 0.9, "GRASIM": 0.9, "TATACONSUM": 0.8, "NESTLEIND": 0.8, "WIPRO": 0.8,
+    "TECHM": 0.7, "HINDALCO": 0.7, "DRREDDY": 0.7, "CIPLA": 0.7, "EICHERMOT": 0.6,
+    "APOLLOHOSP": 0.6, "DIVISLAB": 0.6, "SBILIFE": 0.6, "HDFCLIFE": 0.6, "BRITANNIA": 0.5,
+    "HEROMOTOCO": 0.5, "BAJAJ-AUTO": 0.5, "ADANIENT": 0.5, "ETERNAL": 0.5, "UPL": 0.3
 }
 
 @st.cache_data(ttl=60)
@@ -741,12 +743,12 @@ def get_index_analytics(ticker: str):
             "pct": round(pct, 2),
             "above_vwap": current > vwap_5d
         }
-    except:
+    except Exception:
         return None
 
 @st.cache_data(ttl=20, show_spinner=False)
 def get_pcr(symbol: str = "NIFTY"):
-    """Latest whole-chain PCR = total put OI / total call OI, from NSE option-chain API."""
+    """Latest whole-chain PCR = total put OI / total call OI from NSE option-chain API."""
     sym = symbol.upper().replace(" ", "")
     if sym in ["NIFTY", "NIFTY50"]:
         nse_symbol = "NIFTY"
@@ -754,12 +756,7 @@ def get_pcr(symbol: str = "NIFTY"):
         nse_symbol = "BANKNIFTY"
     else:
         return None
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*", "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
-        "Referer": "https://www.nseindia.com/option-chain", "Origin": "https://www.nseindia.com",
-        "Connection": "keep-alive"
-    }
+    headers = nse_session_headers()
     url = f"https://www.nseindia.com/api/option-chain-indices?symbol={nse_symbol}"
     for _ in range(2):
         session = requests.Session()
@@ -780,8 +777,10 @@ def get_pcr(symbol: str = "NIFTY"):
         except Exception:
             pass
         finally:
-            try: session.close()
-            except Exception: pass
+            try:
+                session.close()
+            except Exception:
+                pass
     return None
 
 @st.cache_data(ttl=60)
@@ -802,10 +801,10 @@ def get_market_breadth(universe: list):
                     bullish += 1
                 elif last < prev:
                     bearish += 1
-            except:
+            except Exception:
                 continue
         return bullish, bearish
-    except:
+    except Exception:
         return 0, 0
 
 @st.cache_data(ttl=120)
@@ -821,7 +820,7 @@ def get_stock_news(symbol: str, limit: int = 4):
             link = n.get("link") or n.get("content", {}).get("canonicalUrl", {}).get("url", "")
             items.append({"title": title, "link": link})
         return items
-    except:
+    except Exception:
         return []
 
 @st.cache_data(ttl=60)
@@ -859,8 +858,205 @@ def get_stock_summary_analytics(symbol: str):
             "above_vwap": current > vwap_5d,
             "bias": bias
         }
-    except:
+    except Exception:
         return None
+
+# ---------- Most Active (Value / Volume) from NSE ----------
+@st.cache_data(ttl=60, show_spinner=False)
+def get_most_active(by: str = "value"):
+    """Top most-active equities by value or volume from NSE live-analysis endpoint."""
+    headers = nse_session_headers()
+    # Known NSE endpoints
+    endpoints = [
+        f"https://www.nseindia.com/api/live-analysis-most-active-securities?index={by}",
+        f"https://www.nseindia.com/api/live-analysis-most-active-securities?index={'value' if by == 'value' else 'volume'}",
+    ]
+    session = requests.Session()
+    try:
+        session.get("https://www.nseindia.com", headers=headers, timeout=6)
+        session.get("https://www.nseindia.com/market-data/most-active-equities", headers=headers, timeout=6)
+        for url in endpoints:
+            try:
+                r = session.get(url, headers=headers, timeout=8)
+                if r.status_code != 200:
+                    continue
+                data = r.json()
+                # Response shapes vary: data / data.list / records
+                rows = data.get("data") or data.get("list") or data.get("records") or []
+                if isinstance(rows, dict):
+                    rows = rows.get("data") or rows.get("list") or []
+                if not rows:
+                    continue
+                out = []
+                for item in rows[:12]:
+                    sym = item.get("symbol") or item.get("Symbol") or item.get("symbolName")
+                    if not sym:
+                        continue
+                    ltp = item.get("lastPrice") or item.get("ltp") or item.get("lastTradedPrice") or 0
+                    chg = item.get("pChange") or item.get("percentChange") or item.get("perChange") or 0
+                    vol = item.get("totalTradedVolume") or item.get("volume") or item.get("tradedQuantity") or 0
+                    val = item.get("totalTradedValue") or item.get("value") or item.get("tradedValue") or 0
+                    # value often in ₹ lakhs or crores; keep raw
+                    out.append({
+                        "Symbol": str(sym).strip(),
+                        "LTP": round(float(ltp), 2) if ltp else 0,
+                        "% Chg": round(float(chg), 2) if chg else 0,
+                        "Volume": int(float(vol)) if vol else 0,
+                        "Value (₹ Lakh)": round(float(val), 2) if val else 0,
+                    })
+                if out:
+                    return pd.DataFrame(out[:10])
+            except Exception:
+                continue
+    except Exception:
+        pass
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass
+    return pd.DataFrame()
+
+# ---------- Nifty 50 Heatmap ----------
+@st.cache_data(ttl=90, show_spinner=False)
+def get_nifty50_heatmap(universe: list):
+    try:
+        tickers = [f"{s}.NS" for s in universe]
+        data = yf.download(tickers, period="5d", group_by="ticker", progress=False, threads=True)
+        rows = []
+        for sym in universe:
+            try:
+                hist = data if len(universe) == 1 else (data[f"{sym}.NS"] if f"{sym}.NS" in data.columns.get_level_values(0) else None)
+                if hist is None or hist.empty:
+                    continue
+                close = hist["Close"].dropna()
+                if len(close) < 2:
+                    continue
+                last, prev = float(close.iloc[-1]), float(close.iloc[-2])
+                pct = (last - prev) / prev * 100 if prev else 0
+                rows.append({"Symbol": sym, "LTP": round(last, 2), "% Chg": round(pct, 2)})
+            except Exception:
+                continue
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame()
+
+# ---------- Corporate Actions (Nifty 50) ----------
+@st.cache_data(ttl=300, show_spinner=False)
+def get_corporate_actions(universe: list):
+    """Forthcoming corporate actions from NSE for Nifty-50 names."""
+    headers = nse_session_headers()
+    session = requests.Session()
+    try:
+        session.get("https://www.nseindia.com", headers=headers, timeout=6)
+        session.get("https://www.nseindia.com/companies-listing/corporate-filings-actions", headers=headers, timeout=6)
+        # NSE corporates-corporateActions
+        url = "https://www.nseindia.com/api/corporates-corporateActions?index=equities"
+        r = session.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            # alternate
+            r = session.get("https://www.nseindia.com/api/corporates-corporateActions", headers=headers, timeout=10)
+        if r.status_code != 200:
+            return pd.DataFrame()
+        data = r.json()
+        rows = data if isinstance(data, list) else (data.get("data") or data.get("corporateActions") or [])
+        uni_set = set(s.upper() for s in universe)
+        out = []
+        for item in rows:
+            sym = (item.get("symbol") or item.get("Symbol") or item.get("company") or "").strip().upper()
+            if not sym or (uni_set and sym not in uni_set):
+                continue
+            purpose = item.get("purpose") or item.get("subject") or item.get("desc") or item.get("action") or ""
+            ex_date = item.get("exDate") or item.get("ex_date") or item.get("exdate") or item.get("recordDate") or ""
+            rec_date = item.get("recordDate") or item.get("record_date") or ""
+            face = item.get("faceValue") or item.get("face_value") or ""
+            out.append({
+                "Symbol": sym,
+                "Purpose": purpose[:80] if purpose else "—",
+                "Ex-Date": ex_date,
+                "Record Date": rec_date,
+                "Face Value": face,
+            })
+        if not out:
+            return pd.DataFrame()
+        df = pd.DataFrame(out).drop_duplicates(subset=["Symbol", "Purpose", "Ex-Date"])
+        return df.head(25)
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass
+
+# ---------- Top 5 market-moving business news (30-min cache) ----------
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_top_business_news():
+    """Top headlines that can move global / Indian markets. 30-minute refresh."""
+    items = []
+    queries = [
+        "(Federal+Reserve+OR+US+inflation+OR+Treasury+yields+OR+crude+oil+OR+geopolitics)+when:1d",
+        "(India+OR+Nifty+OR+RBI+OR+FII+OR+trade+deal)+when:1d",
+        "(China+OR+Japan+OR+Hong+Kong+OR+Asia+markets)+when:1d",
+    ]
+    headers = {"User-Agent": "Mozilla/5.0"}
+    seen = set()
+    for q in queries:
+        try:
+            rss = f"https://news.google.com/rss/search?q={q}&hl=en-IN&gl=IN&ceid=IN:en"
+            nr = requests.get(rss, headers=headers, timeout=7)
+            if not nr.ok:
+                continue
+            root = ET.fromstring(nr.content)
+            for item in root.findall(".//item"):
+                title = (item.findtext("title") or "").strip()
+                link = (item.findtext("link") or "").strip()
+                if not title or title in seen:
+                    continue
+                # Prefer market-relevant keywords
+                low = title.lower()
+                score = 0
+                for kw in ["fed", "rate", "oil", "crude", "treasury", "china", "india", "nifty",
+                           "trade", "war", "sanction", "inflation", "gdp", "stimulus", "yen",
+                           "dollar", "bitcoin", "gold", "geopolit", "attack", "deal", "rbi"]:
+                    if kw in low:
+                        score += 1
+                if score >= 1:
+                    seen.add(title)
+                    items.append({"title": title, "link": link, "score": score})
+        except Exception:
+            continue
+    items.sort(key=lambda x: -x["score"])
+    return items[:5]
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_china_asia_context():
+    """Crisp China & Asia macro pointers from recent headlines."""
+    pointers = []
+    try:
+        rss = "https://news.google.com/rss/search?q=(China+economy+OR+PBOC+OR+stimulus+OR+property+OR+Japan+BOJ+OR+Hong+Kong+OR+Yuan)+when:2d&hl=en-IN&gl=IN&ceid=IN:en"
+        nr = requests.get(rss, headers={"User-Agent": "Mozilla/5.0"}, timeout=7)
+        if nr.ok:
+            root = ET.fromstring(nr.content)
+            titles = []
+            for item in root.findall(".//item")[:8]:
+                t = (item.findtext("title") or "").strip()
+                if t:
+                    titles.append(t)
+            if titles:
+                # Build short analytical bullets from headlines
+                for t in titles[:4]:
+                    pointers.append(t)
+    except Exception:
+        pass
+    if not pointers:
+        pointers = [
+            "Monitor PBOC liquidity & property-sector support signals — still the primary driver of Asia risk appetite.",
+            "Japan FX intervention risk remains elevated on sharp USD/JPY moves; can spill into regional equity flows.",
+            "Hong Kong / Hang Seng sensitivity to China growth data and US–China trade rhetoric remains high.",
+            "FII flows into India often react within 1–2 sessions to sustained Asian risk-on / risk-off swings.",
+        ]
+    return pointers
 
 PLOTLY_CONFIG = {
     "displayModeBar": False,
@@ -900,7 +1096,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: Yahoo Finance + NSE + Moneycontrol • Options refresh every 30s")
+    st.caption("Data: TradingView → Investing.com (24h) • NSE • Yahoo (cash indices only)")
 
 # -------------------------------------------------
 # Header + Time
@@ -912,7 +1108,6 @@ st.caption(f"Live Indian Equities & Indices • **{current_time}**")
 
 # ========== MAIN CONTROLS ==========
 universe = get_stock_universe()
-# The stock dropdown is weight-ranked; scanner ordering remains based only on signal freshness.
 dropdown_universe = sorted(universe, key=lambda sym: (-NIFTY50_WEIGHT.get(sym, 0.0), sym))
 col1, col2, col3 = st.columns([2.2, 1.2, 1])
 with col1:
@@ -964,70 +1159,66 @@ st.markdown("---")
 # -------------------------------------------------
 st.markdown('<div class="section-header">Market Indices & Global Instruments</div>', unsafe_allow_html=True)
 
+# Display order: India → FX/USD → US futures → yields → commodities → crypto → Asia
 instruments = {
-    # Requested display order: India -> FX/USD -> US indices/yields -> commodities -> crypto
-    "INDIA VIX": ("^INDIAVIX", ("NSE:INDIAVIX",)),
-    "GIFT NIFTY": ("GIFT_NIFTY_SPECIAL", ()),
-    "NIFTY 50": ("^NSEI", ("NSE:NIFTY",)),
-    "BANK NIFTY": ("^NSEBANK", ("NSE:BANKNIFTY",)),
-    "MIDCAP 150": ("NIFTYMIDCAP150.NS", ("NSE:MIDCAP150",)),
-    "MIDCAP SELECT": ("NIFTY_MID_SELECT.NS", ("NSE:MIDCPNIFTY",)),
-    "USD / INR": ("INR=X", ("FX_IDC:USDINR", "OANDA:USDINR")),
-    "DXY (US DOLLAR INDEX)": ("DX-Y.NYB", ("TVC:DXY",)),
-    "US TECH 100": ("^NDX", ("NASDAQ:NDX",)),
-    "US 30 (DOW)": ("^DJI", ("DJ:DJI",)),
-    "US 10Y BOND": ("^TNX", ("TVC:US10Y",)),
-    "US 30Y BOND": ("^TYX", ("TVC:US30Y",)),
-    "CRUDE OIL WTI": ("CL=F", ("TVC:USOIL", "NYMEX:CL1!")),
-    "CRUDE OIL BRENT": ("BZ=F", ("TVC:UKOIL", "ICEEUR:BRN1!")),
-    "NATURAL GAS": ("NG=F", ("NYMEX:NG1!",)),
-    "GOLD": ("GC=F", ("MCX:GOLD1!", "COMEX:GC1!")),
-    "SILVER": ("SI=F", ("MCX:SILVER1!", "COMEX:SI1!")),
-    "COPPER": ("HG=F", ("MCX:COPPER1!", "COMEX:HG1!")),
-    "BITCOIN": ("BTC-USD", ("COINBASE:BTCUSD", "BINANCE:BTCUSDT")),
-    # Additional Asian-market gauges for the Global Macro panel
-    "HANG SENG": ("^HSI", ("HSI:HSI",)),
-    "NIKKEI 225": ("^N225", ("TVC:NI225",)),
-    "SHANGHAI COMPOSITE": ("000001.SS", ("SSE:000001",)),
-    "KOSPI": ("^KS11", ("KRX:KOSPI",)),
-    "ASX 200": ("^AXJO", ("ASX:XJO",)),
+    "INDIA VIX": ("cash", "^INDIAVIX", (), None),
+    "GIFT NIFTY 50 FUT": ("gift", "GIFT_NIFTY", ("NSEIX:NIFTY1!",), "GIFT_NIFTY"),
+    "NIFTY 50": ("cash", "^NSEI", (), None),
+    "BANK NIFTY": ("cash", "^NSEBANK", (), None),
+    "BSE SENSEX": ("cash", "^BSESN", (), None),
+    "MIDCAP 150": ("cash", "NIFTYMIDCAP150.NS", (), None),
+    "MIDCAP SELECT": ("cash", "NIFTY_MID_SELECT.NS", (), None),
+    "USD / INR": ("live", "INR=X", ("FX_IDC:USDINR", "OANDA:USDINR"), "INR=X"),
+    "DXY (US DOLLAR INDEX)": ("live", "DX-Y.NYB", ("TVC:DXY",), "DX-Y.NYB"),
+    "US TECH 100 FUT": ("live", "US_TECH_FUT", ("CME_MINI:NQ1!", "CME:NQ1!", "TVC:NDX"), "US_TECH_FUT"),
+    "US 30 FUT": ("live", "US_30_FUT", ("CBOT:YM1!", "CME_MINI:YM1!", "TVC:DJI"), "US_30_FUT"),
+    "US 10Y BOND": ("live", "^TNX", ("TVC:US10Y",), "^TNX"),
+    "US 30Y BOND": ("live", "^TYX", ("TVC:US30Y",), "^TYX"),
+    "CRUDE OIL WTI": ("live", "CL=F", ("TVC:USOIL", "NYMEX:CL1!"), "CL=F"),
+    "CRUDE OIL BRENT": ("live", "BZ=F", ("TVC:UKOIL", "ICEEUR:BRN1!"), "BZ=F"),
+    "NATURAL GAS": ("live", "NG=F", ("NYMEX:NG1!",), "NG=F"),
+    "GOLD": ("live", "GC=F", ("MCX:GOLD1!", "COMEX:GC1!"), "GC=F"),
+    "SILVER": ("live", "SI=F", ("MCX:SILVER1!", "COMEX:SI1!"), "SI=F"),
+    "COPPER": ("live", "HG=F", ("MCX:COPPER1!", "COMEX:HG1!"), "HG=F"),
+    "BITCOIN": ("live", "BTC-USD", ("COINBASE:BTCUSD", "BINANCE:BTCUSDT"), "BTC-USD"),
+    "HANG SENG": ("live", "^HSI", ("HSI:HSI",), "^HSI"),
+    "NIKKEI 225": ("live", "^N225", ("TVC:NI225",), "^N225"),
+    "SHANGHAI COMPOSITE": ("live", "000001.SS", ("SSE:000001",), "000001.SS"),
+    "KOSPI": ("live", "^KS11", ("KRX:KOSPI",), "^KS11"),
+    "ASX 200": ("live", "^AXJO", ("ASX:XJO",), "^AXJO"),
 }
 
-yield_tickers = {"^TNX", "^TYX"}
-vix_tickers = {"^INDIAVIX"}
+yield_keys = {"US 10Y BOND", "US 30Y BOND"}
+vix_keys = {"INDIA VIX"}
 items = list(instruments.items())
 
 for i in range(0, len(items), 6):
-    row_items = items[i:i+6]
+    row_items = items[i:i + 6]
     cols = st.columns(6)
-    for j, (name, instrument) in enumerate(row_items):
-        ticker, tv_symbols = instrument
-        if ticker == "GIFT_NIFTY_SPECIAL":
-            data = fetch_gift_nifty()
-        elif tv_symbols or ticker in ["CL=F", "BZ=F", "GC=F", "SI=F", "HG=F", "INR=X", "BTC-USD", "NG=F"]:
-            data = fetch_commodity_live(ticker, tv_symbols)
+    for j, (name, meta) in enumerate(row_items):
+        mode, key, tv_symbols, inv_key = meta
+        if mode == "gift":
+            data = fetch_gift_nifty_50()
+        elif mode == "cash":
+            data = fetch_index_quote(key)
         else:
-            data = fetch_index_quote(ticker)
-        if data and not data.get("source"):
-            data["source"] = f"Yahoo Finance ({ticker})"
-        
+            data = fetch_live_instrument(key, tv_symbols, inv_key)
+
         with cols[j]:
             if data:
                 sign = "+" if data["change"] >= 0 else ""
                 color = "pos" if data["change"] >= 0 else "neg"
-                if ticker in yield_tickers:
+                triangle = "▲" if data["change"] >= 0 else "▼"
+                if name in yield_keys:
                     price_str = f"{data['price']:.2f}%"
-                    change_str = f"{sign}{data['change']:.2f}"
-                elif ticker in vix_tickers or ticker == "GIFT_NIFTY_SPECIAL":
-                    price_str = f"{data['price']:,.2f}"
-                    change_str = f"{sign}{data['change']:.2f}"
-                elif ticker in ["CL=F", "BZ=F", "NG=F", "GC=F", "SI=F", "HG=F", "BTC-USD", "INR=X", "DX-Y.NYB", "^NDX", "^DJI", "^HSI", "^N225", "000001.SS", "^KS11", "^AXJO"]:
-                    price_str = f"{data['price']:,.2f}"
-                    change_str = f"{sign}{data['change']:.2f}"
+                    change_str = f"{triangle} {sign}{data['change']:.2f}"
                 else:
-                    price_str = f"₹{data['price']:,.2f}"
-                    change_str = f"{sign}{data['change']:.2f}"
-                # Intentionally do not render data['source'] here: source labels clutter the index cards.
+                    # Indian cash indices get ₹ prefix
+                    if mode == "cash" and name not in vix_keys:
+                        price_str = f"₹{data['price']:,.2f}"
+                    else:
+                        price_str = f"{data['price']:,.2f}"
+                    change_str = f"{triangle} {sign}{data['change']:.2f}"
                 st.markdown(f"""
                 <div class="metric-card">
                     <div class="index-title">{name}</div>
@@ -1050,7 +1241,7 @@ st.markdown('<div class="section-header">🌍 Global Opening Commentary & Index 
 
 nifty_an = get_index_analytics("^NSEI")
 bank_an = get_index_analytics("^NSEBANK")
-gift = fetch_gift_nifty()
+gift = fetch_gift_nifty_50()
 
 col_n, col_b = st.columns(2)
 
@@ -1086,81 +1277,69 @@ with col_b:
     else:
         st.info("Bank Nifty analytics loading...")
 
-# Corrected build: Asian market quotes remain in the indices strip; macro section is pointers/headlines/bias only.
 st.markdown("#### 🌏 Global Macro Dashboard — US, China & Asia")
 
-# Pull the same provider-first quotes used by the index strip for a consistent macro snapshot.
 macro_specs = [
-    ("US Tech 100", "^NDX", ("NASDAQ:NDX",)),
-    ("US 30", "^DJI", ("DJ:DJI",)),
-    ("US 10Y yield", "^TNX", ("TVC:US10Y",)),
-    ("DXY", "DX-Y.NYB", ("TVC:DXY",)),
-    ("WTI crude", "CL=F", ("TVC:USOIL", "NYMEX:CL1!")),
-    ("Hang Seng", "^HSI", ("HSI:HSI",)),
-    ("Nikkei 225", "^N225", ("TVC:NI225",)),
-    ("Shanghai Composite", "000001.SS", ("SSE:000001",)),
-    ("KOSPI", "^KS11", ("KRX:KOSPI",)),
-    ("ASX 200", "^AXJO", ("ASX:XJO",)),
+    ("US Tech 100 Fut", "US_TECH_FUT", ("CME_MINI:NQ1!", "CME:NQ1!"), "US_TECH_FUT"),
+    ("US 30 Fut", "US_30_FUT", ("CBOT:YM1!", "CME_MINI:YM1!"), "US_30_FUT"),
+    ("US 10Y yield", "^TNX", ("TVC:US10Y",), "^TNX"),
+    ("DXY", "DX-Y.NYB", ("TVC:DXY",), "DX-Y.NYB"),
+    ("WTI crude", "CL=F", ("TVC:USOIL", "NYMEX:CL1!"), "CL=F"),
+    ("Hang Seng", "^HSI", ("HSI:HSI",), "^HSI"),
+    ("Nikkei 225", "^N225", ("TVC:NI225",), "^N225"),
+    ("Shanghai Composite", "000001.SS", ("SSE:000001",), "000001.SS"),
+    ("KOSPI", "^KS11", ("KRX:KOSPI",), "^KS11"),
+    ("ASX 200", "^AXJO", ("ASX:XJO",), "^AXJO"),
 ]
 macro_quotes = {}
-for label, ticker, tv_symbols in macro_specs:
-    macro_quotes[label] = fetch_commodity_live(ticker, tv_symbols)
-
-# News feed: China / Asia / US macro. Headlines are context, not a sentiment model.
-news_items = []
-try:
-    rss_url = "https://news.google.com/rss/search?q=(China+OR+Asian+markets+OR+Japan+OR+Hong+Kong+OR+Federal+Reserve+OR+US+inflation+OR+Treasury+yields+OR+crude+oil)+when:2d&hl=en-IN&gl=IN&ceid=IN:en"
-    nr = requests.get(rss_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=7)
-    if nr.ok:
-        import xml.etree.ElementTree as ET
-        root = ET.fromstring(nr.content)
-        for item in root.findall(".//item")[:6]:
-            title = item.findtext("title")
-            link = item.findtext("link")
-            if title:
-                news_items.append({"title": title, "link": link or ""})
-except Exception:
-    pass
+for label, key, tv_symbols, inv_key in macro_specs:
+    macro_quotes[label] = fetch_live_instrument(key, tv_symbols, inv_key)
 
 st.markdown("**Macro pointers**")
 macro_lines = []
-for label in ["US Tech 100", "US 30", "US 10Y yield", "DXY", "WTI crude"]:
+for label in ["US Tech 100 Fut", "US 30 Fut", "US 10Y yield", "DXY", "WTI crude"]:
     q = macro_quotes.get(label)
     if q:
         macro_lines.append(f"**{label}:** {q['price']:,.2f} ({q['change']:+.2f}, {q['pct']:+.2f}%).")
-# Asian index prices are already shown above; avoid duplicating their quote figures here.
-macro_lines.append("**China & Asia:** Track China growth/stimulus news, regional risk appetite and overnight Asian-market direction for potential effects on FII flows and India's opening sentiment.")
-if news_items:
-    macro_lines.append("**Latest US/China/Asia headlines:** " + " | ".join(x["title"] for x in news_items[:3]))
-if macro_lines:
-    for line in macro_lines[:6]:
-        st.markdown(f"- {line}")
-else:
-    st.info("Global macro quotes are temporarily unavailable; check the source sites directly.")
 
-# Transparent, rule-based bias: only directional when multiple independent cues agree.
+# Sharper China & Asia analysis
+china_asia = get_china_asia_context()
+macro_lines.append("**China & Asia (key drivers):**")
+for p in china_asia[:4]:
+    macro_lines.append(f"• {p}")
+
+if macro_lines:
+    for line in macro_lines:
+        st.markdown(f"- {line}" if not line.startswith("**China") and not line.startswith("•") else line)
+else:
+    st.info("Global macro quotes are temporarily unavailable.")
+
+# Rule-based global bias
 score = 0
 signals = []
 if nifty_an:
     if nifty_an["above_vwap"] and nifty_an["current"] > nifty_an["avg_5d"]:
-        score += 2; signals.append("Nifty above 5-day VWAP and average (+2)")
+        score += 2
+        signals.append("Nifty above 5-day VWAP and average (+2)")
     elif (not nifty_an["above_vwap"]) and nifty_an["current"] < nifty_an["avg_5d"]:
-        score -= 2; signals.append("Nifty below 5-day VWAP and average (-2)")
+        score -= 2
+        signals.append("Nifty below 5-day VWAP and average (-2)")
 if gift and gift.get("pct", 0) != 0:
     score += 1 if gift["pct"] > 0 else -1
-    signals.append(f"GIFT Nifty change {gift['pct']:+.2f}%")
-for label in ["US Tech 100", "US 30", "Hang Seng", "Nikkei 225", "Shanghai Composite"]:
+    signals.append(f"GIFT Nifty 50 Fut {gift['pct']:+.2f}%")
+for label in ["US Tech 100 Fut", "US 30 Fut", "Hang Seng", "Nikkei 225", "Shanghai Composite"]:
     q = macro_quotes.get(label)
     if q and abs(q.get("pct", 0)) >= 0.15:
         score += 1 if q["pct"] > 0 else -1
         signals.append(f"{label} {q['pct']:+.2f}%")
-# Stronger dollar and rising oil are often headwinds for India; direction is only a modest factor.
 for label, weight in [("DXY", -1), ("WTI crude", -1)]:
     q = macro_quotes.get(label)
     if q and q.get("pct", 0) >= 0.5:
-        score += weight; signals.append(f"{label} rising {q['pct']:+.2f}% (India headwind)")
+        score += weight
+        signals.append(f"{label} rising {q['pct']:+.2f}% (India headwind)")
     elif q and q.get("pct", 0) <= -0.5:
-        score -= weight; signals.append(f"{label} falling {q['pct']:+.2f}% (India tailwind)")
+        score -= weight
+        signals.append(f"{label} falling {q['pct']:+.2f}% (India tailwind)")
 if score >= 2:
     global_bias = "🟢 BUY BIAS"
     bias_explain = "The available technical and global cues lean positive. Prefer confirmation at the open; avoid chasing gaps."
@@ -1174,7 +1353,7 @@ st.markdown(f"### Global Bias for the Day: {global_bias}")
 st.write(bias_explain)
 if signals:
     st.caption("Bias inputs: " + "; ".join(signals[:8]))
-st.caption("This is a transparent rule-based indicator, not a prediction or financial advice. Quote sources may be delayed; headlines are not automatically scored. Confirm prices with your broker before trading.")
+st.caption("Transparent rule-based indicator only — not financial advice. Confirm prices with your broker.")
 
 st.markdown("---")
 
@@ -1184,10 +1363,11 @@ st.markdown('<div class="section-header">📊 Market Breadth & Put-Call Ratio</d
 bullish_cnt, bearish_cnt = get_market_breadth(universe)
 nifty_pcr = get_pcr("NIFTY")
 bank_pcr = get_pcr("BANKNIFTY")
-# Keep the most recently fetched valid PCR visible if NSE temporarily throttles the next refresh.
-# The caption below identifies the value as last available when a refresh fails.
+
+# Persist last successful PCR; keep showing it post-market until next session
 if nifty_pcr is not None:
     st.session_state["last_nifty_pcr"] = nifty_pcr
+    st.session_state["last_pcr_time"] = datetime.now(ist).strftime("%d %b %H:%M IST")
 elif st.session_state.get("last_nifty_pcr") is not None:
     nifty_pcr = st.session_state["last_nifty_pcr"]
 if bank_pcr is not None:
@@ -1195,13 +1375,21 @@ if bank_pcr is not None:
 elif st.session_state.get("last_bank_pcr") is not None:
     bank_pcr = st.session_state["last_bank_pcr"]
 
+pcr_note = ""
+if not is_nse_market_hours() and st.session_state.get("last_nifty_pcr") is not None:
+    pcr_note = f" (last live value @ {st.session_state.get('last_pcr_time', 'prior session')} — refreshes after 09:15 IST)"
+
 b1, b2, b3, b4 = st.columns(4)
 b1.metric("🟢 Bullish Stocks (Nifty 50)", bullish_cnt)
 b2.metric("🔴 Bearish Stocks (Nifty 50)", bearish_cnt)
 b3.metric("Nifty PCR (OI)", f"{nifty_pcr:.3f}" if nifty_pcr is not None else "Unavailable")
 b4.metric("Bank Nifty PCR (OI)", f"{bank_pcr:.3f}" if bank_pcr is not None else "Unavailable")
 
-st.caption("PCR = total put OI ÷ total call OI. If NSE temporarily blocks refresh, the last successfully fetched PCR remains visible. PCR > 1.2 can indicate stronger put OI; PCR < 0.8 can indicate stronger call OI. Breadth uses Nifty 50 constituents.")
+st.caption(
+    "PCR = total put OI ÷ total call OI (NSE option-chain). "
+    "During market hours the value refreshes live; after close the last successful reading is retained until the next open."
+    + pcr_note
+)
 
 st.markdown("---")
 
@@ -1369,9 +1557,11 @@ else:
     sc5.metric("⚡ Just Entered", just_entered_count)
 
     display_df = signal_df.copy()
+
     def format_signal(row):
         base = {"BUY": "🟢 BUY", "BULLISH": "🟩 BULLISH", "SELL": "🔴 SELL", "BEARISH": "🟥 BEARISH"}.get(row["Signal"], row["Signal"])
         return f"⚡{base}" if row["Just Entered"] else base
+
     display_df["Signal"] = display_df.apply(format_signal, axis=1)
 
     def highlight_just_entered(row):
@@ -1433,18 +1623,118 @@ gainers, losers = get_top_movers(universe)
 gcol, lcol = st.columns(2)
 with gcol:
     st.markdown("##### 🟢 Top Gainers")
-    if gainers is not None:
+    if gainers is not None and not gainers.empty:
         st.dataframe(gainers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
                      use_container_width=True, hide_index=True)
     else:
         st.info("Loading...")
 with lcol:
     st.markdown("##### 🔴 Top Losers")
-    if losers is not None:
+    if losers is not None and not losers.empty:
         st.dataframe(losers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
                      use_container_width=True, hide_index=True)
     else:
         st.info("Loading...")
+
+st.markdown("---")
+
+# -------------------------------------------------
+# Most Active — Value & Volume (NSE, all stocks)
+# -------------------------------------------------
+st.markdown('<div class="section-header">🔥 Most Active Stocks (NSE — All Equities)</div>', unsafe_allow_html=True)
+st.caption("Top 10 by traded value and by volume. Source: NSE India live-analysis. Not limited to Nifty 50.")
+
+ma_val = get_most_active("value")
+ma_vol = get_most_active("volume")
+
+mac1, mac2 = st.columns(2)
+with mac1:
+    st.markdown("##### 💰 Most Active by Value")
+    if not ma_val.empty:
+        st.dataframe(
+            ma_val.style.format({"LTP": "₹{:,.2f}", "% Chg": "{:+.2f}%", "Volume": "{:,.0f}", "Value (₹ Lakh)": "{:,.2f}"}),
+            use_container_width=True, hide_index=True
+        )
+    else:
+        st.info("Most-active value list temporarily unavailable (NSE throttle or off-hours).")
+with mac2:
+    st.markdown("##### 📦 Most Active by Volume")
+    if not ma_vol.empty:
+        st.dataframe(
+            ma_vol.style.format({"LTP": "₹{:,.2f}", "% Chg": "{:+.2f}%", "Volume": "{:,.0f}", "Value (₹ Lakh)": "{:,.2f}"}),
+            use_container_width=True, hide_index=True
+        )
+    else:
+        st.info("Most-active volume list temporarily unavailable (NSE throttle or off-hours).")
+
+st.markdown("---")
+
+# -------------------------------------------------
+# Nifty 50 Heatmap
+# -------------------------------------------------
+st.markdown('<div class="section-header">🗺️ Nifty 50 Heatmap</div>', unsafe_allow_html=True)
+st.caption("Colour intensity = day % change. Green = up, Red = down.")
+
+heat_df = get_nifty50_heatmap(universe)
+if heat_df.empty:
+    st.info("Heatmap data temporarily unavailable.")
+else:
+    heat_df = heat_df.sort_values("% Chg", ascending=False)
+    html_cells = []
+    for _, row in heat_df.iterrows():
+        pct = row["% Chg"]
+        # colour scale
+        if pct >= 2:
+            bg = "#059669"
+        elif pct >= 1:
+            bg = "#10b981"
+        elif pct >= 0.3:
+            bg = "#34d399"
+        elif pct > -0.3:
+            bg = "#64748b"
+        elif pct > -1:
+            bg = "#f87171"
+        elif pct > -2:
+            bg = "#ef4444"
+        else:
+            bg = "#b91c1c"
+        html_cells.append(
+            f'<div class="heat-cell" style="background:{bg};">'
+            f'{row["Symbol"]}<br>{pct:+.2f}%<br>₹{row["LTP"]:,.1f}</div>'
+        )
+    st.markdown("".join(html_cells), unsafe_allow_html=True)
+
+st.markdown("---")
+
+# -------------------------------------------------
+# Corporate Actions (Nifty 50)
+# -------------------------------------------------
+st.markdown('<div class="section-header">📋 Corporate Actions — Nifty 50</div>', unsafe_allow_html=True)
+st.caption("Forthcoming dividends, bonuses, splits, rights etc. Source: NSE corporate filings.")
+
+ca_df = get_corporate_actions(universe)
+if ca_df.empty:
+    st.info("No upcoming corporate actions found for Nifty 50 names, or NSE endpoint temporarily blocked.")
+else:
+    st.dataframe(ca_df, use_container_width=True, hide_index=True)
+
+st.markdown("---")
+
+# -------------------------------------------------
+# Top 5 Business News (30-min refresh)
+# -------------------------------------------------
+st.markdown('<div class="section-header">📰 Top 5 Market-Moving Business News</div>', unsafe_allow_html=True)
+st.caption("Global + India headlines that can influence equity, FX, rates or commodity markets. Auto-refreshes every 30 minutes.")
+
+biz_news = get_top_business_news()
+if not biz_news:
+    st.info("News feed temporarily unavailable.")
+else:
+    for i, n in enumerate(biz_news, 1):
+        if n.get("link"):
+            st.markdown(f"**{i}.** [{n['title']}]({n['link']})")
+        else:
+            st.markdown(f"**{i}.** {n['title']}")
 
 # Auto refresh
 if auto_refresh:
