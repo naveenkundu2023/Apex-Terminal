@@ -1891,10 +1891,13 @@ for i in range(0, len(items), 6):
                     <div class="index-change {color}">{change_str} ({sign}{data['pct']:.2f}%)</div>
                 </div>
                 """, unsafe_allow_html=True)
-                if mode == "gift":
-                    source_label = str(data.get("source", "Source unavailable"))
+                 if mode == "gift":
                     time_label = str(data.get("source_time_label", "timestamp unavailable"))
-                    st.caption(f"Source: {source_label} · Updated: {time_label}")
+                    st.markdown(
+                        f'<div style="font-size:7px; color:#8a8a8a; '
+                        f'text-align:center; margin-top:-2px;">{time_label}</div>',
+                        unsafe_allow_html=True
+                    )
             else:
                 st.markdown(f"""
                 <div class="metric-card">
