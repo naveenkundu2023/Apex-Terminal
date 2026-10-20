@@ -1884,20 +1884,20 @@ for i in range(0, len(items), 6):
                     else:
                         price_str = f"{data['price']:,.2f}"
                     change_str = f"{sign}{data['change']:.2f}"
+                time_label = str(data.get("source_time_label", "timestamp unavailable")) if mode == "gift" else ""
+                gift_time_html = (
+                    f'<div style="font-size:7px;color:#8a8a8a;text-align:center;'
+                    f'margin-top:2px;line-height:1.1;">{time_label}</div>'
+                    if mode == "gift" else ""
+                )
                 st.markdown(f"""
                 <div class="{card_cls}">
                     <div class="index-title">{name}</div>
                     <div class="index-price">{price_str}</div>
                     <div class="index-change {color}">{change_str} ({sign}{data['pct']:.2f}%)</div>
+                    {gift_time_html}
                 </div>
                 """, unsafe_allow_html=True)
-                 if mode == "gift":
-                    time_label = str(data.get("source_time_label", "timestamp unavailable"))
-                    st.markdown(
-                        f'<div style="font-size:7px; color:#8a8a8a; '
-                        f'text-align:center; margin-top:-2px;">{time_label}</div>',
-                        unsafe_allow_html=True
-                    )
             else:
                 st.markdown(f"""
                 <div class="metric-card">
