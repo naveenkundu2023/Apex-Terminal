@@ -1,9 +1,9 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-20 (v3 — UI + fallbacks + Built-up)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-20 (v4 — GIFT timestamp selection + soft index cards)
 # Changes in this build (on top of v2):
 # 1) Select-stock / timeframe labels readable (white / high-contrast in dark theme).
 # 2) Market Indices cards: no triangles; whole card tinted light-green (up) / light-pink (down).
-# 3) GIFT Nifty: Upstox, TradingView, Moneycontrol, then Investing.com chart as final fallback.
-# 3b) Index cards use solid heatmap green/red (same palette as Nifty 50 heatmap).
+# 3) GIFT Nifty: compare timestamps across Upstox, TradingView, Moneycontrol and Investing.com; select newest timestamp when available.
+# 3b) Market index/global instrument cards use very soft pastel green/red backgrounds for reduced glare.
 # 4) US Tech 100 final fallback: tradingeconomics.com/us100:ind ; US 30: tradingeconomics.com/indu:ind.
 # 5) China & Asia: business-only headlines (no sports), 5–6 items + deeper scenario take.
 # 6) Corporate Actions + Top-5 news: high-visibility text inside analysis-box containers.
@@ -150,21 +150,23 @@ def apply_theme(theme: str):
             div[data-baseweb="select"] > div, div[data-baseweb="select"] span {
                 color: #f8fafc !important;
             }
-            /* Up / Down tinted metric cards (heatmap-like shades) */
+            /* Soft pastel up/down cards: intentionally low-glare on mobile */
             .metric-card-up {
-                background: linear-gradient(145deg, #10b981, #059669) !important;
-                border: 1px solid #34d399 !important;
+                background: #eaf6ed !important;
+                border: 1px solid #d3e9d8 !important;
+                box-shadow: none !important;
             }
             .metric-card-down {
-                background: linear-gradient(145deg, #f87171, #ef4444) !important;
-                border: 1px solid #fca5a5 !important;
+                background: #fbeeee !important;
+                border: 1px solid #f0d6d6 !important;
+                box-shadow: none !important;
             }
             .metric-card-up .index-title,
-            .metric-card-down .index-title { color: rgba(255,255,255,0.85) !important; }
+            .metric-card-down .index-title { color: #52615a !important; }
             .metric-card-up .index-price,
-            .metric-card-down .index-price { color: #ffffff !important; }
-            .metric-card-up .index-change,
-            .metric-card-down .index-change { color: #ffffff !important; }
+            .metric-card-down .index-price { color: #26332b !important; }
+            .metric-card-up .index-change { color: #386b49 !important; }
+            .metric-card-down .index-change { color: #8a4545 !important; }
             .builtup-wrap {
                 background: linear-gradient(145deg, rgba(30,41,59,0.95), rgba(15,23,42,0.98));
                 border: 1px solid rgba(99,102,241,0.35);
@@ -268,20 +270,23 @@ def apply_theme(theme: str):
             label, .stSelectbox label, .stRadio label, [data-testid="stWidgetLabel"] p {
                 color: #0f172a !important; font-weight: 600 !important;
             }
+            /* Soft pastel up/down cards: intentionally low-glare on mobile */
             .metric-card-up {
-                background: linear-gradient(145deg, #34d399, #10b981) !important;
-                border: 1px solid #059669 !important;
+                background: #eaf6ed !important;
+                border: 1px solid #d3e9d8 !important;
+                box-shadow: none !important;
             }
             .metric-card-down {
-                background: linear-gradient(145deg, #f87171, #ef4444) !important;
-                border: 1px solid #dc2626 !important;
+                background: #fbeeee !important;
+                border: 1px solid #f0d6d6 !important;
+                box-shadow: none !important;
             }
             .metric-card-up .index-title,
-            .metric-card-down .index-title { color: rgba(255,255,255,0.9) !important; }
+            .metric-card-down .index-title { color: #52615a !important; }
             .metric-card-up .index-price,
-            .metric-card-down .index-price { color: #ffffff !important; }
-            .metric-card-up .index-change,
-            .metric-card-down .index-change { color: #ffffff !important; }
+            .metric-card-down .index-price { color: #26332b !important; }
+            .metric-card-up .index-change { color: #386b49 !important; }
+            .metric-card-down .index-change { color: #8a4545 !important; }
             .builtup-wrap {
                 background: #ffffff; border: 1px solid #c7d2fe;
                 border-radius: 12px; padding: 14px; overflow-x: auto;
@@ -625,240 +630,195 @@ def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None, ya
             return teq
     return None
 
-@st.cache_data(ttl=15, show_spinner=False)
+@st.cache_data(ttl=10, show_spinner=False)
 def fetch_gift_nifty_50():
-    """GIFT Nifty 50 — Upstox primary (https://upstox.com/gift-nifty/), then other fallbacks."""
+    """Fetch GIFT Nifty from all available sources and prefer the newest parseable source timestamp.
+
+    A timestamp is only assigned when the response contains a recognisable update-time marker.
+    TradingView scanner quotes are used as an untimestamped fallback because its scanner response
+    does not provide a comparable quote timestamp in this implementation.
+    """
+    ist = pytz.timezone("Asia/Kolkata")
+    now_ist = datetime.now(ist)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": "https://upstox.com/",
     }
+    candidates = []
 
-    # ---------- 1) Upstox (primary) ----------
+    def parse_timestamp(raw_text, source):
+        """Parse explicit source update-time text to an IST-aware datetime; otherwise return None."""
+        if not raw_text:
+            return None
+        raw = re.sub(r"\s+", " ", raw_text).strip()
+        # Prefer explicit full dates and times.
+        patterns = [
+            (r"(?:last\s+updated(?:\s+on)?|updated\s+at|as\s+on)\s*[:|-]?\s*(\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{4})\s*(?:\||,|at)?\s*(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\s*(?:IST|GMT\+?5:?30)?)", ["%d %b, %Y %H:%M:%S", "%d %b, %Y %H:%M", "%d %b, %Y %I:%M %p", "%d %B, %Y %H:%M:%S", "%d %B, %Y %H:%M", "%d %B, %Y %I:%M %p"]),
+            (r"(?:last\s+updated(?:\s+on)?|updated\s+at|as\s+on)\s*[:|-]?\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\s*(?:\||,|at)?\s*(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\s*(?:IST|GMT\+?5:?30)?)", ["%b %d, %Y %H:%M:%S", "%b %d, %Y %H:%M", "%b %d, %Y %I:%M %p", "%B %d, %Y %H:%M:%S", "%B %d, %Y %H:%M", "%B %d, %Y %I:%M %p"]),
+            (r"(?:last\s+updated(?:\s+on)?|updated\s+at|as\s+on)\s*[:|-]?\s*(\d{4}-\d{2}-\d{2})[ T,]+(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\s*(?:IST|GMT\+?5:?30)?)", ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %I:%M %p"]),
+        ]
+        for pattern, formats in patterns:
+            m = re.search(pattern, raw, re.I)
+            if not m:
+                continue
+            date_part, time_part = m.group(1).strip(), m.group(2).strip()
+            time_part = re.sub(r"\s*(IST|GMT\+?5:?30)$", "", time_part, flags=re.I).strip()
+            combined = f"{date_part} {time_part}"
+            for fmt in formats:
+                try:
+                    dt = datetime.strptime(combined, fmt)
+                    return ist.localize(dt)
+                except ValueError:
+                    continue
+        # Investing.com may show only a clock time beside a market status.
+        if source == "Investing.com":
+            m = re.search(r"(?:closed|last updated|updated)\s*[·|,:-]?\s*(\d{1,2}:\d{2}:\d{2})", raw, re.I)
+            if m:
+                try:
+                    dt = datetime.strptime(now_ist.strftime("%Y-%m-%d") + " " + m.group(1), "%Y-%m-%d %H:%M:%S")
+                    parsed = ist.localize(dt)
+                    # Avoid treating a clock time far in the future as a current update.
+                    if parsed <= now_ist:
+                        return parsed
+                except ValueError:
+                    pass
+        return None
+
+    def add_candidate(price, change, pct, source, timestamp=None):
+        try:
+            price = float(price)
+            change = float(change or 0)
+            pct = float(pct or 0)
+            if 15000 < price < 40000:
+                candidates.append({
+                    "price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2),
+                    "source": source, "source_timestamp": timestamp,
+                    "source_time_label": timestamp.strftime("%d %b %Y, %H:%M:%S IST") if timestamp else "timestamp unavailable",
+                })
+        except (TypeError, ValueError):
+            pass
+
+    # 1) Upstox — parse both the quote and any explicit update timestamp.
     try:
         r = requests.get("https://upstox.com/gift-nifty/", headers=headers, timeout=8)
         if r.status_code == 200:
             html = r.text
+            timestamp = parse_timestamp(re.sub(r"<[^>]+>", " ", html), "Upstox")
             plain = re.sub(r"<script.*?</script>", " ", html, flags=re.I | re.S)
             plain = re.sub(r"<[^>]+>", " ", plain)
             plain = re.sub(r"\s+", " ", plain)
-
-            # Pattern: 23,059.00  -35.50 (-0.15%)
-            m = re.search(
-                r"(2[0-9],\d{3}\.\d{2})\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)\s*\(\s*([+-]?\d+\.?\d*)\s*%\s*\)",
-                plain,
-            )
+            m = re.search(r"(2[0-9],\d{3}\.\d{2})\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)\s*\(\s*([+-]?\d+\.?\d*)\s*%\s*\)", plain)
             if m:
-                price = float(m.group(1).replace(",", ""))
-                change = float(m.group(2).replace(",", ""))
-                pct = float(m.group(3))
-                if 15000 < price < 40000:
-                    return {
-                        "price": round(price, 2),
-                        "change": round(change, 2),
-                        "pct": round(pct, 2),
-                        "source": "Upstox GIFT Nifty",
-                    }
-
-            prev_m = re.search(r"Previous session close\s*([\d,]+\.?\d*)", plain, re.I)
-            price_m = re.search(r"GIFT NIFTY Live.*?(\d{2},\d{3}\.\d{2})", plain, re.I | re.S)
-            if not price_m:
-                price_m = re.search(r"(2[0-9],\d{3}\.\d{2})", plain)
-            if price_m:
-                price = float(price_m.group(1).replace(",", ""))
-                change = pct = 0.0
-                if prev_m:
-                    prev = float(prev_m.group(1).replace(",", ""))
-                    change = price - prev
-                    pct = (change / prev * 100) if prev else 0
-                if 15000 < price < 40000:
-                    return {
-                        "price": round(price, 2),
-                        "change": round(change, 2),
-                        "pct": round(pct, 2),
-                        "source": "Upstox GIFT Nifty",
-                    }
+                add_candidate(m.group(1).replace(",", ""), m.group(2).replace(",", ""), m.group(3), "Upstox GIFT Nifty", timestamp)
+            else:
+                pm = re.search(r"GIFT NIFTY Live.*?(2[0-9],\d{3}\.\d{2})", plain, re.I | re.S) or re.search(r"(2[0-9],\d{3}\.\d{2})", plain)
+                prev_m = re.search(r"Previous session close\s*([\d,]+\.?\d*)", plain, re.I)
+                if pm:
+                    price = float(pm.group(1).replace(",", ""))
+                    prev = float(prev_m.group(1).replace(",", "")) if prev_m else price
+                    add_candidate(price, price-prev, ((price-prev)/prev*100 if prev else 0), "Upstox GIFT Nifty", timestamp)
     except Exception:
         pass
 
-    # ---------- 2) TradingView ----------
-    for symbol in ("NSEIX:NIFTY1!", "NSEIX:NIFTY2!", "NSEIX:GIFTNIFTY1!", "NSEIX:GIFTNIFTY"):
-        quote = fetch_tradingview_quote(symbol)
-        if quote and 15000 < quote["price"] < 40000:
-            quote["source"] = f"TradingView ({symbol})"
-            return quote
-
-    # ---------- 3) Moneycontrol ----------
+    # 2) Moneycontrol — use its explicit 'As on' timestamp when present.
     try:
-        r = requests.get(
-            "https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx",
-            headers={**headers, "Referer": "https://www.moneycontrol.com/"},
-            timeout=8,
-        )
+        r = requests.get("https://www.moneycontrol.com/live-index/gift-nifty?symbol=in;gsx", headers={**headers, "Referer": "https://www.moneycontrol.com/"}, timeout=8)
         if r.status_code == 200:
-            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
-            chg_m = re.search(
-                r"([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*\(\s*([+-]?\d+\.?\d*)\s*%\s*\)",
-                plain,
-            )
+            html = r.text
+            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+            timestamp = parse_timestamp(plain, "Moneycontrol")
+            # Also support the commonly displayed 'As on 20 Oct, 2026 | 20:47 IST' layout.
+            if timestamp is None:
+                tm = re.search(r"As\s+on\s+(\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{4})\s*[|,]?\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*IST", plain, re.I)
+                if tm:
+                    for fmt in ("%d %b, %Y %H:%M:%S", "%d %b, %Y %H:%M", "%d %B, %Y %H:%M:%S", "%d %B, %Y %H:%M"):
+                        try:
+                            timestamp = ist.localize(datetime.strptime(tm.group(1) + " " + tm.group(2), fmt))
+                            break
+                        except ValueError:
+                            continue
+            # Prefer a number near the GIFT Nifty label rather than the first 5-digit number on the page.
+            price = None
+            for pat in (r"GIFT\s*Nifty.{0,180}?(2[0-9],\d{3}(?:\.\d{1,2})?)", r"(2[0-9],\d{3}(?:\.\d{1,2})?).{0,100}?GIFT\s*Nifty"):
+                pm = re.search(pat, plain, re.I)
+                if pm:
+                    price = float(pm.group(1).replace(",", "")); break
+            if price is None:
+                nums = re.findall(r"(2[0-9],\d{3}(?:\.\d{1,2})?)", plain)
+                if nums:
+                    price = float(nums[0].replace(",", ""))
+            chg_m = re.search(r"([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*\(\s*([+-]?\d+\.?\d*)\s*%\s*\)", plain)
             prev_m = re.search(r"Previous\s*Close\s*([\d,]+\.?\d*)", plain, re.I)
-            nums = re.findall(r"(2[0-9],\d{3}(?:\.\d{1,2})?)", plain)
-            if nums:
-                price = float(nums[0].replace(",", ""))
-                change = pct = 0.0
+            if price is not None:
                 if chg_m:
-                    change = float(chg_m.group(1).replace(",", ""))
-                    pct = float(chg_m.group(2))
+                    change, pct = float(chg_m.group(1).replace(",", "")), float(chg_m.group(2))
                 elif prev_m:
-                    prev = float(prev_m.group(1).replace(",", ""))
-                    change = price - prev
-                    pct = (change / prev * 100) if prev else 0
-                if 15000 < price < 40000:
-                    return {
-                        "price": round(price, 2),
-                        "change": round(change, 2),
-                        "pct": round(pct, 2),
-                        "source": "Moneycontrol GIFT Nifty",
-                    }
+                    prev = float(prev_m.group(1).replace(",", "")); change = price-prev; pct = change/prev*100 if prev else 0
+                else:
+                    change = pct = 0
+                add_candidate(price, change, pct, "Moneycontrol GIFT Nifty", timestamp)
     except Exception:
         pass
 
-    # ---------- 4) TradingView symbol page (final fallback) ----------
-    # https://in.tradingview.com/symbols/NSEIX-NIFTY1!/
+    # 3) Investing.com — inspect both the page's quote and any explicit update time.
     try:
-        tv_headers = {
-            **headers,
-            "Referer": "https://in.tradingview.com/",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }
-        for path in (
-            "https://in.tradingview.com/symbols/NSEIX-NIFTY1!/",
-            "https://www.tradingview.com/symbols/NSEIX-NIFTY1!/",
-        ):
-            r = requests.get(path, headers=tv_headers, timeout=8)
-            if r.status_code != 200:
-                continue
-            html = r.text
-            # meta description / JSON-LD style numbers
-            m = re.search(
-                r'(?:last|close|price)["\s:]+([0-9]{4,5}(?:\.[0-9]+)?)',
-                html, re.I
-            )
-            # TradingView often embeds: "close":23059.5 or similar
-            m2 = re.search(r'"close"\s*:\s*([0-9]+(?:\.[0-9]+)?)', html)
-            m3 = re.search(r'data-field="last_price"[^>]*>([0-9,]+(?:\.[0-9]+)?)', html)
-            price = None
-            for mx in (m2, m3, m):
-                if mx:
-                    try:
-                        price = float(mx.group(1).replace(",", ""))
-                        if 15000 < price < 40000:
-                            break
-                        price = None
-                    except Exception:
-                        price = None
-            if price is None:
-                # broader: any 5-digit with 2 decimals in range
-                nums = re.findall(r'\b(2[0-9],\d{3}\.\d{2}|2[0-9]\d{3}\.\d{2})\b', html)
-                for n in nums:
-                    try:
-                        v = float(n.replace(",", ""))
-                        if 15000 < v < 40000:
-                            price = v
-                            break
-                    except Exception:
-                        continue
-            if price is None:
-                continue
-            change = pct = 0.0
-            chg_m = re.search(
-                r'"change"\s*:\s*([+-]?[0-9.]+).*?"change_percent"\s*:\s*([+-]?[0-9.]+)',
-                html, re.I | re.S
-            )
-            if not chg_m:
-                chg_m = re.search(
-                    r'([+-]?[0-9]+(?:\.[0-9]+)?)\s*\(\s*([+-]?[0-9.]+)\s*%\s*\)',
-                    html
-                )
-            if chg_m:
-                try:
-                    change = float(chg_m.group(1))
-                    pct = float(chg_m.group(2))
-                except Exception:
-                    pass
-            return {
-                "price": round(price, 2),
-                "change": round(change, 2),
-                "pct": round(pct, 2),
-                "source": "TradingView NSEIX-NIFTY1!",
-            }
-    except Exception:
-        pass
-
-    # ---------- 5) Investing.com GIFT Nifty 50 Futures (final fallback) ----------
-    # User-requested source: https://in.investing.com/indices/gift-nifty-50-c1-futures-chart
-    try:
-        gift_url = "https://in.investing.com/indices/gift-nifty-50-c1-futures-chart"
-        r = requests.get(
-            gift_url,
-            headers={
-                **headers,
-                "Referer": "https://in.investing.com/",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            },
-            timeout=10,
-        )
+        gift_url = "https://in.investing.com/indices/gift-nifty-50-c1-futures"
+        r = requests.get(gift_url, headers={**headers, "Referer": "https://in.investing.com/"}, timeout=10)
         if r.status_code == 200:
             html = r.text
-
-            def gift_num(raw):
-                if raw is None:
-                    return None
-                cleaned = re.sub(r"[^0-9.+-]", "", str(raw).replace(",", ""))
-                try:
-                    return float(cleaned) if cleaned not in ("", "+", "-") else None
-                except ValueError:
-                    return None
-
-            price = None
-            # Prefer Investing.com's explicit instrument-price element.
-            price_patterns = [
-                r"data-test=.instrument-price-last.[^>]*>\s*([0-9,]+(?:\.[0-9]+)?)",
-                r"\"last\"\s*:\s*\"?([0-9,]+(?:\.[0-9]+)?)\"?",
-                r"\"last_price\"\s*:\s*\"?([0-9,]+(?:\.[0-9]+)?)\"?",
-                r"\"price\"\s*:\s*\"?([0-9,]+(?:\.[0-9]+)?)\"?",
-            ]
-            for pattern in price_patterns:
-                match = re.search(pattern, html, re.I | re.S)
-                if match:
-                    candidate = gift_num(match.group(1))
-                    if candidate is not None and 15000 < candidate < 40000:
-                        price = candidate
-                        break
-
-            if price is not None:
-                change = pct = 0.0
-                change_match = re.search(
-                    r"data-test=.instrument-price-change.[^>]*>\s*([^<]+)",
-                )
-                pct_match = re.search(
-                    r"data-test=.instrument-price-change-percent.[^>]*>\s*([^<]+)",
-                )
-                if change_match:
-                    change = gift_num(change_match.group(1)) or 0.0
-                if pct_match:
-                    pct = gift_num(pct_match.group(1)) or 0.0
-                return {
-                    "price": round(price, 2),
-                    "change": round(change, 2),
-                    "pct": round(pct, 2),
-                    "source": "Investing.com GIFT Nifty 50 Futures",
-                }
+            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+            timestamp = parse_timestamp(plain, "Investing.com")
+            if timestamp is None:
+                # Parse explicit instrument update markers only; do not infer a timestamp from arbitrary page metadata.
+                tm = re.search(r"(?:instrument-price-last-update|last-update|lastUpdate)[^>]{0,160}>([^<]{0,100})<", html, re.I)
+                if tm:
+                    timestamp = parse_timestamp(tm.group(1), "Investing.com")
+            def num(raw):
+                if not raw: return None
+                cleaned = re.sub(r"[^0-9.+-]", "", raw.replace(",", ""))
+                try: return float(cleaned) if cleaned not in ("", "+", "-") else None
+                except ValueError: return None
+            pm = re.search(r'data-test=["\']instrument-price-last["\'][^>]*>\s*([0-9,]+(?:\.\d+)?)', html, re.I)
+            if not pm:
+                pm = re.search(r'["\']last["\']\s*:\s*["\']?([0-9,]+(?:\.\d+)?)', html, re.I)
+            if pm:
+                price = num(pm.group(1))
+                cm = re.search(r'data-test=["\']instrument-price-change["\'][^>]*>\s*([^<]+)', html, re.I)
+                xm = re.search(r'data-test=["\']instrument-price-change-percent["\'][^>]*>\s*([^<]+)', html, re.I)
+                add_candidate(price, num(cm.group(1)) if cm else 0, num(xm.group(1)) if xm else 0, "Investing.com GIFT Nifty 50 Futures", timestamp)
     except Exception:
         pass
 
-    return None
+    # 4) TradingView scanner quote. Scanner response does not expose a reliable comparable timestamp.
+    for symbol in ("NSEIX:NIFTY1!", "NSEIX:NIFTY2!", "NSEIX:GIFTNIFTY1!", "NSEIX:GIFTNIFTY"):
+        try:
+            quote = fetch_tradingview_quote(symbol)
+            if quote and 15000 < quote["price"] < 40000:
+                quote = dict(quote)
+                quote["source"] = f"TradingView ({symbol})"
+                quote["source_timestamp"] = None
+                quote["source_time_label"] = "timestamp unavailable"
+                candidates.append(quote)
+                break
+        except Exception:
+            continue
+
+    if not candidates:
+        return None
+    timestamped = [q for q in candidates if q.get("source_timestamp") is not None]
+    if timestamped:
+        # Only choose among source quotes with explicit, parseable update times.
+        selected = max(timestamped, key=lambda q: q["source_timestamp"])
+        selected["timestamp_selection"] = "newest explicit source timestamp"
+        return selected
+    # If every source omits a parseable timestamp, disclose that limitation in the card caption.
+    # Preserve the established fallback priority rather than claiming any quote is demonstrably newest.
+    priority = {"Upstox GIFT Nifty": 0, "Moneycontrol GIFT Nifty": 1, "Investing.com GIFT Nifty 50 Futures": 2}
+    selected = min(candidates, key=lambda q: priority.get(q.get("source", ""), 3))
+    selected["timestamp_selection"] = "no source exposed a parseable timestamp"
+    return selected
 
 @st.cache_data(ttl=45)
 def fetch_stock_data(symbol: str):
@@ -1818,7 +1778,7 @@ col1, col2, col3 = st.columns([2.2, 1.2, 1])
 with col1:
     selected = st.selectbox("🔍 Select Stock (NSE)", options=dropdown_universe, index=0, key="selected")
 with col2:
-    auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=False)
+    auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=True)
 with col3:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("Refresh Now", use_container_width=True):
@@ -1931,6 +1891,10 @@ for i in range(0, len(items), 6):
                     <div class="index-change {color}">{change_str} ({sign}{data['pct']:.2f}%)</div>
                 </div>
                 """, unsafe_allow_html=True)
+                if mode == "gift":
+                    source_label = str(data.get("source", "Source unavailable"))
+                    time_label = str(data.get("source_time_label", "timestamp unavailable"))
+                    st.caption(f"Source: {source_label} · Updated: {time_label}")
             else:
                 st.markdown(f"""
                 <div class="metric-card">
