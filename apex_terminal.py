@@ -2,7 +2,7 @@
 # Changes in this build (on top of v2):
 # 1) Select-stock / timeframe labels readable (white / high-contrast in dark theme).
 # 2) Market Indices cards: no triangles; whole card tinted light-green (up) / light-pink (down).
-# 3) GIFT Nifty: Moneycontrol + TradingView page (NSEIX-NIFTY1!) as final fallbacks.
+# 3) GIFT Nifty: Upstox, TradingView, Moneycontrol, then Investing.com chart as final fallback.
 # 3b) Index cards use solid heatmap green/red (same palette as Nifty 50 heatmap).
 # 4) US Tech 100 final fallback: tradingeconomics.com/us100:ind ; US 30: tradingeconomics.com/indu:ind.
 # 5) China & Asia: business-only headlines (no sports), 5–6 items + deeper scenario take.
@@ -793,6 +793,68 @@ def fetch_gift_nifty_50():
                 "pct": round(pct, 2),
                 "source": "TradingView NSEIX-NIFTY1!",
             }
+    except Exception:
+        pass
+
+    # ---------- 5) Investing.com GIFT Nifty 50 Futures (final fallback) ----------
+    # User-requested source: https://in.investing.com/indices/gift-nifty-50-c1-futures-chart
+    try:
+        gift_url = "https://in.investing.com/indices/gift-nifty-50-c1-futures-chart"
+        r = requests.get(
+            gift_url,
+            headers={
+                **headers,
+                "Referer": "https://in.investing.com/",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            timeout=10,
+        )
+        if r.status_code == 200:
+            html = r.text
+
+            def gift_num(raw):
+                if raw is None:
+                    return None
+                cleaned = re.sub(r"[^0-9.+-]", "", str(raw).replace(",", ""))
+                try:
+                    return float(cleaned) if cleaned not in ("", "+", "-") else None
+                except ValueError:
+                    return None
+
+            price = None
+            # Prefer Investing.com's explicit instrument-price element.
+            price_patterns = [
+                r"data-test=.instrument-price-last.[^>]*>\s*([0-9,]+(?:\.[0-9]+)?)",
+                r"\"last\"\s*:\s*\"?([0-9,]+(?:\.[0-9]+)?)\"?",
+                r"\"last_price\"\s*:\s*\"?([0-9,]+(?:\.[0-9]+)?)\"?",
+                r"\"price\"\s*:\s*\"?([0-9,]+(?:\.[0-9]+)?)\"?",
+            ]
+            for pattern in price_patterns:
+                match = re.search(pattern, html, re.I | re.S)
+                if match:
+                    candidate = gift_num(match.group(1))
+                    if candidate is not None and 15000 < candidate < 40000:
+                        price = candidate
+                        break
+
+            if price is not None:
+                change = pct = 0.0
+                change_match = re.search(
+                    r"data-test=.instrument-price-change.[^>]*>\s*([^<]+)",
+                )
+                pct_match = re.search(
+                    r"data-test=.instrument-price-change-percent.[^>]*>\s*([^<]+)",
+                )
+                if change_match:
+                    change = gift_num(change_match.group(1)) or 0.0
+                if pct_match:
+                    pct = gift_num(pct_match.group(1)) or 0.0
+                return {
+                    "price": round(price, 2),
+                    "change": round(change, 2),
+                    "pct": round(pct, 2),
+                    "source": "Investing.com GIFT Nifty 50 Futures",
+                }
     except Exception:
         pass
 
@@ -1938,7 +2000,10 @@ macro_quotes = {}
 for label, key, tv_symbols, inv_key, yahoo_tk in macro_specs:
     macro_quotes[label] = fetch_live_instrument(key, tv_symbols, inv_key, yahoo_tk)
 
-st.markdown("**Macro pointers**")
+st.markdown(
+    '<div style="font-size:0.92rem; font-weight:600; margin-bottom:0.25rem;">Macro pointers</div>',
+    unsafe_allow_html=True,
+)
 macro_lines = []
 for label in ["US Tech 100 Fut", "US 30 Fut", "US 10Y yield", "DXY", "WTI crude"]:
     q = macro_quotes.get(label)
@@ -1957,10 +2022,18 @@ for d in deep:
 
 if macro_lines:
     for line in macro_lines:
-        if line.startswith("**China") or line.startswith("**Deep") or line.startswith("•") or line.startswith("→"):
-            st.markdown(line)
+        # Keep the existing content and order, but slightly reduce font size in this section.
+        rendered_line = line.replace("**", "")
+        if rendered_line.startswith("China & Asia") or rendered_line.startswith("Deep take"):
+            st.markdown(
+                f'<div style="font-size:0.92rem; font-weight:600; margin-top:0.35rem;">{rendered_line}</div>',
+                unsafe_allow_html=True,
+            )
         else:
-            st.markdown(f"- {line}")
+            st.markdown(
+                f'<div style="font-size:0.92rem; line-height:1.35; margin-bottom:0.15rem;">{rendered_line}</div>',
+                unsafe_allow_html=True,
+            )
 else:
     st.info("Global macro quotes are temporarily unavailable.")
 
