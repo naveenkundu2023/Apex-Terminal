@@ -2,7 +2,8 @@
 # Changes in this build (on top of v2):
 # 1) Select-stock / timeframe labels readable (white / high-contrast in dark theme).
 # 2) Market Indices cards: no triangles; whole card tinted light-green (up) / light-pink (down).
-# 3) GIFT Nifty: Moneycontrol as strong final fallback.
+# 3) GIFT Nifty: Moneycontrol + TradingView page (NSEIX-NIFTY1!) as final fallbacks.
+# 3b) Index cards use solid heatmap green/red (same palette as Nifty 50 heatmap).
 # 4) US Tech 100 final fallback: tradingeconomics.com/us100:ind ; US 30: tradingeconomics.com/indu:ind.
 # 5) China & Asia: business-only headlines (no sports), 5–6 items + deeper scenario take.
 # 6) Corporate Actions + Top-5 news: high-visibility text inside analysis-box containers.
@@ -151,13 +152,19 @@ def apply_theme(theme: str):
             }
             /* Up / Down tinted metric cards (heatmap-like shades) */
             .metric-card-up {
-                background: linear-gradient(145deg, rgba(16,185,129,0.28), rgba(6,78,59,0.55)) !important;
-                border: 1px solid rgba(52,211,153,0.55) !important;
+                background: linear-gradient(145deg, #10b981, #059669) !important;
+                border: 1px solid #34d399 !important;
             }
             .metric-card-down {
-                background: linear-gradient(145deg, rgba(248,113,113,0.28), rgba(127,29,29,0.55)) !important;
-                border: 1px solid rgba(248,113,113,0.55) !important;
+                background: linear-gradient(145deg, #f87171, #ef4444) !important;
+                border: 1px solid #fca5a5 !important;
             }
+            .metric-card-up .index-title,
+            .metric-card-down .index-title { color: rgba(255,255,255,0.85) !important; }
+            .metric-card-up .index-price,
+            .metric-card-down .index-price { color: #ffffff !important; }
+            .metric-card-up .index-change,
+            .metric-card-down .index-change { color: #ffffff !important; }
             .builtup-wrap {
                 background: linear-gradient(145deg, rgba(30,41,59,0.95), rgba(15,23,42,0.98));
                 border: 1px solid rgba(99,102,241,0.35);
@@ -262,13 +269,19 @@ def apply_theme(theme: str):
                 color: #0f172a !important; font-weight: 600 !important;
             }
             .metric-card-up {
-                background: linear-gradient(145deg, #d1fae5, #a7f3d0) !important;
-                border: 1px solid #34d399 !important;
+                background: linear-gradient(145deg, #34d399, #10b981) !important;
+                border: 1px solid #059669 !important;
             }
             .metric-card-down {
-                background: linear-gradient(145deg, #fecaca, #fca5a5) !important;
-                border: 1px solid #f87171 !important;
+                background: linear-gradient(145deg, #f87171, #ef4444) !important;
+                border: 1px solid #dc2626 !important;
             }
+            .metric-card-up .index-title,
+            .metric-card-down .index-title { color: rgba(255,255,255,0.9) !important; }
+            .metric-card-up .index-price,
+            .metric-card-down .index-price { color: #ffffff !important; }
+            .metric-card-up .index-change,
+            .metric-card-down .index-change { color: #ffffff !important; }
             .builtup-wrap {
                 background: #ffffff; border: 1px solid #c7d2fe;
                 border-radius: 12px; padding: 14px; overflow-x: auto;
@@ -708,6 +721,78 @@ def fetch_gift_nifty_50():
                         "pct": round(pct, 2),
                         "source": "Moneycontrol GIFT Nifty",
                     }
+    except Exception:
+        pass
+
+    # ---------- 4) TradingView symbol page (final fallback) ----------
+    # https://in.tradingview.com/symbols/NSEIX-NIFTY1!/
+    try:
+        tv_headers = {
+            **headers,
+            "Referer": "https://in.tradingview.com/",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        for path in (
+            "https://in.tradingview.com/symbols/NSEIX-NIFTY1!/",
+            "https://www.tradingview.com/symbols/NSEIX-NIFTY1!/",
+        ):
+            r = requests.get(path, headers=tv_headers, timeout=8)
+            if r.status_code != 200:
+                continue
+            html = r.text
+            # meta description / JSON-LD style numbers
+            m = re.search(
+                r'(?:last|close|price)["\s:]+([0-9]{4,5}(?:\.[0-9]+)?)',
+                html, re.I
+            )
+            # TradingView often embeds: "close":23059.5 or similar
+            m2 = re.search(r'"close"\s*:\s*([0-9]+(?:\.[0-9]+)?)', html)
+            m3 = re.search(r'data-field="last_price"[^>]*>([0-9,]+(?:\.[0-9]+)?)', html)
+            price = None
+            for mx in (m2, m3, m):
+                if mx:
+                    try:
+                        price = float(mx.group(1).replace(",", ""))
+                        if 15000 < price < 40000:
+                            break
+                        price = None
+                    except Exception:
+                        price = None
+            if price is None:
+                # broader: any 5-digit with 2 decimals in range
+                nums = re.findall(r'\b(2[0-9],\d{3}\.\d{2}|2[0-9]\d{3}\.\d{2})\b', html)
+                for n in nums:
+                    try:
+                        v = float(n.replace(",", ""))
+                        if 15000 < v < 40000:
+                            price = v
+                            break
+                    except Exception:
+                        continue
+            if price is None:
+                continue
+            change = pct = 0.0
+            chg_m = re.search(
+                r'"change"\s*:\s*([+-]?[0-9.]+).*?"change_percent"\s*:\s*([+-]?[0-9.]+)',
+                html, re.I | re.S
+            )
+            if not chg_m:
+                chg_m = re.search(
+                    r'([+-]?[0-9]+(?:\.[0-9]+)?)\s*\(\s*([+-]?[0-9.]+)\s*%\s*\)',
+                    html
+                )
+            if chg_m:
+                try:
+                    change = float(chg_m.group(1))
+                    pct = float(chg_m.group(2))
+                except Exception:
+                    pass
+            return {
+                "price": round(price, 2),
+                "change": round(change, 2),
+                "pct": round(pct, 2),
+                "source": "TradingView NSEIX-NIFTY1!",
+            }
     except Exception:
         pass
 
