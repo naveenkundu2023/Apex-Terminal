@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-20
+# APEX MARKET TERMINAL — COMPLETE & FIXED BUILD
 
 
 
@@ -54,7 +54,7 @@ st.set_page_config(
 
 # -------------------------------------------------
 
-# Hide Manage app button & Default CSS
+# Hide Default UI
 
 # -------------------------------------------------
 
@@ -88,217 +88,201 @@ if "watchlist" not in st.session_state:
 
     st.session_state.watchlist = ["RELIANCE", "HDFCBANK", "INFY", "TCS"]
 
-if "theme" not in st.session_state:
-
-    st.session_state.theme = "dark"
-
 
 
 # -------------------------------------------------
 
-# Theme & Custom CSS Styling
+# CSS Styling & Theme Overrides
 
 # -------------------------------------------------
 
-def apply_theme(theme: str):
+st.markdown("""
 
-    if theme == "dark":
+    <style>
 
-        st.markdown("""
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-        <style>
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    .stApp {
 
-        html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
 
-        .stApp {
+        color: #ffffff;
 
-            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+    }
 
-            color: #ffffff;
+    section[data-testid="stSidebar"] {
 
-        }
+        background: linear-gradient(180deg, #1e1b4b 0%, #0f172a 100%);
 
-        section[data-testid="stSidebar"] {
+        border-right: 1px solid #334155;
 
-            background: linear-gradient(180deg, #1e1b4b 0%, #0f172a 100%);
+    }
 
-            border-right: 1px solid #334155;
 
-        }
 
+    /* 1. High contrast labels & readable radio text for Select Stock and Timeframe */
 
+    label, [data-testid="stWidgetLabel"] p, .stRadio label, div[role="radiogroup"] p, div[role="radiogroup"] label {
 
-        /* 1. High contrast labels & readable radio text for Select Stock and Timeframe */
+        color: #ffffff !important;
 
-        label, [data-testid="stWidgetLabel"] p, .stRadio label, div[role="radiogroup"] p, div[role="radiogroup"] label {
+        font-weight: 600 !important;
 
-            color: #ffffff !important;
+        font-size: 14px !important;
 
-            font-weight: 600 !important;
+    }
 
-            font-size: 14px !important;
 
-        }
 
+    /* 2. Heatmap-style cards for Market Indices (No Triangles) */
 
+    .card-up {
 
-        /* 2. Heatmap-style cards for Market Indices (No Triangles) */
+        background: rgba(16, 185, 129, 0.25) !important;
 
-        .card-up {
+        border: 1px solid #10b981 !important;
 
-            background: rgba(16, 185, 129, 0.25) !important;
+        border-radius: 8px;
 
-            border: 1px solid #10b981 !important;
+        padding: 10px 6px !important;
 
-            border-radius: 8px;
+        text-align: center;
 
-            padding: 10px 6px !important;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.15);
 
-            text-align: center;
+        min-height: 75px !important;
 
-            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.15);
+    }
 
-            min-height: 75px !important;
+    .card-down {
 
-        }
+        background: rgba(239, 68, 68, 0.25) !important;
 
-        .card-down {
+        border: 1px solid #ef4444 !important;
 
-            background: rgba(239, 68, 68, 0.25) !important;
+        border-radius: 8px;
 
-            border: 1px solid #ef4444 !important;
+        padding: 10px 6px !important;
 
-            border-radius: 8px;
+        text-align: center;
 
-            padding: 10px 6px !important;
+        box-shadow: 0 4px 12px rgba(239, 68, 68, 0.15);
 
-            text-align: center;
+        min-height: 75px !important;
 
-            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.15);
+    }
 
-            min-height: 75px !important;
+    .card-neutral {
 
-        }
+        background: rgba(51, 65, 85, 0.5) !important;
 
-        .card-neutral {
+        border: 1px solid #64748b !important;
 
-            background: rgba(51, 65, 85, 0.5) !important;
+        border-radius: 8px;
 
-            border: 1px solid #64748b !important;
+        padding: 10px 6px !important;
 
-            border-radius: 8px;
+        text-align: center;
 
-            padding: 10px 6px !important;
+        min-height: 75px !important;
 
-            text-align: center;
+    }
 
-            min-height: 75px !important;
 
-        }
 
+    .index-title { 
 
+        font-size: 11px !important; font-weight: 700; color: #ffffff !important; 
 
-        .index-title { 
+        letter-spacing: 0.4px; text-transform: uppercase; 
 
-            font-size: 11px !important; font-weight: 700; color: #f8fafc; 
+        margin-bottom: 2px !important; line-height: 1.1;
 
-            letter-spacing: 0.4px; text-transform: uppercase; 
+    }
 
-            margin-bottom: 2px !important; line-height: 1.1;
+    .index-price { 
 
-        }
+        font-size: 15px !important; font-weight: 800; color: #ffffff !important; 
 
-        .index-price { 
+        line-height: 1.15 !important; margin: 2px 0 !important;
 
-            font-size: 15px !important; font-weight: 800; color: #ffffff; 
+    }
 
-            line-height: 1.15 !important; margin: 2px 0 !important;
+    .index-change-up { font-size: 11px !important; font-weight: 700; color: #34d399 !important; }
 
-        }
+    .index-change-down { font-size: 11px !important; font-weight: 700; color: #fca5a5 !important; }
 
-        .index-change-up { font-size: 11px !important; font-weight: 700; color: #34d399 !important; }
 
-        .index-change-down { font-size: 11px !important; font-weight: 700; color: #fca5a5 !important; }
 
+    .section-header {
 
+        font-size: 18px; font-weight: 700; color: #ffffff !important;
 
-        .section-header {
+        margin-bottom: 8px; margin-top: 10px;
 
-            font-size: 18px; font-weight: 700;
+    }
 
-            background: linear-gradient(90deg, #818cf8, #c084fc);
 
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
 
-            margin-bottom: 8px; margin-top: 10px;
+    /* Section Container Box */
 
-        }
+    .styled-box {
 
+        background: rgba(30, 41, 59, 0.8);
 
+        border: 1px solid rgba(99, 102, 241, 0.4);
 
-        /* 5. Section Box formatting for Corporate Actions & Movers */
+        border-radius: 10px;
 
-        .styled-box {
+        padding: 14px;
 
-            background: rgba(30, 41, 59, 0.8);
+        margin-bottom: 12px;
 
-            border: 1px solid rgba(99, 102, 241, 0.4);
+        color: #ffffff !important;
 
-            border-radius: 10px;
+    }
 
-            padding: 14px;
 
-            margin-bottom: 12px;
 
-            color: #ffffff !important;
+    /* Built Up Grid Styles */
 
-        }
+    .bu-card {
 
+        border-radius: 8px;
 
+        padding: 10px;
 
-        /* 6. Built Up Grid Styles */
+        margin-bottom: 8px;
 
-        .bu-card {
+        color: #ffffff;
 
-            border-radius: 8px;
+    }
 
-            padding: 10px;
+    .bu-sc { background: rgba(16, 185, 129, 0.25); border: 1px solid #10b981; }
 
-            margin-bottom: 8px;
+    .bu-lb { background: rgba(59, 130, 246, 0.25); border: 1px solid #3b82f6; }
 
-            color: #ffffff;
+    .bu-sb { background: rgba(239, 68, 68, 0.25); border: 1px solid #ef4444; }
 
-        }
+    .bu-lu { background: rgba(245, 158, 11, 0.25); border: 1px solid #f59e0b; }
 
-        .bu-sc { background: rgba(16, 185, 129, 0.25); border: 1px solid #10b981; }
 
-        .bu-lb { background: rgba(59, 130, 246, 0.25); border: 1px solid #3b82f6; }
 
-        .bu-sb { background: rgba(239, 68, 68, 0.25); border: 1px solid #ef4444; }
+    .bu-title { font-weight: 700; font-size: 13px; margin-bottom: 6px; text-transform: uppercase; color: #ffffff; }
 
-        .bu-lu { background: rgba(245, 158, 11, 0.25); border: 1px solid #f59e0b; }
+    .bu-item { font-size: 12px; padding: 3px 0; color: #f1f5f9; border-bottom: 1px dotted rgba(255,255,255,0.15); }
 
+    
 
+    /* Dataframe overrides for high visibility */
 
-        .bu-title { font-weight: 700; font-size: 13px; margin-bottom: 6px; text-transform: uppercase; color: #ffffff; }
+    .dataframe, div[data-testid="stTable"], .stDataFrame { color: #ffffff !important; }
 
-        .bu-item { font-size: 12px; padding: 3px 0; color: #f1f5f9; border-bottom: 1px dotted rgba(255,255,255,0.15); }
+    </style>
 
-        
-
-        /* Dataframe overrides for high visibility */
-
-        .dataframe, div[data-testid="stTable"], .stDataFrame { color: #ffffff !important; }
-
-        </style>
-
-        """, unsafe_allow_html=True)
-
-
-
-apply_theme(st.session_state.theme)
+""", unsafe_allow_html=True)
 
 
 
@@ -394,7 +378,7 @@ def fetch_tradingview_quote(tv_symbol: str):
 
 
 
-# 3. GIFT Nifty Moneycontrol Fallback
+# GIFT Nifty Fallback
 
 @st.cache_data(ttl=15, show_spinner=False)
 
@@ -436,7 +420,7 @@ def fetch_moneycontrol_gift_nifty():
 
 
 
-# 4. TradingEconomics Fallback for US Tech 100 & US 30
+# TradingEconomics Fallback
 
 @st.cache_data(ttl=20, show_spinner=False)
 
@@ -518,7 +502,7 @@ def fetch_live_instrument(key: str, tv_symbols=(), yahoo_ticker: str = None):
 
 
 
-# 4. Global Macro Dashboard - China & Asia Business News Filter
+# China & Asia Business News Filter
 
 @st.cache_data(ttl=1800, show_spinner=False)
 
@@ -556,7 +540,7 @@ def get_china_asia_deep_business_news():
 
                     link = (item.findtext("link") or "").strip()
 
-                    # Filter out sports
+                    # Filter out non-business / sports keywords
 
                     if any(sp in title.lower() for sp in ["match", "league", "cup", "vs", "score", "cricket", "football", "tennis", "olympics"]):
 
@@ -650,7 +634,85 @@ def get_nifty50_heatmap(universe: list):
 
 
 
-# 6. F&O Built-Up Classification Matrix
+# Stock Historical Data & Indicators
+
+@st.cache_data(ttl=60)
+
+def fetch_stock_chart_data(ticker: str, timeframe: str):
+
+    tf_map = {"30 Min": ("1mo", "30m"), "1 Hr": ("2mo", "60m"), "Daily": ("1y", "1d")}
+
+    period, interval = tf_map.get(timeframe, ("1y", "1d"))
+
+    df = yf.download(f"{ticker}.NS", period=period, interval=interval, progress=False)
+
+    if isinstance(df.columns, pd.MultiIndex):
+
+        df.columns = df.columns.get_level_values(0)
+
+    
+
+    # Calculate indicators
+
+    df['SMA20'] = df['Close'].rolling(20).mean()
+
+    df['SMA50'] = df['Close'].rolling(50).mean()
+
+    
+
+    # EMA20 & EMA50
+
+    df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
+
+    df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
+
+    
+
+    # RSI
+
+    delta = df['Close'].diff()
+
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+
+    rs = gain / loss
+
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    
+
+    # MACD
+
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+
+    df['MACD'] = ema12 - ema26
+
+    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+
+    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+
+    
+
+    # Bollinger Bands
+
+    df['BB_Mid'] = df['Close'].rolling(20).mean()
+
+    bb_std = df['Close'].rolling(20).std()
+
+    df['BB_Upper'] = df['BB_Mid'] + (bb_std * 2)
+
+    df['BB_Lower'] = df['BB_Mid'] - (bb_std * 2)
+
+
+
+    return df
+
+
+
+# F&O Built-Up Classification Matrix
 
 @st.cache_data(ttl=90, show_spinner=False)
 
@@ -772,7 +834,7 @@ def get_corporate_actions(universe: list):
 
 # -------------------------------------------------
 
-# Main App Layout
+# App Layout & Execution
 
 # -------------------------------------------------
 
@@ -798,7 +860,7 @@ col1, col2, col3 = st.columns([2.5, 1.2, 1])
 
 with col1:
 
-    selected = st.selectbox("📌 Select Stock (NSE)", options=universe, index=0, key="selected_stock")
+    selected_stock = st.selectbox("📌 Select Stock (NSE)", options=universe, index=0, key="selected_stock")
 
 with col2:
 
@@ -820,7 +882,7 @@ st.markdown("---")
 
 
 
-# 2. Market Indices (Color Cards without Triangles)
+# 2. Market Indices Section (Heatmap Style Cards)
 
 st.markdown('<div class="section-header">Market Indices & Global Instruments</div>', unsafe_allow_html=True)
 
@@ -902,7 +964,107 @@ st.markdown("---")
 
 
 
-# 4. Global Macro Dashboard - China & Asia Focus
+# Technical Charting & Analysis Section
+
+st.markdown(f'<div class="section-header">📊 Technical Analysis & Charting — {selected_stock}</div>', unsafe_allow_html=True)
+
+
+
+df_chart = fetch_stock_chart_data(selected_stock, timeframe)
+
+
+
+if not df_chart.empty:
+
+    fig = make_subplots(
+
+        rows=3, cols=1, 
+
+        shared_xaxes=True, 
+
+        vertical_spacing=0.03, 
+
+        row_heights=[0.6, 0.2, 0.2]
+
+    )
+
+
+
+    # Main Price Candlestick
+
+    fig.add_trace(go.Candlestick(
+
+        x=df_chart.index,
+
+        open=df_chart['Open'], high=df_chart['High'],
+
+        low=df_chart['Low'], close=df_chart['Close'],
+
+        name="Price"
+
+    ), row=1, col=1)
+
+
+
+    # Overlays
+
+    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA20'], line=dict(color='#3b82f6', width=1), name="EMA 20"), row=1, col=1)
+
+    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA50'], line=dict(color='#f59e0b', width=1), name="EMA 50"), row=1, col=1)
+
+    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['BB_Upper'], line=dict(color='rgba(148, 163, 184, 0.5)', width=1, dash='dot'), name="BB Upper"), row=1, col=1)
+
+    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['BB_Lower'], line=dict(color='rgba(148, 163, 184, 0.5)', width=1, dash='dot'), name="BB Lower"), row=1, col=1)
+
+
+
+    # Volume
+
+    colors = ['#10b981' if c >= o else '#ef4444' for c, o in zip(df_chart['Close'], df_chart['Open'])]
+
+    fig.add_trace(go.Bar(x=df_chart.index, y=df_chart['Volume'], marker_color=colors, name="Volume"), row=2, col=1)
+
+
+
+    # RSI
+
+    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['RSI'], line=dict(color='#c084fc', width=1.5), name="RSI"), row=3, col=1)
+
+    fig.add_hline(y=70, line_dash="dash", line_color="#ef4444", row=3, col=1)
+
+    fig.add_hline(y=30, line_dash="dash", line_color="#10b981", row=3, col=1)
+
+
+
+    fig.update_layout(
+
+        template="plotly_dark",
+
+        height=600,
+
+        margin=dict(l=10, r=10, t=10, b=10),
+
+        xaxis_rangeslider_visible=False,
+
+        paper_bgcolor='rgba(0,0,0,0)',
+
+        plot_bgcolor='rgba(0,0,0,0)',
+
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+else:
+
+    st.warning("Chart data unavailable for selected symbol.")
+
+
+
+st.markdown("---")
+
+
+
+# Global Macro Dashboard (China & Asia Business Focus)
 
 st.markdown('<div class="section-header">🌐 Global Macro Dashboard — China & Asia Business Focus</div>', unsafe_allow_html=True)
 
@@ -994,7 +1156,7 @@ st.markdown("---")
 
 
 
-# 6. F&O Built-Up Section (Top 15 Stocks - Positioned immediately after Heatmap)
+# F&O Built-Up Section (Top 15 Stocks - Positioned immediately after Heatmap)
 
 st.markdown('<div class="section-header">⚡ F&O Built-up Analysis (Top 15 Stocks)</div>', unsafe_allow_html=True)
 
@@ -1058,7 +1220,7 @@ st.markdown("---")
 
 
 
-# 5. Corporate Actions & Market Movers Section
+# Corporate Actions & Market Movers Section
 
 st.markdown('<div class="section-header">📋 Corporate Actions & Market Movers</div>', unsafe_allow_html=True)
 
