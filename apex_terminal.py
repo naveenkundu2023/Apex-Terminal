@@ -1,5 +1,9 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-20 (v4 — GIFT timestamp selection + soft index cards)
-# Changes in this build (on top of v2):
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-21 (v5 — all index cards show source+IST timestamp; Renko 1H first)
+# Changes in this build (on top of v4):
+# 1) Market Indices & Global Instruments: every card now shows source prefix (U/M/I/T/Y/TE) + IST timestamp
+#    in the same 7px style previously used only on GIFT Nifty (e.g. "M 21 Oct 2026, 11:54:00 IST").
+# 2) Renko scanner order: 1 Hour groups first (BUY/BULLISH then SELL/BEARISH), then 30 Minutes groups.
+# Previous (v4) changes retained:
 # 1) Select-stock / timeframe labels readable (white / high-contrast in dark theme).
 # 2) Market Indices cards: no triangles; whole card tinted light-green (up) / light-pink (down).
 # 3) GIFT Nifty: compare timestamps across Upstox, TradingView, Moneycontrol and Investing.com; select newest timestamp when available.
@@ -7,7 +11,7 @@
 # 4) US Tech 100 final fallback: tradingeconomics.com/us100:ind ; US 30: tradingeconomics.com/indu:ind.
 # 5) China & Asia: business-only headlines (no sports), 5–6 items + deeper scenario take.
 # 6) Corporate Actions + Top-5 news: high-visibility text inside analysis-box containers.
-# 7) NEW: Built-up cycle section (Quantsapp-style) for top F&O stocks — after Heatmap, before Corporate Actions.
+# 7) Built-up cycle section (Quantsapp-style) for top F&O stocks — after Heatmap, before Corporate Actions.
 
 import streamlit as st
 import yfinance as yf
@@ -315,6 +319,34 @@ apply_theme(st.session_state.theme)
 # -------------------------------------------------
 # Helpers
 # -------------------------------------------------
+def _source_short(source: str) -> str:
+    """Single-letter (or short) prefix for the data source, used on index cards."""
+    if not source:
+        return "?"
+    s = source.lower()
+    if "upstox" in s:
+        return "U"
+    if "moneycontrol" in s:
+        return "M"
+    if "investing" in s:
+        return "I"
+    if "tradingview" in s:
+        return "T"
+    if "yahoo" in s:
+        return "Y"
+    if "tradingeconomics" in s:
+        return "TE"
+    if "nse" in s:
+        return "N"
+    # First character of first word as last resort
+    first = source.strip().split()[0] if source.strip() else "?"
+    return first[0].upper() if first else "?"
+
+def _ist_now_label() -> str:
+    """Current IST timestamp string used as refresh marker on cards."""
+    ist = pytz.timezone("Asia/Kolkata")
+    return datetime.now(ist).strftime("%d %b %Y, %H:%M:%S IST")
+
 def nse_session_headers():
     return {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -370,11 +402,16 @@ def fetch_yahoo_quote(ticker: str):
                     prev = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
                 change = price - prev
                 pct = (change / prev * 100) if prev else 0
+                src = f"Yahoo Finance ({ticker})"
+                ts = _ist_now_label()
                 return {
                     "price": round(price, 2),
                     "change": round(change, 2),
                     "pct": round(pct, 2),
-                    "source": f"Yahoo Finance ({ticker})"
+                    "source": src,
+                    "source_short": _source_short(src),
+                    "source_time_label": ts,
+                    "fetched_at": ts,
                 }
         # fast_info fallback
         info = t.fast_info
@@ -383,11 +420,16 @@ def fetch_yahoo_quote(ticker: str):
         if price is not None:
             change = float(price) - float(prev)
             pct = (change / float(prev) * 100) if prev else 0
+            src = f"Yahoo Finance ({ticker})"
+            ts = _ist_now_label()
             return {
                 "price": round(float(price), 2),
                 "change": round(change, 2),
                 "pct": round(pct, 2),
-                "source": f"Yahoo Finance ({ticker})"
+                "source": src,
+                "source_short": _source_short(src),
+                "source_time_label": ts,
+                "fetched_at": ts,
             }
     except Exception:
         pass
@@ -435,8 +477,17 @@ def fetch_tradingview_quote(tv_symbol: str):
             change = float(price) * float(pct) / 100
         if pct is None and change is not None:
             pct = (float(change) / (float(price) - float(change)) * 100) if float(price) != float(change) else 0
-        return {"price": round(float(price), 2), "change": round(float(change or 0), 2),
-                "pct": round(float(pct or 0), 2), "source": f"TradingView ({tv_symbol})"}
+        src = f"TradingView ({tv_symbol})"
+        ts = _ist_now_label()
+        return {
+            "price": round(float(price), 2),
+            "change": round(float(change or 0), 2),
+            "pct": round(float(pct or 0), 2),
+            "source": src,
+            "source_short": _source_short(src),
+            "source_time_label": ts,
+            "fetched_at": ts,
+        }
     except Exception:
         return None
 
@@ -482,11 +533,16 @@ def fetch_investing_quote(slug: str):
         pct = number(pct_text) or 0.0
         if price is None or price <= 0:
             return None
+        src = f"Investing.com ({slug})"
+        ts = _ist_now_label()
         return {
             "price": round(price, 2),
             "change": round(change, 2),
             "pct": round(pct, 2),
-            "source": f"Investing.com ({slug})"
+            "source": src,
+            "source_short": _source_short(src),
+            "source_time_label": ts,
+            "fetched_at": ts,
         }
     except Exception:
         return None
@@ -527,11 +583,16 @@ def fetch_tradingeconomics_quote(slug: str):
                 pct = float(m2.group(2))
         if price is None or price <= 0:
             return None
+        src = f"TradingEconomics ({slug})"
+        ts = _ist_now_label()
         return {
             "price": round(price, 2),
             "change": round(change, 2),
             "pct": round(pct, 2),
-            "source": f"TradingEconomics ({slug})"
+            "source": src,
+            "source_short": _source_short(src),
+            "source_time_label": ts,
+            "fetched_at": ts,
         }
     except Exception:
         return None
@@ -692,10 +753,17 @@ def fetch_gift_nifty_50():
             change = float(change or 0)
             pct = float(pct or 0)
             if 15000 < price < 40000:
+                short = _source_short(source)
+                if timestamp:
+                    time_str = timestamp.strftime("%d %b %Y, %H:%M:%S IST")
+                else:
+                    time_str = "timestamp unavailable"
                 candidates.append({
                     "price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2),
                     "source": source, "source_timestamp": timestamp,
-                    "source_time_label": timestamp.strftime("%d %b %Y, %H:%M:%S IST") if timestamp else "timestamp unavailable",
+                    "source_short": short,
+                    "source_time_label": f"{short} {time_str}",
+                    "fetched_at": time_str if timestamp else _ist_now_label(),
                 })
         except (TypeError, ValueError):
             pass
@@ -797,9 +865,12 @@ def fetch_gift_nifty_50():
             quote = fetch_tradingview_quote(symbol)
             if quote and 15000 < quote["price"] < 40000:
                 quote = dict(quote)
-                quote["source"] = f"TradingView ({symbol})"
+                src = f"TradingView ({symbol})"
+                short = _source_short(src)
+                quote["source"] = src
                 quote["source_timestamp"] = None
-                quote["source_time_label"] = "timestamp unavailable"
+                quote["source_short"] = short
+                quote["source_time_label"] = f"{short} timestamp unavailable"
                 candidates.append(quote)
                 break
         except Exception:
@@ -994,7 +1065,7 @@ def analyze_renko_signal(symbol: str, timeframe: str):
 
 @st.cache_data(ttl=90, show_spinner=False)
 def scan_renko_universe(universe_tuple: tuple):
-    jobs = [(symbol, timeframe) for symbol in universe_tuple for timeframe in ("30 Minutes", "1 Hour")]
+    jobs = [(symbol, timeframe) for symbol in universe_tuple for timeframe in ("1 Hour", "30 Minutes")]
     rows = []
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(analyze_renko_signal, symbol, timeframe) for symbol, timeframe in jobs]
@@ -1009,11 +1080,11 @@ def scan_renko_universe(universe_tuple: tuple):
         return pd.DataFrame()
     result_df = pd.DataFrame(rows)
     # Required order:
-    #   1) 30 Minutes — BUY / BULLISH (newest first)
-    #   2) 30 Minutes — SELL / BEARISH (newest first)
-    #   3) 1 Hour     — BUY / BULLISH (newest first)
-    #   4) 1 Hour     — SELL / BEARISH (newest first)
-    tf_order = {"30 Minutes": 0, "1 Hour": 1}
+    #   1) 1 Hour     — BUY / BULLISH (newest first)
+    #   2) 1 Hour     — SELL / BEARISH (newest first)
+    #   3) 30 Minutes — BUY / BULLISH (newest first)
+    #   4) 30 Minutes — SELL / BEARISH (newest first)
+    tf_order = {"1 Hour": 0, "30 Minutes": 1}
     sig_order = {"BUY": 0, "BULLISH": 1, "SELL": 2, "BEARISH": 3}
     result_df["_tf"] = result_df["Timeframe"].map(tf_order).fillna(9)
     result_df["_sig"] = result_df["Signal"].map(sig_order).fillna(9)
@@ -1884,18 +1955,25 @@ for i in range(0, len(items), 6):
                     else:
                         price_str = f"{data['price']:,.2f}"
                     change_str = f"{sign}{data['change']:.2f}"
-                time_label = str(data.get("source_time_label", "timestamp unavailable")) if mode == "gift" else ""
-                gift_time_html = (
+                # Source prefix + IST refresh / source timestamp (same 7px style as GIFT Nifty)
+                # GIFT already builds "M 21 Oct 2026, 11:54:00 IST"; other sources store short + ts separately.
+                short = data.get("source_short") or _source_short(data.get("source", ""))
+                existing = (data.get("source_time_label") or "").strip()
+                if existing and short and existing.upper().startswith(short.upper() + " "):
+                    time_label = existing  # already "M 21 Oct ..."
+                else:
+                    ts = existing or data.get("fetched_at") or _ist_now_label()
+                    time_label = f"{short} {ts}" if short else ts
+                time_html = (
                     f'<div style="font-size:7px;color:#8a8a8a;text-align:center;'
                     f'margin-top:2px;line-height:1.1;">{time_label}</div>'
-                    if mode == "gift" else ""
                 )
                 st.markdown(f"""
                 <div class="{card_cls}">
                     <div class="index-title">{name}</div>
                     <div class="index-price">{price_str}</div>
                     <div class="index-change {color}">{change_str} ({sign}{data['pct']:.2f}%)</div>
-                    {gift_time_html}
+                    {time_html}
                 </div>
                 """, unsafe_allow_html=True)
             else:
@@ -2247,7 +2325,7 @@ st.markdown("---")
 # -------------------------------------------------
 # Intraday Renko Signal Scanner
 # -------------------------------------------------
-st.markdown('<div class="section-header">🎯 Intraday Renko Signals • 30M BUY/Bullish → 30M SELL/Bearish → 1H BUY/Bullish → 1H SELL/Bearish</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">🎯 Intraday Renko Signals • 1H BUY/Bullish → 1H SELL/Bearish → 30M BUY/Bullish → 30M SELL/Bearish</div>', unsafe_allow_html=True)
 st.caption("Only stocks with the latest two Renko bricks in the same direction are listed. BUY/SELL requires close above/below 20 EMA. ⚡ = Just entered (≤ 20 min). Within each group: newest signal on top.")
 
 scan_col1, scan_col2 = st.columns([1, 4])
