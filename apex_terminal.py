@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-22 (v6 — Taiwan/FTSE/UK; Mid Select fix; stock PCR/MaxPain; Renko IST age - 22-10-26, 12 noon Latest )
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-22 (v6 — Taiwan/FTSE/UK; Mid Select fix; stock PCR/MaxPain; Renko IST age - 22.10.26- 12.07 pm )
 # Changes in this build (on top of v5):
 # 1) Market Indices & Global Instruments: added TAIWAN TAIEX, FTSE 100 (UK).
 # 2) MIDCAP SELECT: use Investing.com / Moneycontrol (latest) instead of unreliable Yahoo NIFTY_MID_SELECT.NS.
@@ -1433,48 +1433,62 @@ def get_option_sentiment(symbol: str = "NIFTY"):
             if response.status_code == 200:
                 data = response.json()
                 records = data.get("records", {})
+                filtered = data.get("filtered", {}) or {}
                 underlying = float(records.get("underlyingValue") or 0)
-                # Prefer nearest expiry for max-pain (and stock PCR); total OI still used for index PCR fallback
                 expiry_dates = records.get("expiryDates") or []
                 nearest_exp = expiry_dates[0] if expiry_dates else None
-                ce_oi = pe_oi = 0
+
+                # Prefer NSE "filtered" block (nearest/selected expiry only). Fall back to
+                # records.data filtered by nearest expiryDate.
+                chain_items = filtered.get("data") or []
+                used_filtered = bool(chain_items)
+                if not chain_items:
+                    chain_items = records.get("data") or []
+
+                ce_oi_total = pe_oi_total = 0
+                for item in (records.get("data") or []):
+                    ce = item.get("CE") or {}
+                    pe = item.get("PE") or {}
+                    ce_oi_total += int(ce.get("openInterest") or 0)
+                    pe_oi_total += int(pe.get("openInterest") or 0)
+
                 ce_oi_near = pe_oi_near = 0
-                strike_oi = {}  # nearest-expiry only: strike -> (ce_oi, pe_oi)
-                for item in records.get("data", []):
+                strike_oi = {}  # strike -> (ce_oi, pe_oi) for nearest expiry only
+                for item in chain_items:
                     ce = item.get("CE") or {}
                     pe = item.get("PE") or {}
                     c_oi = int(ce.get("openInterest") or 0)
                     p_oi = int(pe.get("openInterest") or 0)
-                    ce_oi += c_oi
-                    pe_oi += p_oi
-                    # Expiry on the CE/PE object (NSE puts it there)
-                    exp = (ce.get("expiryDate") or pe.get("expiryDate") or item.get("expiryDate") or "")
-                    if nearest_exp and exp and exp != nearest_exp:
-                        continue
+                    if not used_filtered and nearest_exp:
+                        exp = (ce.get("expiryDate") or pe.get("expiryDate") or item.get("expiryDate") or "")
+                        if exp and exp != nearest_exp:
+                            continue
                     ce_oi_near += c_oi
                     pe_oi_near += p_oi
                     strike = item.get("strikePrice")
-                    if strike is not None:
-                        sk = float(strike)
-                        # Skip absurd far-OTM strikes relative to spot (guards against bad merges)
-                        if underlying > 0 and (sk < underlying * 0.4 or sk > underlying * 1.6):
-                            continue
-                        strike_oi[sk] = (
-                            strike_oi.get(sk, (0, 0))[0] + c_oi,
-                            strike_oi.get(sk, (0, 0))[1] + p_oi,
-                        )
-                # PCR: prefer nearest-expiry OI; fall back to total chain OI
-                pcr_ce, pcr_pe = (ce_oi_near, pe_oi_near) if (ce_oi_near > 0 and pe_oi_near > 0) else (ce_oi, pe_oi)
+                    if strike is None:
+                        continue
+                    sk = float(strike)
+                    # Keep strikes in a sane band around spot (avoids junk / far-series mix)
+                    if underlying > 0 and (sk < underlying * 0.5 or sk > underlying * 1.5):
+                        continue
+                    strike_oi[sk] = (
+                        strike_oi.get(sk, (0, 0))[0] + c_oi,
+                        strike_oi.get(sk, (0, 0))[1] + p_oi,
+                    )
+
+                # PCR: nearest-expiry OI preferred; fall back to full-chain OI
+                pcr_ce, pcr_pe = (ce_oi_near, pe_oi_near) if (ce_oi_near > 0 and pe_oi_near > 0) else (ce_oi_total, pe_oi_total)
                 if pcr_ce > 0 and pcr_pe > 0:
                     pcr = pcr_pe / pcr_ce
                     if 0.05 < pcr < 10:
                         out["pcr"] = round(pcr, 3)
                         out["source"] = "NSE"
-                # Max pain on nearest expiry only (strike minimising ITM call+put payout proxy)
+
+                # Max pain on nearest-expiry strikes only
                 if strike_oi:
-                    strikes = sorted(strike_oi.keys())
                     best_s, best_pain = None, None
-                    for s in strikes:
+                    for s in strike_oi:
                         pain = 0.0
                         for k, (c, p) in strike_oi.items():
                             if k < s:
@@ -1484,8 +1498,12 @@ def get_option_sentiment(symbol: str = "NIFTY"):
                         if best_pain is None or pain < best_pain:
                             best_pain = pain
                             best_s = s
-                    if best_s is not None:
+                    # Sanity: max pain must sit near the underlying (reject truncated/wrong values)
+                    if best_s is not None and underlying > 0 and (underlying * 0.5) <= best_s <= (underlying * 1.5):
                         out["max_pain"] = int(best_s) if best_s == int(best_s) else round(best_s, 1)
+                    elif best_s is not None and underlying <= 0:
+                        out["max_pain"] = int(best_s) if best_s == int(best_s) else round(best_s, 1)
+
                 if out["pcr"] is not None:
                     return out
         except Exception:
@@ -1495,6 +1513,31 @@ def get_option_sentiment(symbol: str = "NIFTY"):
                 session.close()
             except Exception:
                 pass
+
+    # Spot anchor for sanity-checking scraped max-pain (esp. equities / Quantsapp)
+    spot_anchor = None
+    if not is_index:
+        try:
+            t = yf.Ticker(f"{nse_symbol}.NS")
+            fi = t.fast_info
+            spot_anchor = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
+            if spot_anchor is not None:
+                spot_anchor = float(spot_anchor)
+        except Exception:
+            spot_anchor = None
+
+    def _accept_max_pain(val, anchor):
+        """Reject truncated / absurd max-pain values (e.g. 83 when spot is 1899)."""
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            return None
+        if v <= 0:
+            return None
+        if anchor and anchor > 0:
+            if not (anchor * 0.5 <= v <= anchor * 1.5):
+                return None
+        return int(v) if v == int(v) else round(v, 1)
 
     # ---- 2) Quantsapp (PCR + Max Pain + ATM IV) ----
     qa_headers = {
@@ -1523,13 +1566,15 @@ def get_option_sentiment(symbol: str = "NIFTY"):
                 except ValueError:
                     pass
 
-            # Max pain
-            m = re.search(r"Max\s*pain\s*[:\*]?\s*([0-9]{2,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)", plain, re.I)
+            # Max pain — full strike (old regex [0-9]{2,3} truncated 1900→190, 1190→119)
+            m = re.search(
+                r"Max\s*pain\s*[:\*]?\s*\*?\s*([0-9][0-9,]{1,12}(?:\.[0-9]+)?)",
+                plain, re.I,
+            )
             if m:
-                try:
-                    out["max_pain"] = float(m.group(1).replace(",", ""))
-                except ValueError:
-                    pass
+                mp = _accept_max_pain(m.group(1).replace(",", ""), spot_anchor)
+                if mp is not None:
+                    out["max_pain"] = mp
 
             # ATM IV
             m = re.search(r"ATM\s*IV\s*[:\*]?\s*([0-9]+\.?[0-9]*)\s*%?", plain, re.I)
@@ -1558,14 +1603,24 @@ def get_option_sentiment(symbol: str = "NIFTY"):
                     p = float(m.group(1))
                     if 0.05 < p < 10:
                         out["pcr"] = round(p, 3)
-                m = re.search(r"MAX\s*PAIN\s*([0-9]{2,3}(?:,?[0-9]{3})*)", chunk, re.I)
+                m = re.search(r"MAX\s*PAIN\s*([0-9][0-9,]{1,12})", chunk, re.I)
                 if m:
-                    out["max_pain"] = float(m.group(1).replace(",", ""))
+                    # Index max-pain sanity: Nifty ~20k band, BankNifty ~40–60k
+                    raw = float(m.group(1).replace(",", ""))
+                    if nse_symbol == "NIFTY" and 10000 <= raw <= 40000:
+                        out["max_pain"] = int(raw) if raw == int(raw) else round(raw, 1)
+                    elif nse_symbol == "BANKNIFTY" and 20000 <= raw <= 80000:
+                        out["max_pain"] = int(raw) if raw == int(raw) else round(raw, 1)
                 if out["pcr"] is not None:
                     out["source"] = "NiftyTrader"
                     return out
         except Exception:
             pass
+
+    # Final guard: drop max_pain if it fails spot sanity (covers any earlier path)
+    if out.get("max_pain") is not None and spot_anchor and spot_anchor > 0:
+        if not (spot_anchor * 0.5 <= float(out["max_pain"]) <= spot_anchor * 1.5):
+            out["max_pain"] = None
 
     return out if (out["pcr"] is not None or out["max_pain"] is not None) else None
 
