@@ -1,17 +1,14 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-21 (v5 — all index cards show source+IST timestamp; Renko 1H first)
-# Changes in this build (on top of v4):
-# 1) Market Indices & Global Instruments: every card now shows source prefix (U/M/I/T/Y/TE) + IST timestamp
-#    in the same 7px style previously used only on GIFT Nifty (e.g. "M 21 Oct 2026, 11:54:00 IST").
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-22 (v6 — Taiwan/FTSE/UK; Mid Select fix; stock PCR/MaxPain; Renko IST age)
+# Changes in this build (on top of v5):
+# 1) Market Indices & Global Instruments: added TAIWAN TAIEX, FTSE 100 (UK).
+# 2) MIDCAP SELECT: use Investing.com / Moneycontrol (latest) instead of unreliable Yahoo NIFTY_MID_SELECT.NS.
+# 3) Stock Instant Snapshot: show selected stock PCR (OI) + Max Pain from NSE equity option chain.
+# 4) Renko scanner Age Minutes: treat yfinance intraday timestamps as UTC→IST so age reflects Indian market time.
+# Previous (v5) changes retained:
+# 1) Market Indices cards: source prefix (U/M/I/T/Y/TE) + IST timestamp on every card.
 # 2) Renko scanner order: 1 Hour groups first (BUY/BULLISH then SELL/BEARISH), then 30 Minutes groups.
-# Previous (v4) changes retained:
-# 1) Select-stock / timeframe labels readable (white / high-contrast in dark theme).
-# 2) Market Indices cards: no triangles; whole card tinted light-green (up) / light-pink (down).
-# 3) GIFT Nifty: compare timestamps across Upstox, TradingView, Moneycontrol and Investing.com; select newest timestamp when available.
-# 3b) Market index/global instrument cards use very soft pastel green/red backgrounds for reduced glare.
-# 4) US Tech 100 final fallback: tradingeconomics.com/us100:ind ; US 30: tradingeconomics.com/indu:ind.
-# 5) China & Asia: business-only headlines (no sports), 5–6 items + deeper scenario take.
-# 6) Corporate Actions + Top-5 news: high-visibility text inside analysis-box containers.
-# 7) Built-up cycle section (Quantsapp-style) for top F&O stocks — after Heatmap, before Corporate Actions.
+# 3) Soft pastel up/down index cards; GIFT newest-timestamp selection; US TE fallback; China business-only news;
+#    Corporate Actions + Top-5 news high-vis boxes; Built-up cycle section.
 
 import streamlit as st
 import yfinance as yf
@@ -453,7 +450,8 @@ def fetch_tradingview_quote(tv_symbol: str):
             "CBOT": "america", "CME_MINI": "america",
             "COINBASE": "crypto", "BINANCE": "crypto",
             "FX_IDC": "forex", "OANDA": "forex",
-            "HSI": "hongkong", "TSE": "japan", "SSE": "china", "KRX": "korea", "ASX": "australia"
+            "HSI": "hongkong", "TSE": "japan", "SSE": "china", "KRX": "korea", "ASX": "australia",
+            "TWSE": "taiwan", "LSE": "uk", "FTSE": "uk"
         }
         region = region_map.get(exchange, "america")
         url = f"https://scanner.tradingview.com/{region}/scan"
@@ -621,6 +619,10 @@ INVESTING_SLUGS = {
     "^NDX": "indices/nq-100",
     "^DJI": "indices/us-30",
     "^IXIC": "indices/nasdaq-composite",
+    "^TWII": "indices/taiwan-weighted",
+    "^FTSE": "indices/uk-100",
+    "MIDCAP_SELECT": "indices/nifty-midcap-select",
+    "NIFTY_MID_SELECT": "indices/nifty-midcap-select",
 }
 
 # Yahoo tickers used as FINAL reliable fallback (matches your suggested table)
@@ -647,6 +649,10 @@ YAHOO_FALLBACK = {
     "^NDX": "^NDX",
     "^DJI": "^DJI",
     "^IXIC": "^IXIC",
+    "^TWII": "^TWII",
+    "^FTSE": "^FTSE",
+    "MIDCAP_SELECT": None,
+    "NIFTY_MID_SELECT": None,
 }
 
 @st.cache_data(ttl=20, show_spinner=False)
@@ -891,6 +897,146 @@ def fetch_gift_nifty_50():
     selected["timestamp_selection"] = "no source exposed a parseable timestamp"
     return selected
 
+
+@st.cache_data(ttl=20, show_spinner=False)
+def fetch_midcap_select():
+    """Nifty Mid Select from Moneycontrol + Investing.com; prefer the quote with the newest parseable timestamp."""
+    ist = pytz.timezone("Asia/Kolkata")
+    now_ist = datetime.now(ist)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    candidates = []
+
+    def parse_ts(raw_text):
+        if not raw_text:
+            return None
+        raw = re.sub(r"\s+", " ", raw_text).strip()
+        patterns = [
+            (r"(?:As\s+on|last\s+updated(?:\s+on)?|updated\s+at)\s*[:|-]?\s*(\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{4})\s*[|,]?\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*(?:IST)?",
+             ["%d %b, %Y %H:%M:%S", "%d %b, %Y %H:%M", "%d %B, %Y %H:%M:%S", "%d %B, %Y %H:%M"]),
+            (r"(?:As\s+on|last\s+updated(?:\s+on)?|updated\s+at)\s*[:|-]?\s*(\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{4})",
+             ["%d %b, %Y", "%d %B, %Y"]),
+        ]
+        for pattern, formats in patterns:
+            m = re.search(pattern, raw, re.I)
+            if not m:
+                continue
+            parts = [g for g in m.groups() if g]
+            combined = " ".join(parts)
+            for fmt in formats:
+                try:
+                    dt = datetime.strptime(combined, fmt)
+                    if "%H" not in fmt:
+                        dt = dt.replace(hour=now_ist.hour, minute=now_ist.minute, second=0)
+                    return ist.localize(dt)
+                except ValueError:
+                    continue
+        return None
+
+    def add_cand(price, change, pct, source, timestamp=None):
+        try:
+            price = float(price)
+            change = float(change or 0)
+            pct = float(pct or 0)
+            if 5000 < price < 30000:
+                short = _source_short(source)
+                if timestamp:
+                    time_str = timestamp.strftime("%d %b %Y, %H:%M:%S IST")
+                else:
+                    time_str = "timestamp unavailable"
+                candidates.append({
+                    "price": round(price, 2), "change": round(change, 2), "pct": round(pct, 2),
+                    "source": source, "source_timestamp": timestamp,
+                    "source_short": short,
+                    "source_time_label": f"{short} {time_str}",
+                    "fetched_at": time_str if timestamp else _ist_now_label(),
+                })
+        except (TypeError, ValueError):
+            pass
+
+    # 1) Moneycontrol — https://www.moneycontrol.com/indian-indices/nifty-mid-select-128.html
+    try:
+        r = requests.get(
+            "https://www.moneycontrol.com/indian-indices/nifty-mid-select-128.html",
+            headers={**headers, "Referer": "https://www.moneycontrol.com/"},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            html = r.text
+            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+            timestamp = parse_ts(plain)
+            price = None
+            for pat in (
+                r"Nifty\s*Mid\s*Select.{0,120}?([\d,]{4,}\.\d{1,2})",
+                r"([\d,]{4,}\.\d{1,2}).{0,80}?Nifty\s*Mid\s*Select",
+                r'id=["\']lastprice["\'][^>]*>\s*([\d,]+\.?\d*)',
+                r'data-lastprice=["\']([\d.]+)',
+            ):
+                m = re.search(pat, plain if "id=" not in pat else html, re.I)
+                if m:
+                    try:
+                        price = float(m.group(1).replace(",", ""))
+                        break
+                    except ValueError:
+                        continue
+            chg_m = re.search(r"([+-]?[\d,]+\.?\d*)\s*\(\s*([+-]?\d+\.?\d*)\s*%\s*\)", plain)
+            prev_m = re.search(r"Previous\s*Close\s*([\d,]+\.?\d*)", plain, re.I)
+            if price is not None:
+                if chg_m:
+                    change = float(chg_m.group(1).replace(",", ""))
+                    pct = float(chg_m.group(2))
+                elif prev_m:
+                    prev = float(prev_m.group(1).replace(",", ""))
+                    change = price - prev
+                    pct = (change / prev * 100) if prev else 0
+                else:
+                    change = pct = 0
+                add_cand(price, change, pct, "Moneycontrol Nifty Mid Select", timestamp)
+    except Exception:
+        pass
+
+    # 2) Investing.com — https://in.investing.com/indices/nifty-midcap-select
+    try:
+        inv = fetch_investing_quote("indices/nifty-midcap-select")
+        if inv and inv.get("price"):
+            inv = dict(inv)
+            inv["source"] = "Investing.com Nifty Midcap Select"
+            inv["source_short"] = _source_short(inv["source"])
+            inv["source_timestamp"] = None
+            inv["source_time_label"] = f"{inv['source_short']} {inv.get('fetched_at') or _ist_now_label()}"
+            candidates.append(inv)
+    except Exception:
+        pass
+
+    # 3) TradingView fallback
+    for symbol in ("NSE:NIFTYMIDSELECT", "NSE:NIFTY_MID_SELECT", "TVC:NIFTYMIDSELECT"):
+        try:
+            quote = fetch_tradingview_quote(symbol)
+            if quote and 5000 < quote["price"] < 30000:
+                quote = dict(quote)
+                src = f"TradingView ({symbol})"
+                short = _source_short(src)
+                quote["source"] = src
+                quote["source_timestamp"] = None
+                quote["source_short"] = short
+                quote["source_time_label"] = f"{short} timestamp unavailable"
+                candidates.append(quote)
+                break
+        except Exception:
+            continue
+
+    if not candidates:
+        return None
+    timestamped = [q for q in candidates if q.get("source_timestamp") is not None]
+    if timestamped:
+        return max(timestamped, key=lambda q: q["source_timestamp"])
+    priority = {"Moneycontrol Nifty Mid Select": 0, "Investing.com Nifty Midcap Select": 1}
+    return min(candidates, key=lambda q: priority.get(q.get("source", ""), 3))
+
+
 @st.cache_data(ttl=45)
 def fetch_stock_data(symbol: str):
     try:
@@ -1009,12 +1155,22 @@ def analyze_renko_signal(symbol: str, timeframe: str):
     if candles is None or candles.empty or len(candles) < 22:
         return None
     candles = candles.tail(120 if interval == "1h" else 150).copy().reset_index(drop=True)
-    if not candles.empty:
-        last_time = pd.Timestamp(candles["Date"].iloc[-1])
-        if last_time.tzinfo is None:
-            last_time = last_time.tz_localize("Asia/Kolkata")
+
+    def _to_ist(ts):
+        """Convert candle/brick timestamp to Asia/Kolkata. Naive yfinance intraday bars are UTC."""
+        t = pd.Timestamp(ts)
+        if t.tzinfo is None:
+            # yfinance typically returns naive UTC for NSE intraday; convert UTC → IST
+            try:
+                t = t.tz_localize("UTC").tz_convert("Asia/Kolkata")
+            except Exception:
+                t = t.tz_localize("Asia/Kolkata")
         else:
-            last_time = last_time.tz_convert("Asia/Kolkata")
+            t = t.tz_convert("Asia/Kolkata")
+        return t
+
+    if not candles.empty:
+        last_time = _to_ist(candles["Date"].iloc[-1])
         bar_length = pd.Timedelta(hours=1 if interval == "1h" else 0, minutes=30 if interval == "30m" else 0)
         if last_time + bar_length > pd.Timestamp.now(tz="Asia/Kolkata") and len(candles) > 1:
             candles = candles.iloc[:-1].reset_index(drop=True)
@@ -1045,13 +1201,12 @@ def analyze_renko_signal(symbol: str, timeframe: str):
         exit_price = float(first["High"])
     else:
         return None
-    last_brick_ts = pd.Timestamp(bricks["Date"].iloc[-1])
-    if last_brick_ts.tzinfo is None:
-        last_brick_ts = last_brick_ts.tz_localize("Asia/Kolkata")
-    else:
-        last_brick_ts = last_brick_ts.tz_convert("Asia/Kolkata")
+    last_brick_ts = _to_ist(bricks["Date"].iloc[-1])
     now = pd.Timestamp.now(tz="Asia/Kolkata")
     age_minutes = (now - last_brick_ts).total_seconds() / 60.0
+    # Clamp negative age (clock skew / incomplete bar) to 0
+    if age_minutes < 0:
+        age_minutes = 0.0
     just_entered = age_minutes <= 20
     return {
         "Stock": symbol, "Timeframe": timeframe, "Signal": action, "Renko": direction,
@@ -1234,28 +1389,41 @@ def get_option_sentiment(symbol: str = "NIFTY"):
     """
     Returns dict: pcr, max_pain, atm_iv, source.
     Priority: NSE option-chain OI → Quantsapp max-pain page → niftytrader snapshot.
+    Supports NIFTY / BANKNIFTY indices and individual equity symbols (NSE equity option chain).
     """
     sym = symbol.upper().replace(" ", "")
+    is_index = False
     if sym in ["NIFTY", "NIFTY50"]:
         nse_symbol = "NIFTY"
+        is_index = True
         qa_paths = [
             "https://www.quantsapp.com/max-pain/nifty",
             "https://web.quantsapp.com/option-pain/NIFTY",
         ]
     elif sym in ["BANKNIFTY", "NIFTYBANK"]:
         nse_symbol = "BANKNIFTY"
+        is_index = True
         qa_paths = [
             "https://www.quantsapp.com/max-pain/banknifty",
             "https://web.quantsapp.com/option-pain/BANKNIFTY",
         ]
     else:
-        return None
+        # Equity F&O symbol
+        nse_symbol = sym
+        is_index = False
+        qa_paths = [
+            f"https://www.quantsapp.com/max-pain/{sym.lower()}",
+            f"https://web.quantsapp.com/option-pain/{sym}",
+        ]
 
     out = {"pcr": None, "max_pain": None, "atm_iv": None, "source": None}
 
     # ---- 1) NSE option-chain (authoritative PCR during market hours) ----
     headers = nse_session_headers()
-    url = f"https://www.nseindia.com/api/option-chain-indices?symbol={nse_symbol}"
+    if is_index:
+        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={nse_symbol}"
+    else:
+        url = f"https://www.nseindia.com/api/option-chain-equities?symbol={nse_symbol}"
     for _ in range(2):
         session = requests.Session()
         try:
@@ -1361,29 +1529,27 @@ def get_option_sentiment(symbol: str = "NIFTY"):
         except Exception:
             continue
 
-    # ---- 3) niftytrader.in snapshot page ----
-    try:
-        r = requests.get("https://www.niftytrader.in/nse-option-chain", headers=qa_headers, timeout=8)
-        if r.status_code == 200:
-            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
-            # Look for NIFTY / BANK NIFTY blocks
-            label = "NIFTY 50" if nse_symbol == "NIFTY" else "BANK NIFTY"
-            # crude: PCR then MAX PAIN near label
-            idx = plain.upper().find(nse_symbol if nse_symbol != "NIFTY" else "NIFTY 50")
-            chunk = plain[idx: idx + 400] if idx >= 0 else plain
-            m = re.search(r"PCR\s*([0-9]+\.?[0-9]*)", chunk, re.I)
-            if m:
-                p = float(m.group(1))
-                if 0.05 < p < 10:
-                    out["pcr"] = round(p, 3)
-            m = re.search(r"MAX\s*PAIN\s*([0-9]{2,3}(?:,?[0-9]{3})*)", chunk, re.I)
-            if m:
-                out["max_pain"] = float(m.group(1).replace(",", ""))
-            if out["pcr"] is not None:
-                out["source"] = "NiftyTrader"
-                return out
-    except Exception:
-        pass
+    # ---- 3) niftytrader.in snapshot page (indices only) ----
+    if is_index:
+        try:
+            r = requests.get("https://www.niftytrader.in/nse-option-chain", headers=qa_headers, timeout=8)
+            if r.status_code == 200:
+                plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
+                idx = plain.upper().find(nse_symbol if nse_symbol != "NIFTY" else "NIFTY 50")
+                chunk = plain[idx: idx + 400] if idx >= 0 else plain
+                m = re.search(r"PCR\s*([0-9]+\.?[0-9]*)", chunk, re.I)
+                if m:
+                    p = float(m.group(1))
+                    if 0.05 < p < 10:
+                        out["pcr"] = round(p, 3)
+                m = re.search(r"MAX\s*PAIN\s*([0-9]{2,3}(?:,?[0-9]{3})*)", chunk, re.I)
+                if m:
+                    out["max_pain"] = float(m.group(1).replace(",", ""))
+                if out["pcr"] is not None:
+                    out["source"] = "NiftyTrader"
+                    return out
+        except Exception:
+            pass
 
     return out if (out["pcr"] is not None or out["max_pain"] is not None) else None
 
@@ -1861,9 +2027,15 @@ with col3:
 st.markdown("---")
 summary = get_stock_summary_analytics(selected)
 news_items = get_stock_news(selected)
+stock_sent = get_option_sentiment(selected) or {}
+stock_pcr = stock_sent.get("pcr")
+stock_mp = stock_sent.get("max_pain")
+stock_pcr_src = stock_sent.get("source") or ""
 
 if summary:
     bias_color = "#34d399" if summary["bias"] == "BULLISH" else "#f87171" if summary["bias"] == "BEARISH" else "#fbbf24"
+    pcr_html = f"<div><b>PCR (OI):</b> {stock_pcr:.3f}" + (f" <span style='font-size:11px;color:#94a3b8;'>({stock_pcr_src})</span>" if stock_pcr_src else "") + "</div>" if stock_pcr is not None else "<div><b>PCR (OI):</b> —</div>"
+    mp_html = f"<div><b>Max Pain:</b> ₹{stock_mp:,.0f}</div>" if stock_mp is not None else "<div><b>Max Pain:</b> —</div>"
     st.markdown(f"""
     <div class="analysis-box">
         <div style="font-size:16px; font-weight:700; margin-bottom:8px;">📌 {selected} • Instant Snapshot</div>
@@ -1874,6 +2046,8 @@ if summary:
             <div><b>5D High/Low:</b> ₹{summary['high_5d']:,.2f} / ₹{summary['low_5d']:,.2f}</div>
             <div><b>5D VWAP:</b> ₹{summary['vwap_5d']:,.2f} {'✅ Above' if summary['above_vwap'] else '❌ Below'}</div>
             <div><b>Bias:</b> <span style="color:{bias_color}; font-weight:700;">{summary['bias']}</span></div>
+            {pcr_html}
+            {mp_html}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1895,7 +2069,7 @@ st.markdown("---")
 # -------------------------------------------------
 st.markdown('<div class="section-header">Market Indices & Global Instruments</div>', unsafe_allow_html=True)
 
-# Display order: India → FX/USD → US futures → yields → commodities → crypto → Asia
+# Display order: India → FX/USD → US futures → yields → commodities → crypto → Asia / Europe
 # Tuple: (mode, key, tv_symbols, investing_key, yahoo_ticker)
 instruments = {
     "INDIA VIX": ("cash", "^INDIAVIX", (), None, "^INDIAVIX"),
@@ -1904,7 +2078,7 @@ instruments = {
     "BANK NIFTY": ("cash", "^NSEBANK", (), None, "^NSEBANK"),
     "BSE SENSEX": ("cash", "^BSESN", (), None, "^BSESN"),
     "MIDCAP 150": ("cash", "NIFTYMIDCAP150.NS", (), None, "NIFTYMIDCAP150.NS"),
-    "MIDCAP SELECT": ("cash", "NIFTY_MID_SELECT.NS", (), None, "NIFTY_MID_SELECT.NS"),
+    "MIDCAP SELECT": ("midselect", "MIDCAP_SELECT", ("NSE:NIFTYMIDSELECT",), "MIDCAP_SELECT", None),
     "USD / INR": ("live", "INR=X", ("FX_IDC:USDINR", "OANDA:USDINR"), "INR=X", "INR=X"),
     "DXY (US DOLLAR INDEX)": ("live", "DX-Y.NYB", ("TVC:DXY",), "DX-Y.NYB", "DX-Y.NYB"),
     "US TECH 100 FUT": ("live", "US_TECH_FUT", ("CME_MINI:NQ1!", "CME:NQ1!", "NASDAQ:NDX", "TVC:NDX"), "US_TECH_FUT", "^NDX"),
@@ -1923,6 +2097,8 @@ instruments = {
     "SHANGHAI COMPOSITE": ("live", "000001.SS", ("SSE:000001",), "000001.SS", "000001.SS"),
     "KOSPI": ("live", "^KS11", ("KRX:KOSPI",), "^KS11", "^KS11"),
     "ASX 200": ("live", "^AXJO", ("ASX:XJO",), "^AXJO", "^AXJO"),
+    "TAIWAN TAIEX": ("live", "^TWII", ("TWSE:TAIEX", "TVC:TAIEX"), "^TWII", "^TWII"),
+    "FTSE 100 (UK)": ("live", "^FTSE", ("TVC:UKX", "LSE:UKX"), "^FTSE", "^FTSE"),
 }
 
 yield_keys = {"US 10Y BOND", "US 30Y BOND"}
@@ -1936,6 +2112,8 @@ for i in range(0, len(items), 6):
         mode, key, tv_symbols, inv_key, yahoo_tk = meta
         if mode == "gift":
             data = fetch_gift_nifty_50()
+        elif mode == "midselect":
+            data = fetch_midcap_select()
         elif mode == "cash":
             data = fetch_index_quote(key)
         else:
@@ -1950,7 +2128,7 @@ for i in range(0, len(items), 6):
                     price_str = f"{data['price']:.2f}%"
                     change_str = f"{sign}{data['change']:.2f}"
                 else:
-                    if mode == "cash" and name not in vix_keys:
+                    if (mode in ("cash", "gift", "midselect")) and name not in vix_keys:
                         price_str = f"₹{data['price']:,.2f}"
                     else:
                         price_str = f"{data['price']:,.2f}"
