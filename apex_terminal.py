@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-22 (v6 — Taiwan/FTSE/UK; Mid Select fix; stock PCR/MaxPain; Renko IST age)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-22 (v6 — Taiwan/FTSE/UK; Mid Select fix; stock PCR/MaxPain; Renko IST age - 22-10-26, 12 noon Latest )
 # Changes in this build (on top of v5):
 # 1) Market Indices & Global Instruments: added TAIWAN TAIEX, FTSE 100 (UK).
 # 2) MIDCAP SELECT: use Investing.com / Moneycontrol (latest) instead of unreliable Yahoo NIFTY_MID_SELECT.NS.
@@ -1433,9 +1433,13 @@ def get_option_sentiment(symbol: str = "NIFTY"):
             if response.status_code == 200:
                 data = response.json()
                 records = data.get("records", {})
+                underlying = float(records.get("underlyingValue") or 0)
+                # Prefer nearest expiry for max-pain (and stock PCR); total OI still used for index PCR fallback
+                expiry_dates = records.get("expiryDates") or []
+                nearest_exp = expiry_dates[0] if expiry_dates else None
                 ce_oi = pe_oi = 0
-                # Also compute simple max-pain from nearest expiry OI if available
-                strike_oi = {}  # strike -> (ce_oi, pe_oi)
+                ce_oi_near = pe_oi_near = 0
+                strike_oi = {}  # nearest-expiry only: strike -> (ce_oi, pe_oi)
                 for item in records.get("data", []):
                     ce = item.get("CE") or {}
                     pe = item.get("PE") or {}
@@ -1443,18 +1447,30 @@ def get_option_sentiment(symbol: str = "NIFTY"):
                     p_oi = int(pe.get("openInterest") or 0)
                     ce_oi += c_oi
                     pe_oi += p_oi
+                    # Expiry on the CE/PE object (NSE puts it there)
+                    exp = (ce.get("expiryDate") or pe.get("expiryDate") or item.get("expiryDate") or "")
+                    if nearest_exp and exp and exp != nearest_exp:
+                        continue
+                    ce_oi_near += c_oi
+                    pe_oi_near += p_oi
                     strike = item.get("strikePrice")
                     if strike is not None:
-                        strike_oi[float(strike)] = (
-                            strike_oi.get(float(strike), (0, 0))[0] + c_oi,
-                            strike_oi.get(float(strike), (0, 0))[1] + p_oi,
+                        sk = float(strike)
+                        # Skip absurd far-OTM strikes relative to spot (guards against bad merges)
+                        if underlying > 0 and (sk < underlying * 0.4 or sk > underlying * 1.6):
+                            continue
+                        strike_oi[sk] = (
+                            strike_oi.get(sk, (0, 0))[0] + c_oi,
+                            strike_oi.get(sk, (0, 0))[1] + p_oi,
                         )
-                if ce_oi > 0 and pe_oi > 0:
-                    pcr = pe_oi / ce_oi
+                # PCR: prefer nearest-expiry OI; fall back to total chain OI
+                pcr_ce, pcr_pe = (ce_oi_near, pe_oi_near) if (ce_oi_near > 0 and pe_oi_near > 0) else (ce_oi, pe_oi)
+                if pcr_ce > 0 and pcr_pe > 0:
+                    pcr = pcr_pe / pcr_ce
                     if 0.05 < pcr < 10:
                         out["pcr"] = round(pcr, 3)
                         out["source"] = "NSE"
-                # Max pain: strike minimising sum of ITM call+put payout proxy
+                # Max pain on nearest expiry only (strike minimising ITM call+put payout proxy)
                 if strike_oi:
                     strikes = sorted(strike_oi.keys())
                     best_s, best_pain = None, None
@@ -1868,7 +1884,7 @@ def get_china_asia_deep_take(pointers):
 
 # ---------- Built-up cycle (F&O style, Quantsapp-inspired) ----------
 @st.cache_data(ttl=90, show_spinner=False)
-def get_fno_builtup(universe: list, top_n: int = 15):
+def get_fno_builtup(universe: list, top_n: int = 30):
     """
     Approximate Built-up cycle for top F&O stocks.
     Classification (today):
@@ -1881,7 +1897,7 @@ def get_fno_builtup(universe: list, top_n: int = 15):
     """
     try:
         # Prefer most-active by value if available, else Nifty weight order
-        tickers = [f"{s}.NS" for s in universe[:40]]
+        tickers = [f"{s}.NS" for s in universe[:60]]
         data = yf.download(tickers, period="15d", group_by="ticker", progress=False, threads=True)
         rows = []
         for sym in universe:
@@ -2691,7 +2707,7 @@ st.caption("Colour legend: 🟢 Long build-up · 🔴 Short build-up · 🔵 Sho
            "Today = price% + volume-vs-avg proxy for OI%. Prior days use daily price/volume direction. "
            "Inspired by Quantsapp Built-up cycle. Refreshes with the main Refresh button.")
 
-bu_df, bu_labels = get_fno_builtup(universe, top_n=15)
+bu_df, bu_labels = get_fno_builtup(universe, top_n=30)
 if bu_df.empty:
     st.info("Built-up data temporarily unavailable (Yahoo/NSE throttle or off-hours).")
 else:
