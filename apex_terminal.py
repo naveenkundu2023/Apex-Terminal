@@ -596,104 +596,85 @@ def fetch_tradingeconomics_quote(slug: str):
         return None
 
 
-@st.cache_data(ttl=30, show_spinner=False)
-def fetch_moneycontrol_brent():
-    """Brent crude CFD from Moneycontrol.
-    URL: https://www.moneycontrol.com/commodity/international-brent-crude-price?symbol=CO1:COM
-
-    Live LTP is rendered as animated digits (hard to scrape). Prefer:
-      price = Previous Close + Change
-    which is stable in the overview table on the same page.
+@st.cache_data(ttl=20, show_spinner=False)
+def fetch_investing_brent():
+    """Live Brent crude from Investing.com (in. domain preferred).
+    URL: https://in.investing.com/commodities/brent-oil
+    Falls back to www.investing.com/commodities/brent-oil.
     """
-    try:
-        url = "https://www.moneycontrol.com/commodity/international-brent-crude-price?symbol=CO1:COM"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Referer": "https://www.moneycontrol.com/",
-        }
-        r = requests.get(url, headers=headers, timeout=8)
-        if r.status_code != 200:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://in.investing.com/",
+    }
+
+    def number(value):
+        if not value:
             return None
-        html = r.text
-        plain = re.sub(r"<script.*?</script>", " ", html, flags=re.I | re.S)
-        plain = re.sub(r"<[^>]+>", " ", plain)
-        plain = re.sub(r"\s+", " ", plain)
+        cleaned = re.sub(r"[^0-9.+-]", "", str(value).replace(",", ""))
+        try:
+            return float(cleaned) if cleaned not in ("", "+", "-") else None
+        except ValueError:
+            return None
 
-        def number(value):
-            if value is None:
-                return None
-            cleaned = re.sub(r"[^0-9.+-]", "", str(value).replace(",", ""))
-            try:
-                return float(cleaned) if cleaned not in ("", "+", "-") else None
-            except ValueError:
-                return None
+    def parse_html(html, source_label):
+        def extract(pattern):
+            m = re.search(pattern, html, flags=re.I | re.S)
+            return re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else None
 
-        # Structured table fields (reliable on this page)
-        prev = None
-        open_px = None
-        day_high = day_low = None
-        m = re.search(r"Previous\s*Close\s*([0-9]+\.?[0-9]*)", plain, re.I)
-        if m:
-            prev = number(m.group(1))
-        m = re.search(r"\bOpen\s*([0-9]+\.?[0-9]*)", plain, re.I)
-        if m:
-            open_px = number(m.group(1))
-        m = re.search(r"Day\s*High\s*([0-9]+\.?[0-9]*)", plain, re.I)
-        if m:
-            day_high = number(m.group(1))
-        m = re.search(r"Day\s*Low\s*([0-9]+\.?[0-9]*)", plain, re.I)
-        if m:
-            day_low = number(m.group(1))
+        price_text = extract(r'data-test=["\']instrument-price-last["\'][^>]*>(.*?)</')
+        change_text = extract(r'data-test=["\']instrument-price-change["\'][^>]*>(.*?)</')
+        pct_text = extract(r'data-test=["\']instrument-price-change-percent["\'][^>]*>(.*?)</')
+        if not price_text:
+            m = re.search(r'["\']last["\']\s*:\s*["\']?([0-9,]+\.?[0-9]*)', html, flags=re.I)
+            price_text = m.group(1) if m else None
+        if not price_text:
+            # Plain-text fallback near "Brent"
+            plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+            m = re.search(
+                r"Brent.{0,120}?([0-9]{2,3}\.[0-9]{1,2})\s*([+-]?[0-9]+\.?[0-9]*)?\s*\(?\s*([+-]?[0-9]+\.?[0-9]*)?\s*%?",
+                plain, re.I,
+            )
+            if m:
+                price_text = m.group(1)
+                if not change_text and m.group(2):
+                    change_text = m.group(2)
+                if not pct_text and m.group(3):
+                    pct_text = m.group(3)
 
-        # First change / pct near the quote (e.g. "0.80 ( 0.71 %)") — avoid later performance %
-        change = pct = None
-        # Restrict search window to text before "Day Range" / "Returns" so we don't pick 3M/YTD %
-        window = plain
-        cut = re.search(r"Day\s*Range|52\s*Week\s*Range|Returns", plain, re.I)
-        if cut:
-            window = plain[: cut.start()]
-        chg_m = re.search(
-            r"([+-]?[0-9]+\.?[0-9]*)\s*\(\s*([+-]?[0-9]+\.?[0-9]*)\s*%\s*\)",
-            window,
-        )
-        if chg_m:
-            change = number(chg_m.group(1))
-            pct = number(chg_m.group(2))
-
-        price = None
-        if prev is not None and change is not None:
-            price = prev + change
-        elif open_px is not None and day_high is not None and day_low is not None:
-            # Mid of day range as soft proxy when change missing
-            price = (day_high + day_low) / 2.0
-        elif open_px is not None:
-            price = open_px
-        elif prev is not None:
-            price = prev
-
-        # Sanity: Brent CFD typically 50–150 in this cycle; reject % returns (e.g. 32.9)
+        price = number(price_text)
+        change = number(change_text) or 0.0
+        pct = number(pct_text) or 0.0
+        # Brent sanity band — reject % returns misread as price
         if price is None or not (50.0 <= price <= 200.0):
             return None
-        if change is None:
-            change = 0.0
-        if pct is None:
-            pct = (change / prev * 100) if prev else 0.0
-
-        src = "Moneycontrol (Brent Crude)"
         ts = _ist_now_label()
         return {
             "price": round(float(price), 2),
             "change": round(float(change), 2),
             "pct": round(float(pct), 2),
-            "source": src,
-            "source_short": _source_short(src),
+            "source": source_label,
+            "source_short": _source_short(source_label),
             "source_time_label": ts,
             "fetched_at": ts,
         }
-    except Exception:
-        return None
+
+    urls = [
+        ("https://in.investing.com/commodities/brent-oil", "Investing.com (Brent Oil)"),
+        ("https://www.investing.com/commodities/brent-oil", "Investing.com (Brent Oil)"),
+    ]
+    for url, label in urls:
+        try:
+            r = requests.get(url, headers={**headers, "Referer": url.rsplit("/", 1)[0] + "/"}, timeout=8)
+            if r.status_code != 200:
+                continue
+            quote = parse_html(r.text, label)
+            if quote:
+                return quote
+        except Exception:
+            continue
+    return None
 
 
 # Investing.com slug map (secondary fallback)
@@ -732,7 +713,7 @@ YAHOO_FALLBACK = {
     "US_TECH_FUT": "^NDX",       # Nasdaq-100 index (closest liquid proxy)
     "US_30_FUT": "^DJI",         # Dow Jones
     "CL=F": "CL=F",
-    "BZ=F": None,          # Moneycontrol is final fallback for Brent (no Yahoo)
+    "BZ=F": None,          # Investing.com is source for Brent (no Yahoo)
     "NG=F": "NG=F",
     "GC=F": "GC=F",
     "SI=F": "SI=F",
@@ -777,11 +758,11 @@ def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None, ya
             if quote:
                 return quote
     slug_key = investing_key or key
-    # 2) Moneycontrol for Brent (authoritative CFD page) — before Investing
+    # 2) Investing.com for Brent (in.investing.com/commodities/brent-oil) — before Investing
     if key in ("BZ=F", "CRUDE OIL BRENT") or slug_key in ("BZ=F",):
-        mc = fetch_moneycontrol_brent()
-        if mc:
-            return mc
+        brent = fetch_investing_brent()
+        if brent:
+            return brent
     # 3) Investing.com
     slug = INVESTING_SLUGS.get(slug_key)
     if slug:
