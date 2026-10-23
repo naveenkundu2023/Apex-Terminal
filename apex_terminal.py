@@ -595,6 +595,95 @@ def fetch_tradingeconomics_quote(slug: str):
     except Exception:
         return None
 
+
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_moneycontrol_brent():
+    """Brent crude from Moneycontrol — final fallback when TV/Investing fail.
+    URL: https://www.moneycontrol.com/commodity/international-brent-crude-price?symbol=CO1:COM
+    """
+    try:
+        url = "https://www.moneycontrol.com/commodity/international-brent-crude-price?symbol=CO1:COM"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": "https://www.moneycontrol.com/",
+        }
+        r = requests.get(url, headers=headers, timeout=8)
+        if r.status_code != 200:
+            return None
+        html = r.text
+        plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+
+        def number(value):
+            if not value:
+                return None
+            cleaned = re.sub(r"[^0-9.+-]", "", str(value).replace(",", ""))
+            try:
+                return float(cleaned) if cleaned not in ("", "+", "-") else None
+            except ValueError:
+                return None
+
+        price = None
+        # Common Moneycontrol commodity price patterns
+        for pat in (
+            r'data-lastprice=["\']([0-9.]+)',
+            r'id=["\']lastprice["\'][^>]*>\s*([0-9,]+\.?[0-9]*)',
+            r'id=["\']Bse_Prc_tick["\'][^>]*>\s*([0-9,]+\.?[0-9]*)',
+            r'class=["\'][^"\']*lastprice[^"\']*["\'][^>]*>\s*([0-9,]+\.?[0-9]*)',
+            r'(?:Last\s*Price|LTP|Price)\s*[:]?\s*([0-9,]+\.?[0-9]*)',
+            r'Brent.{0,80}?([0-9]{2,3}\.[0-9]{1,2})',
+        ):
+            m = re.search(pat, html if "id=" in pat or "data-" in pat or "class=" in pat else plain, re.I)
+            if m:
+                price = number(m.group(1))
+                if price and 20 < price < 200:  # sane Brent band
+                    break
+                price = None
+
+        if price is None:
+            # Fallback: first plausible commodity-style number near Brent
+            nums = re.findall(r"([0-9]{2,3}\.[0-9]{1,2})", plain)
+            for n in nums:
+                v = number(n)
+                if v and 30 < v < 150:
+                    price = v
+                    break
+
+        if price is None or price <= 0:
+            return None
+
+        change = pct = 0.0
+        chg_m = re.search(
+            r"([+-]?[0-9,]+\.?[0-9]*)\s*\(\s*([+-]?[0-9]+\.?[0-9]*)\s*%\s*\)",
+            plain,
+        )
+        if chg_m:
+            change = number(chg_m.group(1)) or 0.0
+            pct = number(chg_m.group(2)) or 0.0
+        else:
+            prev_m = re.search(r"Previous\s*(?:Close|Price)\s*([0-9,]+\.?[0-9]*)", plain, re.I)
+            if prev_m:
+                prev = number(prev_m.group(1))
+                if prev and prev > 0:
+                    change = price - prev
+                    pct = (change / prev) * 100
+
+        src = "Moneycontrol (Brent Crude)"
+        ts = _ist_now_label()
+        return {
+            "price": round(float(price), 2),
+            "change": round(float(change), 2),
+            "pct": round(float(pct), 2),
+            "source": src,
+            "source_short": _source_short(src),
+            "source_time_label": ts,
+            "fetched_at": ts,
+        }
+    except Exception:
+        return None
+
+
 # Investing.com slug map (secondary fallback)
 INVESTING_SLUGS = {
     "GIFT_NIFTY": "indices/sgx-nifty",
@@ -631,7 +720,7 @@ YAHOO_FALLBACK = {
     "US_TECH_FUT": "^NDX",       # Nasdaq-100 index (closest liquid proxy)
     "US_30_FUT": "^DJI",         # Dow Jones
     "CL=F": "CL=F",
-    "BZ=F": None,          # Investing.com preferred over Yahoo for Brent
+    "BZ=F": None,          # Moneycontrol is final fallback for Brent (no Yahoo)
     "NG=F": "NG=F",
     "GC=F": "GC=F",
     "SI=F": "SI=F",
@@ -677,7 +766,12 @@ def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None, ya
         inv = fetch_investing_quote(slug)
         if inv:
             return inv
-    # 3) Yahoo Finance (final reliable fallback)
+    # 3) Moneycontrol Brent — preferred final fallback for crude Brent (no Yahoo)
+    if key in ("BZ=F", "CRUDE OIL BRENT") or slug_key in ("BZ=F",):
+        mc = fetch_moneycontrol_brent()
+        if mc:
+            return mc
+    # 4) Yahoo Finance (final reliable fallback) — skipped for Brent via YAHOO_FALLBACK=None
     y_ticker = yahoo_ticker or YAHOO_FALLBACK.get(key) or YAHOO_FALLBACK.get(slug_key)
     if y_ticker:
         yq = fetch_yahoo_quote(y_ticker)
