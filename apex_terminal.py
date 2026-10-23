@@ -363,7 +363,7 @@ def is_nse_market_hours():
     t = now.time()
     return dtime(9, 15) <= t <= dtime(15, 30)
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=60)
 def fetch_yahoo_quote(ticker: str):
     """Robust Yahoo Finance quote — used for cash indices AND as final fallback for futures/commodities."""
     if not ticker or ticker in ("GIFT_NIFTY", "US_TECH_FUT", "US_30_FUT"):
@@ -433,12 +433,12 @@ def fetch_yahoo_quote(ticker: str):
     return None
 
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=60)
 def fetch_index_quote(ticker: str):
     """Yahoo for Indian cash indices (Nifty, Bank Nifty, Midcaps, Sensex, VIX)."""
     return fetch_yahoo_quote(ticker)
 
-@st.cache_data(ttl=20, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_tradingview_quote(tv_symbol: str):
     """Best-effort public TradingView scanner quote."""
     try:
@@ -489,7 +489,7 @@ def fetch_tradingview_quote(tv_symbol: str):
     except Exception:
         return None
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_investing_quote(slug: str):
     """Investing.com page parser — secondary fallback (24h coverage when it works)."""
     try:
@@ -546,7 +546,7 @@ def fetch_investing_quote(slug: str):
         return None
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_tradingeconomics_quote(slug: str):
     """Parse TradingEconomics index page for price / change / pct. Used as final fallback for US100 & US30."""
     try:
@@ -596,7 +596,96 @@ def fetch_tradingeconomics_quote(slug: str):
         return None
 
 
-@st.cache_data(ttl=20, show_spinner=False)
+
+@st.cache_data(ttl=45, show_spinner=False)
+def fetch_tradingeconomics_commodity(slug: str):
+    """TradingEconomics commodity page — final source for Brent / WTI.
+    slug examples: 'commodity/brent-crude-oil', 'commodity/crude-oil'
+    Parses id=market_last and nearby daily change.
+    """
+    try:
+        url = f"https://tradingeconomics.com/{slug}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        r = requests.get(url, headers=headers, timeout=8)
+        if r.status_code != 200:
+            return None
+        html = r.text
+
+        def number(value):
+            if value is None:
+                return None
+            cleaned = re.sub(r"[^0-9.+-]", "", str(value).replace(",", ""))
+            try:
+                return float(cleaned) if cleaned not in ("", "+", "-") else None
+            except ValueError:
+                return None
+
+        price = None
+        m = re.search(r'id=["\']market_last["\'][^>]*>([^<]+)', html, re.I)
+        if m:
+            price = number(m.group(1))
+        if price is None:
+            m = re.search(r'TEChartsMeta\s*=\s*\[\s*\{[^\]]*?"last"\s*:\s*([0-9.]+)', html, re.I)
+            if m:
+                price = number(m.group(1))
+        if price is None:
+            m = re.search(r'(?:Brent|Crude)\s+rose\s+to\s+([0-9.]+)', html, re.I)
+            if m:
+                price = number(m.group(1))
+        if price is None or price <= 0:
+            return None
+        # Crude band sanity
+        if not (20.0 <= price <= 250.0):
+            return None
+
+        change = pct = 0.0
+        # Prefer block near market_last
+        block_m = re.search(
+            r'id=["\']market_last["\'][^>]*>.*?</span>(.{0,500})',
+            html, re.I | re.S,
+        )
+        block = block_m.group(1) if block_m else html
+        cm = re.search(
+            r'id=["\']market_daily_chg["\'][^>]*>([^<]+)',
+            block, re.I,
+        )
+        if not cm:
+            cm = re.search(r'id=["\']market_daily_chg["\'][^>]*>([^<]+)', html, re.I)
+        if cm:
+            change = number(cm.group(1)) or 0.0
+        pm = re.search(
+            r'Daily\s*Change[^0-9+-]{0,40}([+-]?[0-9.]+)\s+([+-]?[0-9.]+)\s*%',
+            re.sub(r"<[^>]+>", " ", block if block_m else html),
+            re.I,
+        )
+        if pm:
+            if change == 0.0:
+                change = number(pm.group(1)) or 0.0
+            pct = number(pm.group(2)) or 0.0
+        elif price and change:
+            # approximate pct if only absolute change found
+            prev = price - change
+            pct = (change / prev * 100) if prev else 0.0
+
+        src = f"TradingEconomics ({slug})"
+        ts = _ist_now_label()
+        return {
+            "price": round(float(price), 2),
+            "change": round(float(change), 2),
+            "pct": round(float(pct), 2),
+            "source": src,
+            "source_short": _source_short(src),
+            "source_time_label": ts,
+            "fetched_at": ts,
+        }
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=45, show_spinner=False)
 def fetch_investing_brent():
     """Live Brent crude from Investing.com (in. domain preferred).
     URL: https://in.investing.com/commodities/brent-oil
@@ -712,8 +801,8 @@ YAHOO_FALLBACK = {
     "GIFT_NIFTY": None,          # not reliable on Yahoo
     "US_TECH_FUT": "^NDX",       # Nasdaq-100 index (closest liquid proxy)
     "US_30_FUT": "^DJI",         # Dow Jones
-    "CL=F": "CL=F",
-    "BZ=F": None,          # Investing.com is source for Brent (no Yahoo)
+    "CL=F": None,          # TE final for WTI (no Yahoo)
+    "BZ=F": None,          # TE final for Brent (no Yahoo)
     "NG=F": "NG=F",
     "GC=F": "GC=F",
     "SI=F": "SI=F",
@@ -737,7 +826,7 @@ YAHOO_FALLBACK = {
     "NIFTY_MID_SELECT": None,
 }
 
-@st.cache_data(ttl=20, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None, yahoo_ticker: str = None):
     """
     Priority (most reliable first for each source):
@@ -752,13 +841,26 @@ def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None, ya
         quote = fetch_tradingview_quote(symbol)
         if quote:
             # Reject absurd Brent quotes (e.g. a % return scraped as price)
-            if key in ("BZ=F", "CRUDE OIL BRENT") or (investing_key or key) in ("BZ=F",):
+            if key in ("BZ=F", "CL=F", "CRUDE OIL BRENT", "CRUDE OIL WTI") or (investing_key or key) in ("BZ=F", "CL=F"):
                 if not (50.0 <= float(quote.get("price") or 0) <= 200.0):
                     quote = None
+                # Prefer TE for oil: skip TV so TE path runs (TV often lags / wrong contract)
+                quote = None
             if quote:
                 return quote
     slug_key = investing_key or key
-    # 2) Investing.com for Brent (in.investing.com/commodities/brent-oil) — before Investing
+    # 2) TradingEconomics for oil (Brent + WTI) — preferred live source
+    _oil_te = {
+        "BZ=F": "commodity/brent-crude-oil",
+        "CL=F": "commodity/crude-oil",
+        "CRUDE OIL BRENT": "commodity/brent-crude-oil",
+        "CRUDE OIL WTI": "commodity/crude-oil",
+    }
+    if key in _oil_te or slug_key in _oil_te:
+        teq = fetch_tradingeconomics_commodity(_oil_te.get(key) or _oil_te.get(slug_key))
+        if teq:
+            return teq
+    # 3) Investing.com for Brent page (secondary)
     if key in ("BZ=F", "CRUDE OIL BRENT") or slug_key in ("BZ=F",):
         brent = fetch_investing_brent()
         if brent:
@@ -773,18 +875,34 @@ def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None, ya
                     inv = None
             if inv:
                 return inv
-    # 4) Yahoo Finance (final) — skipped for Brent via YAHOO_FALLBACK=None
-    y_ticker = yahoo_ticker or YAHOO_FALLBACK.get(key) or YAHOO_FALLBACK.get(slug_key)
-    if y_ticker:
-        yq = fetch_yahoo_quote(y_ticker)
-        if yq:
-            return yq
-    # Last-ditch: try the raw key itself on Yahoo if it looks like a ticker
-    if key and key not in ("GIFT_NIFTY", "US_TECH_FUT", "US_30_FUT") and ("=" in key or key.startswith("^") or key.endswith(".SS")):
-        yq = fetch_yahoo_quote(key)
-        if yq:
-            return yq
-    # 4) TradingEconomics final fallback for US indices
+    # 4) TradingEconomics commodities — final for Brent & WTI (no Yahoo)
+    te_commodity_map = {
+        "BZ=F": "commodity/brent-crude-oil",
+        "CL=F": "commodity/crude-oil",
+        "CRUDE OIL BRENT": "commodity/brent-crude-oil",
+        "CRUDE OIL WTI": "commodity/crude-oil",
+    }
+    te_c_slug = te_commodity_map.get(key) or te_commodity_map.get(slug_key)
+    if te_c_slug:
+        teq = fetch_tradingeconomics_commodity(te_c_slug)
+        if teq:
+            return teq
+    # 5) Yahoo Finance — never for oil (BZ=F / CL=F)
+    oil_keys = {"BZ=F", "CL=F", "CRUDE OIL BRENT", "CRUDE OIL WTI"}
+    if key not in oil_keys and slug_key not in oil_keys:
+        y_ticker = yahoo_ticker or YAHOO_FALLBACK.get(key) or YAHOO_FALLBACK.get(slug_key)
+        if y_ticker:
+            yq = fetch_yahoo_quote(y_ticker)
+            if yq:
+                return yq
+        # Last-ditch Yahoo only for non-oil tickers
+        if key and key not in ("GIFT_NIFTY", "US_TECH_FUT", "US_30_FUT", "BZ=F", "CL=F") and (
+            "=" in key or key.startswith("^") or key.endswith(".SS")
+        ):
+            yq = fetch_yahoo_quote(key)
+            if yq:
+                return yq
+    # 6) TradingEconomics final fallback for US indices
     te_map = {"US_TECH_FUT": "us100:ind", "US_30_FUT": "indu:ind", "^NDX": "us100:ind", "^DJI": "indu:ind"}
     te_slug = te_map.get(key)
     if te_slug:
@@ -793,7 +911,7 @@ def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None, ya
             return teq
     return None
 
-@st.cache_data(ttl=10, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def fetch_gift_nifty_50():
     """Fetch GIFT Nifty from all available sources and prefer the newest parseable source timestamp.
 
@@ -994,7 +1112,7 @@ def fetch_gift_nifty_50():
     return selected
 
 
-@st.cache_data(ttl=20, show_spinner=False)
+@st.cache_data(ttl=45, show_spinner=False)
 def fetch_midcap_select():
     """Nifty Mid Select from Moneycontrol + Investing.com; prefer the quote with the newest parseable timestamp."""
     ist = pytz.timezone("Asia/Kolkata")
@@ -1133,7 +1251,7 @@ def fetch_midcap_select():
     return min(candidates, key=lambda q: priority.get(q.get("source", ""), 3))
 
 
-@st.cache_data(ttl=45)
+@st.cache_data(ttl=60)
 def fetch_stock_data(symbol: str):
     try:
         t = yf.Ticker(f"{symbol}.NS")
@@ -1158,7 +1276,7 @@ def fetch_stock_data(symbol: str):
     except Exception:
         return None
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=90)
 def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
     try:
         t = yf.Ticker(f"{symbol}.NS")
@@ -1174,7 +1292,7 @@ def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
     except Exception:
         return None
 
-@st.cache_data(ttl=90)
+@st.cache_data(ttl=180)
 def get_daily_atr(symbol: str, atr_period: int = 14, lookback_days: int = 30):
     try:
         t = yf.Ticker(f"{symbol}.NS")
@@ -1215,7 +1333,7 @@ def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
     renko_df["Brick"] = range(1, len(renko_df) + 1)
     return renko_df
 
-@st.cache_data(ttl=90)
+@st.cache_data(ttl=120)
 def get_top_movers(universe: list):
     try:
         tickers = [f"{s}.NS" for s in universe]
@@ -1314,7 +1432,7 @@ def analyze_renko_signal(symbol: str, timeframe: str):
         "Just Entered": just_entered
     }
 
-@st.cache_data(ttl=90, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def scan_renko_universe(universe_tuple: tuple):
     jobs = [(symbol, timeframe) for symbol in universe_tuple for timeframe in ("1 Hour", "30 Minutes")]
     rows = []
@@ -1348,7 +1466,7 @@ def scan_renko_universe(universe_tuple: tuple):
     ).drop(columns=["_tf", "_sig"]).reset_index(drop=True)
     return result_df
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def get_options_chain(ltp: float, symbol: str):
     headers = nse_session_headers()
     session = requests.Session()
@@ -1446,7 +1564,7 @@ NIFTY50_WEIGHT = {
     "HEROMOTOCO": 0.5, "BAJAJ-AUTO": 0.5, "ADANIENT": 0.5, "ETERNAL": 0.5, "UPL": 0.3
 }
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=90)
 def get_index_analytics(ticker: str):
     try:
         t = yf.Ticker(ticker)
@@ -1482,7 +1600,7 @@ def get_index_analytics(ticker: str):
     except Exception:
         return None
 
-@st.cache_data(ttl=45, show_spinner=False)
+@st.cache_data(ttl=90, show_spinner=False)
 def get_option_sentiment(symbol: str = "NIFTY"):
     """
     Returns dict: pcr, max_pain, atm_iv, source.
@@ -1728,7 +1846,7 @@ def get_pcr(symbol: str = "NIFTY"):
     data = get_option_sentiment(symbol)
     return data.get("pcr") if data else None
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=90)
 def get_market_breadth(universe: list):
     try:
         tickers = [f"{s}.NS" for s in universe]
@@ -1768,7 +1886,7 @@ def get_stock_news(symbol: str, limit: int = 4):
     except Exception:
         return []
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=90)
 def get_stock_summary_analytics(symbol: str):
     try:
         t = yf.Ticker(f"{symbol}.NS")
@@ -1807,7 +1925,7 @@ def get_stock_summary_analytics(symbol: str):
         return None
 
 # ---------- Most Active (Value / Volume) from NSE ----------
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=90, show_spinner=False)
 def get_most_active(by: str = "value"):
     """Top most-active equities by value or volume from NSE live-analysis endpoint."""
     headers = nse_session_headers()
@@ -1863,7 +1981,7 @@ def get_most_active(by: str = "value"):
     return pd.DataFrame()
 
 # ---------- Nifty 50 Heatmap ----------
-@st.cache_data(ttl=90, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def get_nifty50_heatmap(universe: list):
     try:
         tickers = [f"{s}.NS" for s in universe]
@@ -2036,7 +2154,7 @@ def get_china_asia_deep_take(pointers):
 
 
 # ---------- Built-up cycle (F&O style, Quantsapp-inspired) ----------
-@st.cache_data(ttl=90, show_spinner=False)
+@st.cache_data(ttl=150, show_spinner=False)
 def get_fno_builtup(universe: list, top_n: int = 30):
     """
     Approximate Built-up cycle for top F&O stocks.
@@ -2167,7 +2285,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TradingView → Investing.com → Yahoo Finance • NSE")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  Speed pack: longer cache, parallel cards")
 
 # -------------------------------------------------
 # Header + Time
@@ -2184,11 +2302,22 @@ col1, col2, col3 = st.columns([2.2, 1.2, 1])
 with col1:
     selected = st.selectbox("🔍 Select Stock (NSE)", options=dropdown_universe, index=0, key="selected")
 with col2:
-    auto_refresh = st.checkbox("🔄 Auto-refresh every 1 min", value=True)
+    auto_refresh = st.checkbox("🔄 Auto-refresh every 2 min", value=False)
 with col3:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("Refresh Now", use_container_width=True):
-        st.cache_data.clear()
+        # Soft clear: only live quote caches (keeps universe/news/renko warm → faster)
+        for _fn in (
+            fetch_yahoo_quote, fetch_index_quote, fetch_tradingview_quote,
+            fetch_investing_quote, fetch_live_instrument, fetch_gift_nifty_50,
+            fetch_midcap_select, fetch_investing_brent, fetch_tradingeconomics_quote,
+            fetch_tradingeconomics_commodity, fetch_stock_data, get_option_sentiment,
+            get_options_chain, get_stock_summary_analytics, get_index_analytics,
+        ):
+            try:
+                _fn.clear()
+            except Exception:
+                pass
         st.session_state.last_options_refresh = time.time()
         st.rerun()
 
@@ -2254,7 +2383,7 @@ instruments = {
     "US 30 FUT": ("live", "US_30_FUT", ("CBOT:YM1!", "CME_MINI:YM1!", "DJ:DJI", "TVC:DJI"), "US_30_FUT", "^DJI"),
     "US 10Y BOND": ("live", "^TNX", ("TVC:US10Y",), "^TNX", "^TNX"),
     "US 30Y BOND": ("live", "^TYX", ("TVC:US30Y",), "^TYX", "^TYX"),
-    "CRUDE OIL WTI": ("live", "CL=F", ("TVC:USOIL", "NYMEX:CL1!"), "CL=F", "CL=F"),
+    "CRUDE OIL WTI": ("live", "CL=F", ("TVC:USOIL", "NYMEX:CL1!"), "CL=F", None),
     "CRUDE OIL BRENT": ("live", "BZ=F", ("TVC:UKOIL", "ICEEUR:BRN1!"), "BZ=F", None),
     "NATURAL GAS": ("live", "NG=F", ("NYMEX:NG1!",), "NG=F", "NG=F"),
     "GOLD": ("live", "GC=F", ("MCX:GOLD1!", "COMEX:GC1!", "TVC:GOLD"), "GC=F", "GC=F"),
@@ -2274,11 +2403,11 @@ yield_keys = {"US 10Y BOND", "US 30Y BOND"}
 vix_keys = {"INDIA VIX"}
 items = list(instruments.items())
 
-for i in range(0, len(items), 6):
-    row_items = items[i:i + 6]
-    cols = st.columns(6)
-    for j, (name, meta) in enumerate(row_items):
-        mode, key, tv_symbols, inv_key, yahoo_tk = meta
+# Parallel fetch all index cards (major speed win vs sequential HTTP)
+def _fetch_instrument_card(name_meta):
+    name, meta = name_meta
+    mode, key, tv_symbols, inv_key, yahoo_tk = meta
+    try:
         if mode == "gift":
             data = fetch_gift_nifty_50()
         elif mode == "midselect":
@@ -2287,6 +2416,20 @@ for i in range(0, len(items), 6):
             data = fetch_index_quote(key)
         else:
             data = fetch_live_instrument(key, tv_symbols, inv_key, yahoo_tk)
+    except Exception:
+        data = None
+    return name, data
+
+_instrument_data = {}
+with ThreadPoolExecutor(max_workers=12) as _pool:
+    for _name, _data in _pool.map(_fetch_instrument_card, items):
+        _instrument_data[_name] = _data
+
+for i in range(0, len(items), 6):
+    row_items = items[i:i + 6]
+    cols = st.columns(6)
+    for j, (name, meta) in enumerate(row_items):
+        data = _instrument_data.get(name)
 
         with cols[j]:
             if data:
@@ -2388,9 +2531,17 @@ macro_specs = [
     ("KOSPI", "^KS11", ("KRX:KOSPI",), "^KS11", "^KS11"),
     ("ASX 200", "^AXJO", ("ASX:XJO",), "^AXJO", "^AXJO"),
 ]
+def _fetch_macro(spec):
+    label, key, tv_symbols, inv_key, yahoo_tk = spec
+    try:
+        return label, fetch_live_instrument(key, tv_symbols, inv_key, yahoo_tk)
+    except Exception:
+        return label, None
+
 macro_quotes = {}
-for label, key, tv_symbols, inv_key, yahoo_tk in macro_specs:
-    macro_quotes[label] = fetch_live_instrument(key, tv_symbols, inv_key, yahoo_tk)
+with ThreadPoolExecutor(max_workers=8) as _mpool:
+    for _label, _q in _mpool.map(_fetch_macro, macro_specs):
+        macro_quotes[_label] = _q
 
 st.markdown(
     '<div style="font-size:0.92rem; font-weight:600; margin-bottom:0.25rem;">Macro pointers</div>',
@@ -2679,7 +2830,8 @@ scan_col1, scan_col2 = st.columns([1, 4])
 with scan_col1:
     if st.button("🔄 Scan All Stocks", use_container_width=True):
         scan_renko_universe.clear()
-        st.cache_data.clear()
+        get_ohlc_data.clear()
+        get_daily_atr.clear()
         st.rerun()
 with scan_col2:
     st.caption(f"Scanning {len(universe)} Nifty 50 stocks across 30-minute and 1-hour timeframes.")
@@ -2754,10 +2906,8 @@ styled = options_df.style.format({
 }).apply(highlight_atm, axis=1)
 st.dataframe(styled, use_container_width=True, hide_index=True)
 
-if time.time() - st.session_state.last_options_refresh > 30:
-    get_options_chain.clear()
-    st.session_state.last_options_refresh = time.time()
-    st.rerun()
+# Options chain uses cache TTL — no forced 30s full-page rerun (speed pack)
+
 
 st.markdown("---")
 
@@ -2947,5 +3097,5 @@ else:
 
 # Auto refresh
 if auto_refresh:
-    time.sleep(60)
+    time.sleep(120)
     st.rerun()
