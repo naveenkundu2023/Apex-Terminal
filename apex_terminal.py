@@ -631,7 +631,7 @@ YAHOO_FALLBACK = {
     "US_TECH_FUT": "^NDX",       # Nasdaq-100 index (closest liquid proxy)
     "US_30_FUT": "^DJI",         # Dow Jones
     "CL=F": "CL=F",
-    "BZ=F": "BZ=F",
+    "BZ=F": None,          # Investing.com preferred over Yahoo for Brent
     "NG=F": "NG=F",
     "GC=F": "GC=F",
     "SI=F": "SI=F",
@@ -1243,6 +1243,8 @@ def scan_renko_universe(universe_tuple: tuple):
     sig_order = {"BUY": 0, "BULLISH": 1, "SELL": 2, "BEARISH": 3}
     result_df["_tf"] = result_df["Timeframe"].map(tf_order).fillna(9)
     result_df["_sig"] = result_df["Signal"].map(sig_order).fillna(9)
+    # Order: 1H BUY → 1H BULLISH → 1H SELL → 1H BEARISH → 30M BUY → …
+    # Within each group: lowest Age Minutes (newest) on top
     result_df = result_df.sort_values(
         by=["_tf", "_sig", "Age Minutes", "Last Brick TS"],
         ascending=[True, True, True, False],
@@ -2157,7 +2159,7 @@ instruments = {
     "US 10Y BOND": ("live", "^TNX", ("TVC:US10Y",), "^TNX", "^TNX"),
     "US 30Y BOND": ("live", "^TYX", ("TVC:US30Y",), "^TYX", "^TYX"),
     "CRUDE OIL WTI": ("live", "CL=F", ("TVC:USOIL", "NYMEX:CL1!"), "CL=F", "CL=F"),
-    "CRUDE OIL BRENT": ("live", "BZ=F", ("TVC:UKOIL", "ICEEUR:BRN1!"), "BZ=F", "BZ=F"),
+    "CRUDE OIL BRENT": ("live", "BZ=F", ("TVC:UKOIL", "ICEEUR:BRN1!"), "BZ=F", None),
     "NATURAL GAS": ("live", "NG=F", ("NYMEX:NG1!",), "NG=F", "NG=F"),
     "GOLD": ("live", "GC=F", ("MCX:GOLD1!", "COMEX:GC1!", "TVC:GOLD"), "GC=F", "GC=F"),
     "SILVER": ("live", "SI=F", ("MCX:SILVER1!", "COMEX:SI1!", "TVC:SILVER"), "SI=F", "SI=F"),
@@ -2575,7 +2577,7 @@ st.markdown("---")
 # Intraday Renko Signal Scanner
 # -------------------------------------------------
 st.markdown('<div class="section-header">🎯 Intraday Renko Signals • 1H BUY/Bullish → 1H SELL/Bearish → 30M BUY/Bullish → 30M SELL/Bearish</div>', unsafe_allow_html=True)
-st.caption("Only stocks with the latest two Renko bricks in the same direction are listed. BUY/SELL requires close above/below 20 EMA. ⚡ = Just entered (≤ 20 min). Within each group: newest signal on top.")
+st.caption("Only stocks with the latest two Renko bricks in the same direction are listed. BUY/SELL requires close above/below 20 EMA. ⚡ = Just entered (≤ 20 min). Order: 1H BUY → 1H BULLISH → 1H SELL → 1H BEARISH → 30M same. Within each group sorted by Age Minutes — newest (lowest age) on top.")
 
 scan_col1, scan_col2 = st.columns([1, 4])
 with scan_col1:
