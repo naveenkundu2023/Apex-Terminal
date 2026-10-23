@@ -2429,6 +2429,7 @@ for i in range(0, len(items), 6):
     row_items = items[i:i + 6]
     cols = st.columns(6)
     for j, (name, meta) in enumerate(row_items):
+        mode, key, tv_symbols, inv_key, yahoo_tk = meta  # needed for price formatting
         data = _instrument_data.get(name)
 
         with cols[j]:
