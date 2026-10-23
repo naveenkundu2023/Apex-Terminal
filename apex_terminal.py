@@ -598,8 +598,12 @@ def fetch_tradingeconomics_quote(slug: str):
 
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_moneycontrol_brent():
-    """Brent crude from Moneycontrol — final fallback when TV/Investing fail.
+    """Brent crude CFD from Moneycontrol.
     URL: https://www.moneycontrol.com/commodity/international-brent-crude-price?symbol=CO1:COM
+
+    Live LTP is rendered as animated digits (hard to scrape). Prefer:
+      price = Previous Close + Change
+    which is stable in the overview table on the same page.
     """
     try:
         url = "https://www.moneycontrol.com/commodity/international-brent-crude-price?symbol=CO1:COM"
@@ -613,10 +617,12 @@ def fetch_moneycontrol_brent():
         if r.status_code != 200:
             return None
         html = r.text
-        plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+        plain = re.sub(r"<script.*?</script>", " ", html, flags=re.I | re.S)
+        plain = re.sub(r"<[^>]+>", " ", plain)
+        plain = re.sub(r"\s+", " ", plain)
 
         def number(value):
-            if not value:
+            if value is None:
                 return None
             cleaned = re.sub(r"[^0-9.+-]", "", str(value).replace(",", ""))
             try:
@@ -624,50 +630,56 @@ def fetch_moneycontrol_brent():
             except ValueError:
                 return None
 
-        price = None
-        # Common Moneycontrol commodity price patterns
-        for pat in (
-            r'data-lastprice=["\']([0-9.]+)',
-            r'id=["\']lastprice["\'][^>]*>\s*([0-9,]+\.?[0-9]*)',
-            r'id=["\']Bse_Prc_tick["\'][^>]*>\s*([0-9,]+\.?[0-9]*)',
-            r'class=["\'][^"\']*lastprice[^"\']*["\'][^>]*>\s*([0-9,]+\.?[0-9]*)',
-            r'(?:Last\s*Price|LTP|Price)\s*[:]?\s*([0-9,]+\.?[0-9]*)',
-            r'Brent.{0,80}?([0-9]{2,3}\.[0-9]{1,2})',
-        ):
-            m = re.search(pat, html if "id=" in pat or "data-" in pat or "class=" in pat else plain, re.I)
-            if m:
-                price = number(m.group(1))
-                if price and 20 < price < 200:  # sane Brent band
-                    break
-                price = None
+        # Structured table fields (reliable on this page)
+        prev = None
+        open_px = None
+        day_high = day_low = None
+        m = re.search(r"Previous\s*Close\s*([0-9]+\.?[0-9]*)", plain, re.I)
+        if m:
+            prev = number(m.group(1))
+        m = re.search(r"\bOpen\s*([0-9]+\.?[0-9]*)", plain, re.I)
+        if m:
+            open_px = number(m.group(1))
+        m = re.search(r"Day\s*High\s*([0-9]+\.?[0-9]*)", plain, re.I)
+        if m:
+            day_high = number(m.group(1))
+        m = re.search(r"Day\s*Low\s*([0-9]+\.?[0-9]*)", plain, re.I)
+        if m:
+            day_low = number(m.group(1))
 
-        if price is None:
-            # Fallback: first plausible commodity-style number near Brent
-            nums = re.findall(r"([0-9]{2,3}\.[0-9]{1,2})", plain)
-            for n in nums:
-                v = number(n)
-                if v and 30 < v < 150:
-                    price = v
-                    break
-
-        if price is None or price <= 0:
-            return None
-
-        change = pct = 0.0
+        # First change / pct near the quote (e.g. "0.80 ( 0.71 %)") — avoid later performance %
+        change = pct = None
+        # Restrict search window to text before "Day Range" / "Returns" so we don't pick 3M/YTD %
+        window = plain
+        cut = re.search(r"Day\s*Range|52\s*Week\s*Range|Returns", plain, re.I)
+        if cut:
+            window = plain[: cut.start()]
         chg_m = re.search(
-            r"([+-]?[0-9,]+\.?[0-9]*)\s*\(\s*([+-]?[0-9]+\.?[0-9]*)\s*%\s*\)",
-            plain,
+            r"([+-]?[0-9]+\.?[0-9]*)\s*\(\s*([+-]?[0-9]+\.?[0-9]*)\s*%\s*\)",
+            window,
         )
         if chg_m:
-            change = number(chg_m.group(1)) or 0.0
-            pct = number(chg_m.group(2)) or 0.0
-        else:
-            prev_m = re.search(r"Previous\s*(?:Close|Price)\s*([0-9,]+\.?[0-9]*)", plain, re.I)
-            if prev_m:
-                prev = number(prev_m.group(1))
-                if prev and prev > 0:
-                    change = price - prev
-                    pct = (change / prev) * 100
+            change = number(chg_m.group(1))
+            pct = number(chg_m.group(2))
+
+        price = None
+        if prev is not None and change is not None:
+            price = prev + change
+        elif open_px is not None and day_high is not None and day_low is not None:
+            # Mid of day range as soft proxy when change missing
+            price = (day_high + day_low) / 2.0
+        elif open_px is not None:
+            price = open_px
+        elif prev is not None:
+            price = prev
+
+        # Sanity: Brent CFD typically 50–150 in this cycle; reject % returns (e.g. 32.9)
+        if price is None or not (50.0 <= price <= 200.0):
+            return None
+        if change is None:
+            change = 0.0
+        if pct is None:
+            pct = (change / prev * 100) if prev else 0.0
 
         src = "Moneycontrol (Brent Crude)"
         ts = _ist_now_label()
@@ -758,20 +770,29 @@ def fetch_live_instrument(key: str, tv_symbols=(), investing_key: str = None, ya
     for symbol in tv_symbols:
         quote = fetch_tradingview_quote(symbol)
         if quote:
-            return quote
-    # 2) Investing.com
+            # Reject absurd Brent quotes (e.g. a % return scraped as price)
+            if key in ("BZ=F", "CRUDE OIL BRENT") or (investing_key or key) in ("BZ=F",):
+                if not (50.0 <= float(quote.get("price") or 0) <= 200.0):
+                    quote = None
+            if quote:
+                return quote
     slug_key = investing_key or key
-    slug = INVESTING_SLUGS.get(slug_key)
-    if slug:
-        inv = fetch_investing_quote(slug)
-        if inv:
-            return inv
-    # 3) Moneycontrol Brent — preferred final fallback for crude Brent (no Yahoo)
+    # 2) Moneycontrol for Brent (authoritative CFD page) — before Investing
     if key in ("BZ=F", "CRUDE OIL BRENT") or slug_key in ("BZ=F",):
         mc = fetch_moneycontrol_brent()
         if mc:
             return mc
-    # 4) Yahoo Finance (final reliable fallback) — skipped for Brent via YAHOO_FALLBACK=None
+    # 3) Investing.com
+    slug = INVESTING_SLUGS.get(slug_key)
+    if slug:
+        inv = fetch_investing_quote(slug)
+        if inv:
+            if key in ("BZ=F", "CRUDE OIL BRENT") or slug_key in ("BZ=F",):
+                if not (50.0 <= float(inv.get("price") or 0) <= 200.0):
+                    inv = None
+            if inv:
+                return inv
+    # 4) Yahoo Finance (final) — skipped for Brent via YAHOO_FALLBACK=None
     y_ticker = yahoo_ticker or YAHOO_FALLBACK.get(key) or YAHOO_FALLBACK.get(slug_key)
     if y_ticker:
         yq = fetch_yahoo_quote(y_ticker)
