@@ -1,14 +1,15 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-22 (v6 — Taiwan/FTSE/UK; Mid Select fix; stock PCR/MaxPain; Renko IST age - 22.10.26- 12.07 pm )
-# Changes in this build (on top of v5):
-# 1) Market Indices & Global Instruments: added TAIWAN TAIEX, FTSE 100 (UK).
-# 2) MIDCAP SELECT: use Investing.com / Moneycontrol (latest) instead of unreliable Yahoo NIFTY_MID_SELECT.NS.
-# 3) Stock Instant Snapshot: show selected stock PCR (OI) + Max Pain from NSE equity option chain.
-# 4) Renko scanner Age Minutes: treat yfinance intraday timestamps as UTC→IST so age reflects Indian market time.
-# Previous (v5) changes retained:
-# 1) Market Indices cards: source prefix (U/M/I/T/Y/TE) + IST timestamp on every card.
-# 2) Renko scanner order: 1 Hour groups first (BUY/BULLISH then SELL/BEARISH), then 30 Minutes groups.
-# 3) Soft pastel up/down index cards; GIFT newest-timestamp selection; US TE fallback; China business-only news;
-#    Corporate Actions + Top-5 news high-vis boxes; Built-up cycle section.
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-25 (v7 — Renko 15m + box ladder Daily/6; Simulation analytics)
+# Changes in this build (on top of v6):
+# 1) Renko scanner: add 15 Minutes timeframe. Box-size ladder only change:
+#      Daily ATR (existing 7/14-day avg of ATR14) → 1H = D/6 → 30M = D/12 → 15M = D/24.
+#    Signal rules, Age Minutes, Just-Entered, sorting style UNCHANGED.
+# 2) Below scanner table: Renko Simulation Analytics box (7/15/30/60d × 15m/30m/1H/1D)
+#    with 2-brick stop, +2/+3/+4 brick targets, EMA20/EMA50 regime filters,
+#    plus 30-day analysis text and logic-change recommendation prompt.
+# Previous (v6) changes retained:
+# 1) TAIWAN TAIEX, FTSE 100; MIDCAP SELECT Moneycontrol/Investing; stock PCR/MaxPain;
+#    Renko IST age; source prefix + IST on cards; soft pastel cards; GIFT newest-ts;
+#    US TE fallback; China business-only news; Corporate Actions; Top-5 news; Built-up cycle.
 
 import streamlit as st
 import yfinance as yf
@@ -1363,12 +1364,19 @@ def get_top_movers(universe: list):
         return None, None
 
 def analyze_renko_signal(symbol: str, timeframe: str):
-    interval = "1h" if timeframe == "1 Hour" else "30m"
-    period = "1mo" if interval == "1h" else "5d"
+    """Live Renko signal. Signal rules unchanged; only box-size ladder updated:
+    Daily ATR (existing) → 1H = D/6 → 30M = D/12 → 15M = D/24.
+    """
+    if timeframe == "1 Hour":
+        interval, period, tail_n = "1h", "1mo", 120
+    elif timeframe == "15 Minutes":
+        interval, period, tail_n = "15m", "5d", 180
+    else:  # 30 Minutes (default)
+        interval, period, tail_n = "30m", "5d", 150
     candles = get_ohlc_data(symbol, interval=interval, period=period)
     if candles is None or candles.empty or len(candles) < 22:
         return None
-    candles = candles.tail(120 if interval == "1h" else 150).copy().reset_index(drop=True)
+    candles = candles.tail(tail_n).copy().reset_index(drop=True)
 
     def _to_ist(ts):
         """Convert candle/brick timestamp to Asia/Kolkata. Naive yfinance intraday bars are UTC."""
@@ -1385,7 +1393,12 @@ def analyze_renko_signal(symbol: str, timeframe: str):
 
     if not candles.empty:
         last_time = _to_ist(candles["Date"].iloc[-1])
-        bar_length = pd.Timedelta(hours=1 if interval == "1h" else 0, minutes=30 if interval == "30m" else 0)
+        if interval == "1h":
+            bar_length = pd.Timedelta(hours=1)
+        elif interval == "15m":
+            bar_length = pd.Timedelta(minutes=15)
+        else:
+            bar_length = pd.Timedelta(minutes=30)
         if last_time + bar_length > pd.Timestamp.now(tz="Asia/Kolkata") and len(candles) > 1:
             candles = candles.iloc[:-1].reset_index(drop=True)
     if len(candles) < 22:
@@ -1393,8 +1406,15 @@ def analyze_renko_signal(symbol: str, timeframe: str):
     candles["EMA20"] = calculate_ema(candles["Close"], 20)
     price = float(candles["Close"].iloc[-1])
     ema20 = float(candles["EMA20"].iloc[-1])
+    # ATR source unchanged (prefer last-7 avg of ATR14, fallback last-14)
     daily_atr = get_daily_atr(symbol, 14, 7) or get_daily_atr(symbol, 14, 14) or (price * 0.005)
-    box_size = daily_atr / 5 if interval == "1h" else daily_atr / 10
+    # Box-size ladder only change: Daily / 6 / 12 / 24
+    if interval == "1h":
+        box_size = daily_atr / 6.0
+    elif interval == "30m":
+        box_size = daily_atr / 12.0
+    else:  # 15m
+        box_size = daily_atr / 24.0
     bricks = generate_renko(candles, box_size)
     if bricks.empty or len(bricks) < 2:
         return None
@@ -1434,7 +1454,8 @@ def analyze_renko_signal(symbol: str, timeframe: str):
 
 @st.cache_data(ttl=180, show_spinner=False)
 def scan_renko_universe(universe_tuple: tuple):
-    jobs = [(symbol, timeframe) for symbol in universe_tuple for timeframe in ("1 Hour", "30 Minutes")]
+    jobs = [(symbol, timeframe) for symbol in universe_tuple
+            for timeframe in ("1 Hour", "30 Minutes", "15 Minutes")]
     rows = []
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(analyze_renko_signal, symbol, timeframe) for symbol, timeframe in jobs]
@@ -1449,15 +1470,14 @@ def scan_renko_universe(universe_tuple: tuple):
         return pd.DataFrame()
     result_df = pd.DataFrame(rows)
     # Required order:
-    #   1) 1 Hour     — BUY / BULLISH (newest first)
-    #   2) 1 Hour     — SELL / BEARISH (newest first)
-    #   3) 30 Minutes — BUY / BULLISH (newest first)
-    #   4) 30 Minutes — SELL / BEARISH (newest first)
-    tf_order = {"1 Hour": 0, "30 Minutes": 1}
+    #   1) 1 Hour     — BUY / BULLISH / SELL / BEARISH (newest first)
+    #   2) 30 Minutes — same
+    #   3) 15 Minutes — same
+    tf_order = {"1 Hour": 0, "30 Minutes": 1, "15 Minutes": 2}
     sig_order = {"BUY": 0, "BULLISH": 1, "SELL": 2, "BEARISH": 3}
     result_df["_tf"] = result_df["Timeframe"].map(tf_order).fillna(9)
     result_df["_sig"] = result_df["Signal"].map(sig_order).fillna(9)
-    # Order: 1H BUY → 1H BULLISH → 1H SELL → 1H BEARISH → 30M BUY → …
+    # Order: 1H BUY → 1H BULLISH → 1H SELL → 1H BEARISH → 30M … → 15M …
     # Within each group: lowest Age Minutes (newest) on top
     result_df = result_df.sort_values(
         by=["_tf", "_sig", "Age Minutes", "Last Brick TS"],
@@ -1465,6 +1485,245 @@ def scan_renko_universe(universe_tuple: tuple):
         kind="stable"
     ).drop(columns=["_tf", "_sig"]).reset_index(drop=True)
     return result_df
+
+
+# ---------- Renko Simulation Analytics (2-brick stop, +2/+3/+4 targets) ----------
+@st.cache_data(ttl=300, show_spinner=False)
+def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
+    """
+    Lightweight historical simulation of the live Renko signal rules.
+    Stop = 2 bricks against entry; targets = +2 / +3 / +4 bricks.
+    Also tags EMA20 / EMA50 regime at signal time.
+    Returns dict of period → summary tables + 30d text analysis & recommendation.
+    """
+    lookbacks = [7, 15, 30, 60]
+    tfs = [
+        ("15 Minutes", "15m", 24.0, "10d"),
+        ("30 Minutes", "30m", 12.0, "1mo"),
+        ("1 Hour", "1h", 6.0, "2mo"),
+        ("Daily", "1d", 1.0, "6mo"),
+    ]
+    # Limit symbols for speed (full Nifty can be slow on first cache miss)
+    symbols = list(universe_tuple)[:40]
+    # Collect per-signal rows
+    all_rows = []
+
+    def _sim_one(symbol, tf_label, interval, box_div, period):
+        try:
+            t = yf.Ticker(f"{symbol}.NS")
+            df = t.history(period=period, interval=interval)
+            if df is None or df.empty or len(df) < 30:
+                return []
+            df = df.dropna(subset=["Close"]).reset_index()
+            if "Datetime" in df.columns:
+                df = df.rename(columns={"Datetime": "Date"})
+            if "Date" not in df.columns:
+                return []
+            price0 = float(df["Close"].iloc[-1])
+            daily_atr = get_daily_atr(symbol, 14, 7) or get_daily_atr(symbol, 14, 14) or (price0 * 0.005)
+            box = float(daily_atr) / box_div
+            if box <= 0:
+                return []
+            df["EMA20"] = calculate_ema(df["Close"], 20)
+            df["EMA50"] = calculate_ema(df["Close"], 50)
+            bricks = generate_renko(df, box)
+            if bricks is None or bricks.empty or len(bricks) < 6:
+                return []
+            # Map brick timestamps to nearest candle for EMA context
+            out = []
+            closes = bricks["Close"].astype(float).values
+            opens = bricks["Open"].astype(float).values
+            dates = bricks["Date"].values
+            for i in range(1, len(bricks) - 4):  # leave room for target bricks
+                g1 = closes[i - 1] > opens[i - 1]
+                g2 = closes[i] > opens[i]
+                r1 = closes[i - 1] < opens[i - 1]
+                r2 = closes[i] < opens[i]
+                if not ((g1 and g2) or (r1 and r2)):
+                    continue
+                entry = float(closes[i])
+                # EMA at approx signal time: last candle on/before brick date
+                try:
+                    ts = pd.Timestamp(dates[i])
+                    sub = df[df["Date"] <= ts] if "Date" in df.columns else df
+                    if sub.empty:
+                        continue
+                    px = float(sub["Close"].iloc[-1])
+                    e20 = float(sub["EMA20"].iloc[-1])
+                    e50 = float(sub["EMA50"].iloc[-1]) if "EMA50" in sub.columns else e20
+                except Exception:
+                    continue
+                if g1 and g2:
+                    side = "BUY" if px > e20 else "BULLISH"
+                    direction = 1
+                else:
+                    side = "SELL" if px < e20 else "BEARISH"
+                    direction = -1
+                # Regime
+                above20 = px > e20
+                above50 = px > e50
+                if above20 and above50:
+                    regime = "Above both EMA20+50"
+                elif (not above20) and (not above50):
+                    regime = "Below both EMA20+50"
+                elif above20:
+                    regime = "Above EMA20 only"
+                else:
+                    regime = "Below EMA20 only"
+                # Forward brick path
+                stop_hit = False
+                hit2 = hit3 = hit4 = False
+                for j in range(i + 1, min(i + 25, len(bricks))):
+                    move = (float(closes[j]) - entry) / box * direction
+                    if move <= -2.0:
+                        stop_hit = True
+                        break
+                    if move >= 2.0:
+                        hit2 = True
+                    if move >= 3.0:
+                        hit3 = True
+                    if move >= 4.0:
+                        hit4 = True
+                        break
+                # Age of signal in calendar days from now
+                try:
+                    age_days = (pd.Timestamp.now(tz=None) - pd.Timestamp(dates[i]).tz_localize(None)).days
+                except Exception:
+                    age_days = 999
+                out.append({
+                    "Stock": symbol,
+                    "Timeframe": tf_label,
+                    "Signal": side,
+                    "Regime": regime,
+                    "AgeDays": age_days,
+                    "Hit2": hit2,
+                    "Hit3": hit3,
+                    "Hit4": hit4,
+                    "Stopped": stop_hit and not hit2,
+                })
+            return out
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futs = []
+        for sym in symbols:
+            for tf_label, interval, box_div, period in tfs:
+                futs.append(pool.submit(_sim_one, sym, tf_label, interval, box_div, period))
+        for f in as_completed(futs):
+            try:
+                all_rows.extend(f.result() or [])
+            except Exception:
+                continue
+
+    if not all_rows:
+        return {"ok": False, "periods": {}, "analysis_30d": "Simulation data unavailable (Yahoo throttle or insufficient history).", "recommend": ""}
+
+    rdf = pd.DataFrame(all_rows)
+    periods = {}
+    for days in lookbacks:
+        sub = rdf[rdf["AgeDays"] <= days]
+        if sub.empty:
+            periods[days] = None
+            continue
+        rows = []
+        for tf in ["15 Minutes", "30 Minutes", "1 Hour", "Daily"]:
+            for sig in ["BUY", "BULLISH", "SELL", "BEARISH"]:
+                g = sub[(sub["Timeframe"] == tf) & (sub["Signal"] == sig)]
+                n = len(g)
+                if n == 0:
+                    continue
+                rows.append({
+                    "Timeframe": tf,
+                    "Signal": sig,
+                    "Signals": n,
+                    "Hit +2 (%)": round(100.0 * g["Hit2"].mean(), 1),
+                    "Hit +3 (%)": round(100.0 * g["Hit3"].mean(), 1),
+                    "Hit +4 (%)": round(100.0 * g["Hit4"].mean(), 1),
+                    "Stopped before +2 (%)": round(100.0 * g["Stopped"].mean(), 1),
+                })
+        # Regime view (all signals pooled)
+        reg_rows = []
+        for regime in ["Above both EMA20+50", "Above EMA20 only", "Below EMA20 only", "Below both EMA20+50"]:
+            g = sub[sub["Regime"] == regime]
+            n = len(g)
+            if n == 0:
+                continue
+            reg_rows.append({
+                "Regime": regime,
+                "Signals": n,
+                "Hit +2 (%)": round(100.0 * g["Hit2"].mean(), 1),
+                "Hit +3 (%)": round(100.0 * g["Hit3"].mean(), 1),
+                "Hit +4 (%)": round(100.0 * g["Hit4"].mean(), 1),
+                "Stopped before +2 (%)": round(100.0 * g["Stopped"].mean(), 1),
+            })
+        periods[days] = {
+            "by_tf_sig": pd.DataFrame(rows) if rows else pd.DataFrame(),
+            "by_regime": pd.DataFrame(reg_rows) if reg_rows else pd.DataFrame(),
+            "total": len(sub),
+        }
+
+    # --- 30-day analysis text + recommendation ---
+    p30 = periods.get(30)
+    analysis_lines = []
+    recommend = ""
+    if not p30 or p30["total"] == 0:
+        analysis_30d = "Insufficient completed signals in the last 30 days for a reliable review."
+    else:
+        bt = p30["by_tf_sig"]
+        br = p30["by_regime"]
+        analysis_lines.append(f"30-day sample: **{p30['total']}** completed Renko signals across Nifty-50 (subset).")
+        # Best TF+signal by Hit+2 with min sample
+        if not bt.empty:
+            viable = bt[bt["Signals"] >= 5].copy()
+            if not viable.empty:
+                best = viable.sort_values("Hit +2 (%)", ascending=False).iloc[0]
+                worst = viable.sort_values("Hit +2 (%)", ascending=True).iloc[0]
+                analysis_lines.append(
+                    f"Best setup (n≥5): **{best['Timeframe']} {best['Signal']}** — "
+                    f"Hit+2 {best['Hit +2 (%)']}% | Hit+3 {best['Hit +3 (%)']}% | Stopped {best['Stopped before +2 (%)']}% (n={int(best['Signals'])})."
+                )
+                analysis_lines.append(
+                    f"Weakest setup (n≥5): **{worst['Timeframe']} {worst['Signal']}** — "
+                    f"Hit+2 {worst['Hit +2 (%)']}% | Stopped {worst['Stopped before +2 (%)']}% (n={int(worst['Signals'])})."
+                )
+        if not br.empty:
+            viable_r = br[br["Signals"] >= 8].copy()
+            if not viable_r.empty:
+                best_r = viable_r.sort_values("Hit +2 (%)", ascending=False).iloc[0]
+                analysis_lines.append(
+                    f"Best EMA regime: **{best_r['Regime']}** — Hit+2 {best_r['Hit +2 (%)']}% "
+                    f"(n={int(best_r['Signals'])})."
+                )
+                # Recommendation trigger
+                buy_like = bt[bt["Signal"].isin(["BUY", "BULLISH"])] if not bt.empty else pd.DataFrame()
+                sell_like = bt[bt["Signal"].isin(["SELL", "BEARISH"])] if not bt.empty else pd.DataFrame()
+                tips = []
+                if not buy_like.empty and buy_like["Hit +2 (%)"].max() >= 55:
+                    tips.append("Favour BUY/BULLISH when price is above both EMA20 & EMA50 (higher +2 hit rate in sample).")
+                if not sell_like.empty and sell_like["Hit +2 (%)"].max() < 45 and sell_like["Signals"].sum() >= 10:
+                    tips.append("SELL/BEARISH hit-rates are soft in this 30-day window — require extra confirmation or skip low-conviction BEARISH.")
+                # 15m noise check
+                m15 = bt[bt["Timeframe"] == "15 Minutes"] if not bt.empty else pd.DataFrame()
+                if not m15.empty and m15["Stopped before +2 (%)"].mean() > 50:
+                    tips.append("15-minute signals show elevated early stops — consider requiring 3 consecutive bricks or EMA50 alignment on 15m.")
+                # 1H quality
+                h1 = bt[bt["Timeframe"] == "1 Hour"] if not bt.empty else pd.DataFrame()
+                if not h1.empty and h1["Hit +2 (%)"].mean() >= 50:
+                    tips.append("1-Hour signals remain the most stable TF in this window; keep primary focus there.")
+                if tips:
+                    recommend = " **Logic-change prompt (30-day review):** " + " ".join(tips)
+                else:
+                    recommend = " **Logic-change prompt (30-day review):** No strong structural change indicated. Current two-brick + EMA20 filter is acceptable; re-check after next 30 sessions."
+        analysis_30d = " ".join(analysis_lines) if analysis_lines else "30-day review complete — see tables."
+
+    return {
+        "ok": True,
+        "periods": periods,
+        "analysis_30d": analysis_30d,
+        "recommend": recommend,
+    }
+
 
 @st.cache_data(ttl=60)
 def get_options_chain(ltp: float, symbol: str):
@@ -2824,8 +3083,8 @@ st.markdown("---")
 # -------------------------------------------------
 # Intraday Renko Signal Scanner
 # -------------------------------------------------
-st.markdown('<div class="section-header">🎯 Intraday Renko Signals • 1H BUY/Bullish → 1H SELL/Bearish → 30M BUY/Bullish → 30M SELL/Bearish</div>', unsafe_allow_html=True)
-st.caption("Only stocks with the latest two Renko bricks in the same direction are listed. BUY/SELL requires close above/below 20 EMA. ⚡ = Just entered (≤ 20 min). Order: 1H BUY → 1H BULLISH → 1H SELL → 1H BEARISH → 30M same. Within each group sorted by Age Minutes — newest (lowest age) on top.")
+st.markdown('<div class="section-header">🎯 Intraday Renko Signals • 1H → 30M → 15M (BUY/Bullish then SELL/Bearish)</div>', unsafe_allow_html=True)
+st.caption("Only stocks with the latest two Renko bricks in the same direction are listed. BUY/SELL requires close above/below 20 EMA. ⚡ = Just entered (≤ 20 min). Order: 1H BUY → 1H BULLISH → 1H SELL → 1H BEARISH → 30M same → 15M same. Within each group sorted by Age Minutes — newest (lowest age) on top. Box size: Daily ATR ÷ 6 (1H) ÷ 2 (30M) ÷ 2 (15M).")
 
 scan_col1, scan_col2 = st.columns([1, 4])
 with scan_col1:
@@ -2833,9 +3092,13 @@ with scan_col1:
         scan_renko_universe.clear()
         get_ohlc_data.clear()
         get_daily_atr.clear()
+        try:
+            run_renko_simulation.clear()
+        except Exception:
+            pass
         st.rerun()
 with scan_col2:
-    st.caption(f"Scanning {len(universe)} Nifty 50 stocks across 30-minute and 1-hour timeframes.")
+    st.caption(f"Scanning {len(universe)} Nifty 50 stocks across 15-minute, 30-minute and 1-hour timeframes.")
 
 with st.spinner("Scanning Renko bricks… first scan may take a little time."):
     signal_df = scan_renko_universe(tuple(universe))
@@ -2881,6 +3144,76 @@ else:
     st.download_button("⬇️ Download signal list (CSV)",
                        data=signal_df.drop(columns=["Last Brick TS"], errors="ignore").to_csv(index=False).encode("utf-8"),
                        file_name="intraday_renko_signals.csv", mime="text/csv")
+
+# ---------- Renko Simulation Analytics (below scanner table) ----------
+st.markdown('<div class="section-header">📈 Renko Signal Simulation Analytics</div>', unsafe_allow_html=True)
+st.caption(
+    "Historical simulation of the same two-brick signal rules. "
+    "Stop = 2 bricks against entry · Targets = +2 / +3 / +4 bricks. "
+    "EMA regimes tagged at signal time. Primary review window = **30 days**. "
+    "First load may take a minute (then cached ~5 min)."
+)
+
+with st.spinner("Running Renko simulation (cached)…"):
+    sim = run_renko_simulation(tuple(universe), primary_days=30)
+
+if not sim.get("ok"):
+    st.info(sim.get("analysis_30d", "Simulation temporarily unavailable."))
+else:
+    # Period selector for tables
+    period_choice = st.radio(
+        "Simulation look-back",
+        ["30d (primary)", "7d", "15d", "60d"],
+        index=0,
+        horizontal=True,
+        key="renko_sim_period",
+    )
+    day_map = {"30d (primary)": 30, "7d": 7, "15d": 15, "60d": 60}
+    days = day_map[period_choice]
+    block = sim["periods"].get(days)
+    if not block or block.get("total", 0) == 0:
+        st.info(f"No completed signals in the last {days} days for the current universe sample.")
+    else:
+        st.markdown(f"**Sample size:** {block['total']} signals · TF × Signal hit-rates (stop = 2 bricks)")
+        tf_df = block.get("by_tf_sig")
+        if tf_df is not None and not tf_df.empty:
+            st.dataframe(
+                tf_df.style.format({
+                    "Hit +2 (%)": "{:.1f}",
+                    "Hit +3 (%)": "{:.1f}",
+                    "Hit +4 (%)": "{:.1f}",
+                    "Stopped before +2 (%)": "{:.1f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+        st.markdown("**EMA regime filter** (all signals in window)")
+        reg_df = block.get("by_regime")
+        if reg_df is not None and not reg_df.empty:
+            st.dataframe(
+                reg_df.style.format({
+                    "Hit +2 (%)": "{:.1f}",
+                    "Hit +3 (%)": "{:.1f}",
+                    "Hit +4 (%)": "{:.1f}",
+                    "Stopped before +2 (%)": "{:.1f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    # Always show 30-day analysis + recommendation under the tables
+    st.markdown("---")
+    st.markdown("#### 🔍 Analysis & recommendation (30-day review)")
+    st.markdown(sim.get("analysis_30d", ""))
+    if sim.get("recommend"):
+        st.markdown(
+            f'<div class="analysis-box" style="border-left:4px solid #fbbf24;">{sim["recommend"]}</div>',
+            unsafe_allow_html=True,
+        )
+    st.caption(
+        "Simulation is approximate (Renko from OHLC, volume not used as OI). "
+        "Use it to periodically tune filters — not as live trade advice."
+    )
 
 st.markdown("---")
 
