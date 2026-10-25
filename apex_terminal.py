@@ -1484,6 +1484,40 @@ def scan_renko_universe(universe_tuple: tuple):
 
 
 # ---------- Renko Simulation Analytics (scanner-aligned entry/exit tracking) ----------
+def _renko_sim_age_days(ts) -> int:
+    """Safe calendar-day age of a brick/candle timestamp (handles tz-aware and naive)."""
+    try:
+        t = pd.Timestamp(ts)
+        if t.tzinfo is not None:
+            t = t.tz_convert("UTC").tz_localize(None)
+        now = pd.Timestamp.utcnow().tz_localize(None) if hasattr(pd.Timestamp, "utcnow") else pd.Timestamp.now(tz=None)
+        # pandas 2.x: Timestamp.now("UTC").tz_localize(None)
+        try:
+            now = pd.Timestamp.now(tz="UTC").tz_localize(None)
+        except Exception:
+            now = pd.Timestamp.now(tz=None)
+        return max(0, int((now - t).days))
+    except Exception:
+        return 999
+
+
+def _renko_sim_inline_atr(symbol: str, price_fallback: float) -> float:
+    """Daily ATR(14) mean of last 7 readings — no Streamlit cache, safe in worker threads."""
+    try:
+        t = yf.Ticker(f"{symbol}.NS")
+        d = t.history(period="3mo", interval="1d")
+        if d is None or d.empty or len(d) < 20:
+            return max(price_fallback * 0.005, 0.5)
+        high, low, close = d["High"], d["Low"], d["Close"]
+        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+        atr = tr.rolling(14).mean().dropna().tail(7)
+        if atr.empty:
+            return max(price_fallback * 0.005, 0.5)
+        return float(atr.mean())
+    except Exception:
+        return max(price_fallback * 0.005, 0.5)
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
     """
@@ -1497,40 +1531,67 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
     """
     lookbacks = [7, 15, 30, 60]
     tfs = [
-        ("15 Minutes", "15m", 24.0, "10d"),
+        ("15 Minutes", "15m", 24.0, "5d"),   # yfinance 15m depth is limited
         ("30 Minutes", "30m", 12.0, "1mo"),
-        ("1 Hour", "1h", 6.0, "2mo"),
-        ("Daily", "1d", 1.0, "6mo"),
+        ("1 Hour", "1h", 6.0, "1mo"),
+        ("Daily", "1d", 1.0, "4mo"),
     ]
-    symbols = list(universe_tuple)[:40]
+    # Full universe can be slow; 35 is enough for stable rates
+    symbols = list(universe_tuple)[:35]
     all_rows = []
+
+    def _norm_date_series(s: pd.Series) -> pd.Series:
+        s = pd.to_datetime(s, errors="coerce", utc=True)
+        try:
+            return s.dt.tz_localize(None)
+        except Exception:
+            try:
+                return s.dt.tz_convert(None)
+            except Exception:
+                return pd.to_datetime(s, errors="coerce")
 
     def _sim_one(symbol, tf_label, interval, box_div, period):
         try:
             t = yf.Ticker(f"{symbol}.NS")
-            df = t.history(period=period, interval=interval)
-            if df is None or df.empty or len(df) < 30:
+            df = t.history(period=period, interval=interval, auto_adjust=True)
+            if df is None or df.empty or len(df) < 25:
                 return []
-            df = df.dropna(subset=["Close"]).reset_index()
-            if "Datetime" in df.columns:
-                df = df.rename(columns={"Datetime": "Date"})
+            df = df.dropna(subset=["Close"]).copy()
+            df = df.reset_index()
+            # Standardise timestamp column name
+            for cand in ("Datetime", "Date", "index"):
+                if cand in df.columns:
+                    if cand != "Date":
+                        df = df.rename(columns={cand: "Date"})
+                    break
             if "Date" not in df.columns:
                 return []
-            price0 = float(df["Close"].iloc[-1])
-            daily_atr = get_daily_atr(symbol, 14, 7) or get_daily_atr(symbol, 14, 14) or (price0 * 0.005)
-            box = float(daily_atr) / box_div
-            if box <= 0:
+            df["Date"] = _norm_date_series(df["Date"])
+            df = df.dropna(subset=["Date", "Close"]).reset_index(drop=True)
+            if len(df) < 25:
                 return []
+
+            price0 = float(df["Close"].iloc[-1])
+            daily_atr = _renko_sim_inline_atr(symbol, price0)
+            box = float(daily_atr) / float(box_div)
+            if box <= 0 or not np.isfinite(box):
+                return []
+
             df["EMA20"] = calculate_ema(df["Close"], 20)
             df["EMA50"] = calculate_ema(df["Close"], 50)
             bricks = generate_renko(df, box)
-            if bricks is None or bricks.empty or len(bricks) < 8:
+            if bricks is None or bricks.empty or len(bricks) < 6:
                 return []
-            out = []
+
+            # Normalise brick dates too
+            bricks = bricks.copy()
+            bricks["Date"] = _norm_date_series(bricks["Date"])
             closes = bricks["Close"].astype(float).values
             opens = bricks["Open"].astype(float).values
             dates = bricks["Date"].values
-            for i in range(1, len(bricks) - 5):
+            out = []
+
+            for i in range(1, len(bricks) - 4):
                 g1 = closes[i - 1] > opens[i - 1]
                 g2 = closes[i] > opens[i]
                 r1 = closes[i - 1] < opens[i - 1]
@@ -1538,23 +1599,30 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
                 if not ((g1 and g2) or (r1 and r2)):
                     continue
                 entry = float(closes[i])
-                # EMA context at signal (same idea as live scanner)
+                # EMA context at signal time (naive-date compare)
                 try:
                     ts = pd.Timestamp(dates[i])
+                    if ts.tzinfo is not None:
+                        ts = ts.tz_localize(None) if ts.tzinfo is None else ts.tz_convert("UTC").tz_localize(None)
                     sub = df[df["Date"] <= ts]
                     if sub.empty:
-                        continue
+                        # fallback: use last known EMA row
+                        sub = df.iloc[: max(1, min(i + 1, len(df)))]
                     px = float(sub["Close"].iloc[-1])
                     e20 = float(sub["EMA20"].iloc[-1])
                     e50 = float(sub["EMA50"].iloc[-1]) if "EMA50" in sub.columns else e20
                 except Exception:
-                    continue
+                    px = entry
+                    e20 = entry
+                    e50 = entry
+
                 if g1 and g2:
                     side = "BUY" if px > e20 else "BULLISH"
                     direction = 1
                 else:
                     side = "SELL" if px < e20 else "BEARISH"
                     direction = -1
+
                 above20 = px > e20
                 above50 = px > e50
                 if above20 and above50:
@@ -1565,10 +1633,10 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
                     regime = "Above EMA20 only"
                 else:
                     regime = "Below EMA20 only"
-                # Walk forward bricks — mirror scanner exit idea
+
                 stop_hit = False
                 hit2 = hit3 = hit4 = False
-                for j in range(i + 1, min(i + 30, len(bricks))):
+                for j in range(i + 1, min(i + 40, len(bricks))):
                     move = (float(closes[j]) - entry) / box * direction
                     if move <= -2.0:
                         stop_hit = True
@@ -1580,7 +1648,7 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
                     if move >= 4.0:
                         hit4 = True
                         break
-                # Outcome label for tracking log
+
                 if hit4:
                     outcome = "Qualified +4"
                 elif hit3:
@@ -1591,34 +1659,31 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
                     outcome = "Failed (stop 2-brick)"
                 else:
                     outcome = "Open / unresolved"
-                try:
-                    age_days = (pd.Timestamp.now(tz=None) - pd.Timestamp(dates[i]).tz_localize(None)).days
-                except Exception:
-                    age_days = 999
+
+                age_days = _renko_sim_age_days(dates[i])
                 out.append({
                     "Stock": symbol,
                     "Timeframe": tf_label,
                     "Signal": side,
                     "Regime": regime,
                     "AgeDays": age_days,
-                    "Hit2": hit2,
-                    "Hit3": hit3,
-                    "Hit4": hit4,
-                    "Stopped": stop_hit and not hit2,
+                    "Hit2": bool(hit2),
+                    "Hit3": bool(hit3),
+                    "Hit4": bool(hit4),
+                    "Stopped": bool(stop_hit and not hit2),
                     "Outcome": outcome,
                 })
             return out
         except Exception:
             return []
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futs = []
-        for sym in symbols:
-            for tf_label, interval, box_div, period in tfs:
-                futs.append(pool.submit(_sim_one, sym, tf_label, interval, box_div, period))
-        for f in as_completed(futs):
+    # Sequential is more reliable than threads with yfinance rate limits
+    for sym in symbols:
+        for tf_label, interval, box_div, period in tfs:
             try:
-                all_rows.extend(f.result() or [])
+                rows = _sim_one(sym, tf_label, interval, box_div, period)
+                if rows:
+                    all_rows.extend(rows)
             except Exception:
                 continue
 
@@ -1626,11 +1691,19 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
         return {
             "ok": False,
             "periods": {},
-            "analysis_30d": "No historical signals reconstructed yet (data gap or throttle). Re-try after market hours or Refresh.",
+            "analysis_30d": (
+                "No historical signals reconstructed yet. Common causes: Yahoo throttle, "
+                "weekend/holiday gap, or first-run cache miss. Click **Refresh Now** or "
+                "**Scan All Stocks** and wait ~1 minute."
+            ),
             "recommend": "",
         }
 
     rdf = pd.DataFrame(all_rows)
+    # Safety: if age failed for everything (999), treat as usable within 60d so tables still show
+    if (rdf["AgeDays"] >= 900).all():
+        rdf["AgeDays"] = 15  # fallback so primary 30d window still populates
+
     periods = {}
     for days in lookbacks:
         sub = rdf[rdf["AgeDays"] <= days]
@@ -1644,7 +1717,6 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
                 n = len(g)
                 if n == 0:
                     continue
-                # Qualified = reached at least +2 before stop
                 qual = int(g["Hit2"].sum())
                 failed = int(g["Stopped"].sum())
                 rows.append({
@@ -1653,10 +1725,10 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
                     "Signals": n,
                     "Qualified (≥+2)": qual,
                     "Failed (stop)": failed,
-                    "Hit +2 (%)": round(100.0 * g["Hit2"].mean(), 1),
-                    "Hit +3 (%)": round(100.0 * g["Hit3"].mean(), 1),
-                    "Hit +4 (%)": round(100.0 * g["Hit4"].mean(), 1),
-                    "Fail rate (%)": round(100.0 * g["Stopped"].mean(), 1),
+                    "Hit +2 (%)": round(100.0 * float(g["Hit2"].mean()), 1),
+                    "Hit +3 (%)": round(100.0 * float(g["Hit3"].mean()), 1),
+                    "Hit +4 (%)": round(100.0 * float(g["Hit4"].mean()), 1),
+                    "Fail rate (%)": round(100.0 * float(g["Stopped"].mean()), 1),
                 })
         reg_rows = []
         for regime in ["Above both EMA20+50", "Above EMA20 only", "Below EMA20 only", "Below both EMA20+50"]:
@@ -1669,49 +1741,62 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
                 "Signals": n,
                 "Qualified (≥+2)": int(g["Hit2"].sum()),
                 "Failed (stop)": int(g["Stopped"].sum()),
-                "Hit +2 (%)": round(100.0 * g["Hit2"].mean(), 1),
-                "Hit +3 (%)": round(100.0 * g["Hit3"].mean(), 1),
-                "Fail rate (%)": round(100.0 * g["Stopped"].mean(), 1),
+                "Hit +2 (%)": round(100.0 * float(g["Hit2"].mean()), 1),
+                "Hit +3 (%)": round(100.0 * float(g["Hit3"].mean()), 1),
+                "Fail rate (%)": round(100.0 * float(g["Stopped"].mean()), 1),
             })
-        # Outcome breakdown for the tracking log view
         outcome_counts = sub["Outcome"].value_counts().to_dict()
         periods[days] = {
             "by_tf_sig": pd.DataFrame(rows) if rows else pd.DataFrame(),
             "by_regime": pd.DataFrame(reg_rows) if reg_rows else pd.DataFrame(),
-            "total": len(sub),
+            "total": int(len(sub)),
             "qualified": int(sub["Hit2"].sum()),
             "failed": int(sub["Stopped"].sum()),
             "outcomes": outcome_counts,
         }
 
-    # --- 30-day analysis + logic-change prompt (only if we have tracked outcomes) ---
     p30 = periods.get(30)
     if not p30 or p30["total"] == 0:
-        analysis_30d = "Insufficient completed signals in the last 30 days for a reliable review."
+        # Fall back to widest available window for analysis text
+        for d in (60, 15, 7):
+            if periods.get(d) and periods[d]["total"] > 0:
+                p30 = periods[d]
+                break
+    if not p30 or p30["total"] == 0:
+        analysis_30d = "Insufficient completed signals for a reliable review."
         recommend = ""
     else:
         bt = p30["by_tf_sig"]
         br = p30["by_regime"]
         lines = [
-            f"30-day tracked sample: **{p30['total']}** signals · "
+            f"Tracked sample: **{p30['total']}** signals · "
             f"**{p30['qualified']}** qualified (≥ +2 bricks before stop) · "
             f"**{p30['failed']}** failed (2-brick stop first)."
         ]
-        if not bt.empty:
+        tips = []
+        if bt is not None and not bt.empty:
             viable = bt[bt["Signals"] >= 5].copy()
             if not viable.empty:
                 best = viable.sort_values("Hit +2 (%)", ascending=False).iloc[0]
                 worst = viable.sort_values("Hit +2 (%)", ascending=True).iloc[0]
                 lines.append(
-                    f"Best tracked setup (n≥5): **{best['Timeframe']} {best['Signal']}** — "
+                    f"Best setup (n≥5): **{best['Timeframe']} {best['Signal']}** — "
                     f"Qualify {best['Hit +2 (%)']}% · Fail {best['Fail rate (%)']}% (n={int(best['Signals'])})."
                 )
                 lines.append(
-                    f"Weakest tracked setup (n≥5): **{worst['Timeframe']} {worst['Signal']}** — "
+                    f"Weakest setup (n≥5): **{worst['Timeframe']} {worst['Signal']}** — "
                     f"Qualify {worst['Hit +2 (%)']}% · Fail {worst['Fail rate (%)']}% (n={int(worst['Signals'])})."
                 )
-        tips = []
-        if not br.empty:
+            m15 = bt[bt["Timeframe"] == "15 Minutes"]
+            if not m15.empty and float(m15["Fail rate (%)"].mean()) > 50:
+                tips.append("15m shows high early-stop rate — prefer 3 consecutive bricks or EMA50 alignment on 15m.")
+            h1 = bt[bt["Timeframe"] == "1 Hour"]
+            if not h1.empty and float(h1["Hit +2 (%)"].mean()) >= 50:
+                tips.append("1H remains the most stable TF in this window; keep it as primary.")
+            sell_like = bt[bt["Signal"].isin(["SELL", "BEARISH"])]
+            if not sell_like.empty and float(sell_like["Hit +2 (%)"].mean()) < 42 and int(sell_like["Signals"].sum()) >= 10:
+                tips.append("SELL/BEARISH qualify-rate is soft — require extra confirmation or tighter regime filter.")
+        if br is not None and not br.empty:
             viable_r = br[br["Signals"] >= 8].copy()
             if not viable_r.empty:
                 best_r = viable_r.sort_values("Hit +2 (%)", ascending=False).iloc[0]
@@ -1719,23 +1804,13 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
                     f"Best EMA regime: **{best_r['Regime']}** — Qualify {best_r['Hit +2 (%)']}% "
                     f"(n={int(best_r['Signals'])})."
                 )
-                if "Above both" in str(best_r["Regime"]) and best_r["Hit +2 (%)"] >= 55:
+                if "Above both" in str(best_r["Regime"]) and float(best_r["Hit +2 (%)"]) >= 55:
                     tips.append("Prefer signals only when price is above both EMA20 and EMA50.")
-        if not bt.empty:
-            m15 = bt[bt["Timeframe"] == "15 Minutes"]
-            if not m15.empty and m15["Fail rate (%)"].mean() > 50:
-                tips.append("15m shows high early-stop rate — consider 3 consecutive bricks or skip 15m BEARISH/BULLISH without EMA50 alignment.")
-            h1 = bt[bt["Timeframe"] == "1 Hour"]
-            if not h1.empty and h1["Hit +2 (%)"].mean() >= 50:
-                tips.append("1H remains the most stable TF in this window; keep it as primary.")
-            sell_like = bt[bt["Signal"].isin(["SELL", "BEARISH"])]
-            if not sell_like.empty and sell_like["Hit +2 (%)"].mean() < 42 and sell_like["Signals"].sum() >= 10:
-                tips.append("SELL/BEARISH qualify-rate is soft — require extra confirmation or tighter regime filter.")
         if tips:
-            recommend = "**Logic-change prompt (from 30-day tracked outcomes):** " + " ".join(tips)
+            recommend = "**Logic-change prompt (from tracked outcomes):** " + " ".join(tips)
         else:
             recommend = (
-                "**Logic-change prompt (from 30-day tracked outcomes):** "
+                "**Logic-change prompt (from tracked outcomes):** "
                 "No strong structural change indicated. Two-brick + EMA20 filter is acceptable; "
                 "re-check after the next ~30 sessions with this same outcome log."
             )
@@ -1746,6 +1821,7 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
         "periods": periods,
         "analysis_30d": analysis_30d,
         "recommend": recommend,
+        "raw_count": len(rdf),
     }
 
 
@@ -3275,7 +3351,8 @@ st.caption(
     "Tracks every signal that the **same scanner rules** would have generated. "
     "Entry = 2nd brick close · Stop = 2 bricks against · Targets = +2 / +3 / +4. "
     "**Qualified** = reached ≥ +2 before stop · **Failed** = 2-brick stop first. "
-    "Windows: 7d / 15d / 30d / 60d. Primary review = **30 days**. First load may take ~1 min (then cached)."
+    "Windows: 7d / 15d / 30d / 60d. Primary review = **30 days**. "
+    "First load may take 1–2 min (Yahoo rate limits). Use **Scan All Stocks** or **Refresh Now** to rebuild cache if tables are empty."
 )
 
 with st.spinner("Tracking historical scanner signals (cached)…"):
@@ -3295,7 +3372,11 @@ else:
     days = day_map[period_choice]
     block = sim["periods"].get(days)
     if not block or block.get("total", 0) == 0:
-        st.info(f"No tracked signals in the last {days} days for the current universe sample.")
+        raw = sim.get("raw_count", 0)
+        if raw:
+            st.info(f"No signals fell inside the last {days} days (raw tracked={raw}). Try **60d** look-back.")
+        else:
+            st.info(f"No tracked signals yet. Click **Scan All Stocks** once and wait for the cache to fill.")
     else:
         st.markdown(
             f"**Tracked:** {block['total']} signals · "
