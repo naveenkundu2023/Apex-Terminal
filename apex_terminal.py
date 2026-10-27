@@ -1,13 +1,16 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-25 (v7.1)
-# v7.1 on top of v7:
-# 1) Chart timeframe radio: add 15 Minutes (with matching Renko box D/24).
-# 2) Scanner display order: BUY/BULLISH first (15m→30m→1H, age newest on top),
-#    then SELL/BEARISH same TF order.
-# 3) Simulation: track Qualified (≥+2 before stop) vs Failed (2-brick stop first);
-#    outcome log for 7/15/30/60d; 30d logic-change prompt from tracked outcomes.
-# 4) Built-up: deep assessment box under grid (sustain LB/SB, SC bounce, LU caution).
-# 5) News: top 6, India-first queries (ET/Moneycontrol/Bloomberg/FT/TE context).
-# v7 core retained: 15m scanner TF, box ladder D/6→/12→/24, signal rules unchanged.
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-27 (v7.2)
+# v7.2 on top of v7.1:
+# 1) Stock snapshot box: compact last-5-day price bars (green/red/grey) inside the box.
+# 2) New VWAP+PCR screen box: top-5 above-VWAP lowest PCR + top-5 below-VWAP highest PCR,
+#    plus independent positional BUY/SELL analysis (expiry / month horizon).
+# 3) Renko scanner: Confidence % = live (TF+age+EMA) blended with sim Hit+2 by TF×Signal;
+#    sort order unchanged (BUY→BULLISH 15m→30m→1H newest first, then SELL→BEARISH).
+#    Live table = current two-brick signals only; fails drop when bricks reverse (sim tracks them).
+#    Positional layer = 5D VWAP×PCR screen (no separate Daily Renko scanner — avoids double noise).
+# 4) Nifty heatmap: ▲/▼ vs previous refresh for intraday direction change.
+# 5) Corporate actions: also surface upcoming results (next ~7 days) when available.
+# 6) News: top-6 list kept; Visual Daily Brief (top-10 style cards) in expander/popover.
+# v7.1/v7 core retained: signal rules, box ladder, simulation analytics, built-up.
 
 import streamlit as st
 import yfinance as yf
@@ -61,6 +64,10 @@ if "last_bank_pcr" not in st.session_state:
     st.session_state.last_bank_pcr = None
 if "last_pcr_time" not in st.session_state:
     st.session_state.last_pcr_time = None
+if "heatmap_prev_pct" not in st.session_state:
+    st.session_state.heatmap_prev_pct = {}
+if "renko_conf_weights" not in st.session_state:
+    st.session_state.renko_conf_weights = {}  # (Timeframe, Signal) -> hit2 rate 0-100
 
 # -------------------------------------------------
 # Theme CSS
@@ -1440,6 +1447,33 @@ def analyze_renko_signal(symbol: str, timeframe: str):
     if age_minutes < 0:
         age_minutes = 0.0
     just_entered = age_minutes <= 20
+    # Confidence % (independent of signal rules): higher TF + fresh brick + clear EMA edge
+    # Base by timeframe (1H more structural than 15m for positional read)
+    tf_base = {"1 Hour": 72, "30 Minutes": 62, "15 Minutes": 52}.get(timeframe, 55)
+    # Freshness: just-entered boost; older decays
+    if age_minutes <= 10:
+        age_adj = 12
+    elif age_minutes <= 20:
+        age_adj = 8
+    elif age_minutes <= 45:
+        age_adj = 3
+    elif age_minutes <= 90:
+        age_adj = -4
+    else:
+        age_adj = -10
+    # EMA distance (in box units) — clearer separation = higher confidence
+    ema_dist_boxes = abs(price - ema20) / max(box_size, 1e-6)
+    if ema_dist_boxes >= 1.5:
+        ema_adj = 10
+    elif ema_dist_boxes >= 0.75:
+        ema_adj = 5
+    elif ema_dist_boxes >= 0.25:
+        ema_adj = 0
+    else:
+        ema_adj = -8  # very close to EMA → weaker
+    # BUY/SELL (above/below EMA) slightly preferred over plain BULLISH/BEARISH
+    side_adj = 4 if action in ("BUY", "SELL") else 0
+    confidence = int(max(25, min(95, tf_base + age_adj + ema_adj + side_adj)))
     return {
         "Stock": symbol, "Timeframe": timeframe, "Signal": action, "Renko": direction,
         "Price": round(price, 2), "EMA 20": round(ema20, 2),
@@ -1447,7 +1481,8 @@ def analyze_renko_signal(symbol: str, timeframe: str):
         "Box Size": round(float(box_size), 2),
         "Last Brick Time": last_brick_ts.strftime("%d %b %H:%M"),
         "Last Brick TS": last_brick_ts, "Age Minutes": round(age_minutes, 1),
-        "Just Entered": just_entered
+        "Just Entered": just_entered,
+        "Confidence": confidence,
     }
 
 @st.cache_data(ttl=180, show_spinner=False)
@@ -1481,6 +1516,64 @@ def scan_renko_universe(universe_tuple: tuple):
         kind="stable"
     ).drop(columns=["_side", "_tf"]).reset_index(drop=True)
     return result_df
+
+
+
+def _extract_renko_conf_weights(sim: dict) -> dict:
+    """Map (Timeframe, Signal) -> Hit+2 % from primary sim window (30d → 60/15/7).
+    Used to nudge live Confidence % toward historically stronger setups.
+    """
+    if not sim or not sim.get("ok"):
+        return {}
+    periods = sim.get("periods") or {}
+    block = None
+    for d in (30, 60, 15, 7):
+        b = periods.get(d)
+        if b and b.get("total", 0) >= 8:
+            block = b
+            break
+    if not block:
+        return {}
+    tf_df = block.get("by_tf_sig")
+    if tf_df is None or tf_df.empty:
+        return {}
+    weights = {}
+    for _, r in tf_df.iterrows():
+        n = int(r.get("Signals") or 0)
+        if n < 3:
+            continue
+        tf = r.get("Timeframe")
+        sig = r.get("Signal")
+        hit2 = float(r.get("Hit +2 (%)") or 50)
+        weights[(str(tf), str(sig))] = hit2
+    return weights
+
+
+def _apply_sim_confidence(df: pd.DataFrame, weights: dict) -> pd.DataFrame:
+    """Blend base Confidence with sim Hit+2 rates. Neutral (50%) → no change.
+    + up to ~12 pts for historically strong TF+Signal; - up to ~12 for weak.
+    Requires n>=3 samples in weights (already filtered). Sort order unchanged.
+    """
+    if df is None or df.empty or not weights or "Confidence" not in df.columns:
+        return df
+    out = df.copy()
+    confs = []
+    for _, row in out.iterrows():
+        base = float(row.get("Confidence") or 55)
+        key = (str(row.get("Timeframe")), str(row.get("Signal")))
+        hit2 = weights.get(key)
+        if hit2 is None:
+            # fallback: same TF any signal average
+            tf_hits = [v for (t, s), v in weights.items() if t == key[0]]
+            hit2 = sum(tf_hits) / len(tf_hits) if tf_hits else None
+        if hit2 is None:
+            confs.append(int(base))
+            continue
+        # Map hit2 30→-12, 50→0, 70→+12 (clamp)
+        adj = max(-12, min(12, (hit2 - 50.0) * 0.6))
+        confs.append(int(max(25, min(95, round(base + adj)))))
+    out["Confidence"] = confs
+    return out
 
 
 # ---------- Renko Simulation Analytics (scanner-aligned entry/exit tracking) ----------
@@ -2266,6 +2359,16 @@ def get_stock_summary_analytics(symbol: str):
         change = current - prev_close
         pct = (change / prev_close) * 100 if prev_close else 0
         bias = "BULLISH" if current > vwap_5d and current > avg_5d else "BEARISH" if current < vwap_5d and current < avg_5d else "NEUTRAL"
+        # Compact last-5 daily bars for snapshot UI (green up / red down / grey flat)
+        bars = []
+        closes = last5["Close"].tolist()
+        dates = [pd.Timestamp(d).strftime("%d %b") for d in last5.index]
+        for i, c in enumerate(closes):
+            prev_c = closes[i - 1] if i > 0 else (float(hist["Close"].iloc[-6]) if len(hist) >= 6 else c)
+            dlt = c - prev_c
+            p = (dlt / prev_c * 100) if prev_c else 0
+            color = "green" if p > 0.15 else ("red" if p < -0.15 else "grey")
+            bars.append({"date": dates[i], "close": round(float(c), 2), "pct": round(float(p), 2), "color": color})
         return {
             "current": round(current, 2),
             "prev_close": round(prev_close, 2),
@@ -2278,10 +2381,195 @@ def get_stock_summary_analytics(symbol: str):
             "change": round(change, 2),
             "pct": round(pct, 2),
             "above_vwap": current > vwap_5d,
-            "bias": bias
+            "bias": bias,
+            "last5_bars": bars,
         }
     except Exception:
         return None
+
+
+# ---------- VWAP + PCR positional screen (independent of Renko) ----------
+@st.cache_data(ttl=180, show_spinner=False)
+def get_vwap_pcr_screen(universe_tuple: tuple, top_n: int = 5):
+    """
+    Rank Nifty-50 names by 5-day VWAP bias + equity PCR.
+    Returns:
+      above_low_pcr: price ABOVE 5D VWAP, sorted lowest PCR first (potential long bias)
+      below_high_pcr: price BELOW 5D VWAP, sorted highest PCR first (potential short bias)
+    PCR from get_option_sentiment (NSE preferred). Failures skip silently.
+    """
+    universe = list(universe_tuple)
+    rows = []
+    # Batch daily history once
+    try:
+        tickers = [f"{s}.NS" for s in universe]
+        data = yf.download(tickers, period="10d", group_by="ticker", progress=False, threads=True)
+    except Exception:
+        data = None
+    for sym in universe:
+        try:
+            if data is None:
+                continue
+            hist = data if len(universe) == 1 else (data[f"{sym}.NS"] if f"{sym}.NS" in data.columns.get_level_values(0) else None)
+            if hist is None or hist.empty or len(hist) < 5:
+                continue
+            last5 = hist.tail(5).copy()
+            current = float(hist["Close"].iloc[-1])
+            last5["TP"] = (last5["High"] + last5["Low"] + last5["Close"]) / 3
+            vol_sum = float(last5["Volume"].sum())
+            vwap_5d = float((last5["TP"] * last5["Volume"]).sum() / vol_sum) if vol_sum > 0 else float(last5["Close"].mean())
+            above = current > vwap_5d
+            sent = get_option_sentiment(sym) or {}
+            pcr = sent.get("pcr")
+            if pcr is None:
+                continue
+            rows.append({
+                "Symbol": sym,
+                "LTP": round(current, 2),
+                "VWAP_5D": round(vwap_5d, 2),
+                "Above_VWAP": above,
+                "PCR": round(float(pcr), 3),
+                "MaxPain": sent.get("max_pain"),
+                "Source": sent.get("source") or "",
+            })
+        except Exception:
+            continue
+    if not rows:
+        return pd.DataFrame(), pd.DataFrame(), []
+    df = pd.DataFrame(rows)
+    above_df = df[df["Above_VWAP"]].sort_values("PCR", ascending=True).head(top_n).reset_index(drop=True)
+    below_df = df[~df["Above_VWAP"]].sort_values("PCR", ascending=False).head(top_n).reset_index(drop=True)
+    # Independent positional names (may overlap or extend the ranked lists)
+    analysis_names = []
+    for _, r in above_df.head(3).iterrows():
+        analysis_names.append(("BUY/Bullish", r["Symbol"], r["PCR"], r["LTP"]))
+    for _, r in below_df.head(3).iterrows():
+        analysis_names.append(("SELL/Bearish", r["Symbol"], r["PCR"], r["LTP"]))
+    return above_df, below_df, analysis_names
+
+
+def build_vwap_pcr_analysis(above_df, below_df, analysis_names):
+    """Rule-based independent read — positional horizon (expiry for longs, ~month for shorts). Not advice."""
+    lines = []
+    if analysis_names:
+        buys = [n for side, n, p, l in analysis_names if side.startswith("BUY")]
+        sells = [n for side, n, p, l in analysis_names if side.startswith("SELL")]
+        if buys:
+            lines.append(
+                f"<b>Potential BUY / Bullish (positional for this expiry):</b> "
+                f"{', '.join(buys)}. Price holds above 5-day VWAP while equity PCR is comparatively low "
+                f"(put OI light vs calls) — consistent with constructive positioning into the near expiry. "
+                f"Prefer confirmation on dips toward VWAP rather than chasing extended opens."
+            )
+        if sells:
+            lines.append(
+                f"<b>Potential SELL / Bearish (positional ~1 month):</b> "
+                f"{', '.join(sells)}. Price below 5-day VWAP with elevated PCR often reflects "
+                f"put-heavy hedging or residual long unwind risk. Useful as caution / hedge candidates "
+                f"into the monthly series rather than pure short-term scalps."
+            )
+    else:
+        lines.append("Insufficient PCR + VWAP overlap right now — wait for option-chain refresh during market hours.")
+    lines.append(
+        "<span style='font-size:12px;color:#94a3b8;'>Independent screen only (5D VWAP + equity PCR). "
+        "Separate from the Renko intraday scanner below. Not financial advice — confirm with price action and your broker.</span>"
+    )
+    return lines
+
+
+# ---------- Upcoming results (next ~7 days) helper ----------
+@st.cache_data(ttl=600, show_spinner=False)
+def get_upcoming_results(universe: list, days: int = 7):
+    """Best-effort forthcoming results for Nifty-50 names from NSE corporate filings / results endpoints."""
+    headers = nse_session_headers()
+    session = requests.Session()
+    out = []
+    uni_set = set(s.upper() for s in universe)
+    try:
+        session.get("https://www.nseindia.com", headers=headers, timeout=6)
+        urls = [
+            "https://www.nseindia.com/api/corporates-financial-results?index=equities",
+            "https://www.nseindia.com/api/corporates-corporateActions?index=equities",
+        ]
+        for url in urls:
+            try:
+                r = session.get(url, headers=headers, timeout=10)
+                if r.status_code != 200:
+                    continue
+                data = r.json()
+                rows = data if isinstance(data, list) else (data.get("data") or data.get("corporateActions") or data.get("results") or [])
+                for item in rows:
+                    sym = (item.get("symbol") or item.get("Symbol") or item.get("company") or "").strip().upper()
+                    if not sym or (uni_set and sym not in uni_set):
+                        continue
+                    purpose = (item.get("purpose") or item.get("subject") or item.get("desc") or item.get("action") or item.get("period") or "").strip()
+                    low = purpose.lower()
+                    is_result = any(k in low for k in ("result", "financial", "earnings", "quarter", "q1", "q2", "q3", "q4", "annual"))
+                    if not is_result and "financial-results" not in url:
+                        continue
+                    ex_date = item.get("exDate") or item.get("ex_date") or item.get("boardMeetingDate") or item.get("date") or item.get("fromDate") or item.get("toDate") or ""
+                    rec_date = item.get("recordDate") or item.get("record_date") or item.get("period") or ""
+                    out.append({
+                        "Symbol": sym,
+                        "Purpose": (purpose[:90] if purpose else "Results"),
+                        "Ex-Date": str(ex_date)[:16],
+                        "Record Date": str(rec_date)[:16],
+                        "Type": "Result",
+                    })
+            except Exception:
+                continue
+    except Exception:
+        pass
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass
+    if not out:
+        return pd.DataFrame()
+    df = pd.DataFrame(out).drop_duplicates(subset=["Symbol", "Purpose", "Ex-Date"])
+    return df.head(20)
+
+
+# ---------- Visual Daily Brief (top-10 style cards from news + market cues) ----------
+def build_visual_daily_brief(biz_news, nifty_an=None, bank_an=None, gift=None):
+    """Build up to 10 short visual-style takeaway cards inspired by a daily market digest."""
+    cards = []
+    # Market snapshot card
+    if nifty_an:
+        cards.append({
+            "title": "Nifty 50 snapshot",
+            "body": f"₹{nifty_an['current']:,.0f} ({nifty_an['pct']:+.2f}%) · 5D VWAP ₹{nifty_an['vwap_5d']:,.0f} · "
+                    f"{'Above VWAP' if nifty_an['above_vwap'] else 'Below VWAP'}",
+            "tag": "INDEX",
+        })
+    if bank_an:
+        cards.append({
+            "title": "Bank Nifty snapshot",
+            "body": f"₹{bank_an['current']:,.0f} ({bank_an['pct']:+.2f}%) · 5D VWAP ₹{bank_an['vwap_5d']:,.0f}",
+            "tag": "INDEX",
+        })
+    if gift:
+        cards.append({
+            "title": "GIFT Nifty cue",
+            "body": f"{gift.get('price', 0):,.0f} ({gift.get('pct', 0):+.2f}%) · source {gift.get('source_short', '?')}",
+            "tag": "GLOBAL",
+        })
+    # News-derived cards
+    for n in (biz_news or [])[:7]:
+        title = (n.get("title") or "")[:90]
+        if not title:
+            continue
+        cards.append({"title": title, "body": "From market-moving feed · open full link in Top 6 list", "tag": "NEWS"})
+    # Pad with static guidance if thin
+    while len(cards) < 6:
+        cards.append({
+            "title": "Risk note",
+            "body": "Confirm levels with broker · positional bias ≠ intraday Renko signal",
+            "tag": "NOTE",
+        })
+    return cards[:10]
+
 
 # ---------- Most Active (Value / Volume) from NSE ----------
 @st.cache_data(ttl=90, show_spinner=False)
@@ -2356,7 +2644,15 @@ def get_nifty50_heatmap(universe: list):
                     continue
                 last, prev = float(close.iloc[-1]), float(close.iloc[-2])
                 pct = (last - prev) / prev * 100 if prev else 0
-                rows.append({"Symbol": sym, "LTP": round(last, 2), "% Chg": round(pct, 2)})
+                # Intraday move vs open of last bar when available (refresh-to-refresh uses session)
+                day_open = float(hist["Open"].iloc[-1]) if "Open" in hist.columns else prev
+                intraday_pct = (last - day_open) / day_open * 100 if day_open else 0
+                rows.append({
+                    "Symbol": sym,
+                    "LTP": round(last, 2),
+                    "% Chg": round(pct, 2),
+                    "Intraday %": round(intraday_pct, 2),
+                })
             except Exception:
                 continue
         return pd.DataFrame(rows)
@@ -2765,6 +3061,7 @@ with col3:
             fetch_midcap_select, fetch_investing_brent, fetch_tradingeconomics_quote,
             fetch_tradingeconomics_commodity, fetch_stock_data, get_option_sentiment,
             get_options_chain, get_stock_summary_analytics, get_index_analytics,
+            get_vwap_pcr_screen, get_upcoming_results, get_nifty50_heatmap,
         ):
             try:
                 _fn.clear()
@@ -2786,6 +3083,26 @@ if summary:
     bias_color = "#34d399" if summary["bias"] == "BULLISH" else "#f87171" if summary["bias"] == "BEARISH" else "#fbbf24"
     pcr_html = f"<div><b>PCR (OI):</b> {stock_pcr:.3f}" + (f" <span style='font-size:11px;color:#94a3b8;'>({stock_pcr_src})</span>" if stock_pcr_src else "") + "</div>" if stock_pcr is not None else "<div><b>PCR (OI):</b> —</div>"
     mp_html = f"<div><b>Max Pain:</b> ₹{stock_mp:,.0f}</div>" if stock_mp is not None else "<div><b>Max Pain:</b> —</div>"
+    # Compact last-5 day price bars (fit inside snapshot box)
+    bars = summary.get("last5_bars") or []
+    bar_html = ""
+    if bars:
+        cells = []
+        for b in bars:
+            bg = "#059669" if b["color"] == "green" else ("#dc2626" if b["color"] == "red" else "#64748b")
+            cells.append(
+                f'<div style="display:inline-block;width:18%;margin:0 1%;text-align:center;vertical-align:bottom;">'
+                f'<div style="height:28px;display:flex;align-items:flex-end;justify-content:center;">'
+                f'<div style="width:70%;height:18px;background:{bg};border-radius:3px;opacity:0.9;"></div></div>'
+                f'<div style="font-size:9px;color:#94a3b8;line-height:1.1;">{b["date"]}</div>'
+                f'<div style="font-size:10px;font-weight:600;color:#e2e8f0;">₹{b["close"]:,.0f}</div>'
+                f'<div style="font-size:9px;color:{bg};">{b["pct"]:+.1f}%</div></div>'
+            )
+        bar_html = (
+            '<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(148,163,184,0.25);">'
+            '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">Last 5 sessions</div>'
+            f'<div style="display:flex;justify-content:space-between;align-items:flex-end;">{"".join(cells)}</div></div>'
+        )
     st.markdown(f"""
     <div class="analysis-box">
         <div style="font-size:16px; font-weight:700; margin-bottom:8px;">📌 {selected} • Instant Snapshot</div>
@@ -2799,6 +3116,7 @@ if summary:
             {pcr_html}
             {mp_html}
         </div>
+        {bar_html}
     </div>
     """, unsafe_allow_html=True)
 
@@ -2811,6 +3129,47 @@ if summary:
                     st.markdown(f"- {n['title']}")
 else:
     st.info(f"Snapshot for {selected} temporarily unavailable")
+
+
+# ========== VWAP + PCR Positional Screen ==========
+st.markdown('<div class="section-header">🎯 5D VWAP × PCR Screen · Positional Candidates</div>', unsafe_allow_html=True)
+st.caption(
+    "Above 5-day VWAP + lowest equity PCR (constructive) · Below 5-day VWAP + highest PCR (cautious). "
+    "Independent of the Renko intraday scanner. Analysis is rule-based positional read for near expiry / ~1 month — not advice."
+)
+with st.spinner("Screening VWAP + PCR…"):
+    above_pcr_df, below_pcr_df, vwap_pcr_names = get_vwap_pcr_screen(tuple(universe), top_n=5)
+
+col_a, col_b = st.columns(2)
+with col_a:
+    st.markdown("##### ✅ Above 5D VWAP · Lowest PCR (Top 5)")
+    if above_pcr_df is not None and not above_pcr_df.empty:
+        show_a = above_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
+        st.dataframe(
+            show_a.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.info("No above-VWAP names with PCR right now (option chain may be offline).")
+with col_b:
+    st.markdown("##### ❌ Below 5D VWAP · Highest PCR (Top 5)")
+    if below_pcr_df is not None and not below_pcr_df.empty:
+        show_b = below_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
+        st.dataframe(
+            show_b.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.info("No below-VWAP names with PCR right now.")
+
+_analysis_lines = build_vwap_pcr_analysis(above_pcr_df, below_pcr_df, vwap_pcr_names or [])
+_ah = '<div class="analysis-box"><div style="font-weight:700;margin-bottom:6px;">🧠 Independent positional analysis</div>'
+for _ln in _analysis_lines:
+    _ah += f'<div style="margin-bottom:6px;font-size:13px;">{_ln}</div>'
+_ah += "</div>"
+st.markdown(_ah, unsafe_allow_html=True)
+
+st.markdown("---")
 
 st.markdown("---")
 
@@ -3303,6 +3662,10 @@ with scan_col2:
 with st.spinner("Scanning Renko bricks… first scan may take a little time."):
     signal_df = scan_renko_universe(tuple(universe))
 
+# Blend live Confidence with last simulation Hit+2 rates (learns as sim cache warms)
+if not signal_df.empty:
+    signal_df = _apply_sim_confidence(signal_df, st.session_state.get("renko_conf_weights") or {})
+
 if signal_df.empty:
     st.info("No stocks currently meet the two-consecutive-brick criteria, or intraday data is unavailable.")
 else:
@@ -3331,16 +3694,18 @@ else:
             return ["background-color: #fef08a; color: #000; font-weight: 600"] * len(row)
         return [""] * len(row)
 
-    cols_to_show = ["Stock", "Timeframe", "Signal", "Price", "EMA 20", "Entry", "Exit", "Box Size", "Last Brick Time", "Age Minutes"]
+    cols_to_show = ["Stock", "Timeframe", "Signal", "Confidence", "Price", "EMA 20", "Entry", "Exit", "Box Size", "Last Brick Time", "Age Minutes"]
     for col in ["Price", "EMA 20", "Entry", "Exit", "Box Size"]:
         if col in display_df.columns:
             display_df[col] = display_df[col].apply(lambda x: round(float(x), 2) if pd.notnull(x) else x)
 
+    if "Confidence" in display_df.columns:
+        display_df["Confidence"] = display_df["Confidence"].apply(lambda x: f"{int(x)}%" if pd.notnull(x) else "—")
     styled = display_df[cols_to_show].style.apply(highlight_just_entered, axis=1).format({
         "Price": "{:.2f}", "EMA 20": "{:.2f}", "Entry": "{:.2f}", "Exit": "{:.2f}", "Box Size": "{:.2f}", "Age Minutes": "{:.1f}"
     })
     st.dataframe(styled, use_container_width=True, hide_index=True)
-    st.caption("⚡ = Just entered (last Renko brick ≤ 20 min ago) • Yellow highlight = fresh signal")
+    st.caption("⚡ = Just entered (≤20 min) • Yellow = fresh • Confidence % = live (TF + age + EMA edge) blended with simulation Hit+2 rates for that TF×Signal when available — improves as the 30d sample grows")
     st.download_button("⬇️ Download signal list (CSV)",
                        data=signal_df.drop(columns=["Last Brick TS"], errors="ignore").to_csv(index=False).encode("utf-8"),
                        file_name="intraday_renko_signals.csv", mime="text/csv")
@@ -3357,6 +3722,14 @@ st.caption(
 
 with st.spinner("Tracking historical scanner signals (cached)…"):
     sim = run_renko_simulation(tuple(universe), primary_days=30)
+
+# Persist TF×Signal hit rates so the next scanner pass can lift/lower Confidence
+try:
+    _w = _extract_renko_conf_weights(sim)
+    if _w:
+        st.session_state.renko_conf_weights = _w
+except Exception:
+    pass
 
 if not sim.get("ok"):
     st.info(sim.get("analysis_30d", "Simulation temporarily unavailable."))
@@ -3517,10 +3890,14 @@ if heat_df.empty:
     st.info("Heatmap data temporarily unavailable.")
 else:
     heat_df = heat_df.sort_values("% Chg", ascending=False)
+    prev_map = st.session_state.get("heatmap_prev_pct") or {}
+    new_map = {}
     html_cells = []
     for _, row in heat_df.iterrows():
         pct = row["% Chg"]
-        # colour scale
+        sym = row["Symbol"]
+        new_map[sym] = pct
+        # colour scale (day % change)
         if pct >= 2:
             bg = "#059669"
         elif pct >= 1:
@@ -3535,11 +3912,23 @@ else:
             bg = "#ef4444"
         else:
             bg = "#b91c1c"
+        # Refresh-to-refresh direction arrow (intraday movement of the day-% figure)
+        arrow = ""
+        if sym in prev_map:
+            delta = pct - float(prev_map[sym])
+            if delta > 0.05:
+                arrow = ' <span style="font-size:10px;">▲</span>'
+            elif delta < -0.05:
+                arrow = ' <span style="font-size:10px;">▼</span>'
+            else:
+                arrow = ' <span style="font-size:10px;opacity:0.5;">●</span>'
         html_cells.append(
             f'<div class="heat-cell" style="background:{bg};">'
-            f'{row["Symbol"]}<br>{pct:+.2f}%<br>₹{row["LTP"]:,.1f}</div>'
+            f'{sym}{arrow}<br>{pct:+.2f}%<br>₹{row["LTP"]:,.1f}</div>'
         )
+    st.session_state.heatmap_prev_pct = new_map
     st.markdown("".join(html_cells), unsafe_allow_html=True)
+    st.caption("▲ / ▼ = day-% moved up / down vs previous refresh on this session (intraday path). Colour = full-day % change.")
 
 st.markdown("---")
 
@@ -3618,18 +4007,28 @@ st.markdown('<div class="section-header">📋 Corporate Actions — Nifty 50</di
 st.caption("Forthcoming dividends, bonuses, splits, rights etc. Source: NSE corporate filings.")
 
 ca_df = get_corporate_actions(universe)
-if ca_df.empty:
-    st.info("No upcoming corporate actions found for Nifty 50 names, or NSE endpoint temporarily blocked.")
+res_df = get_upcoming_results(universe, days=7)
+if ca_df.empty and (res_df is None or res_df.empty):
+    st.info("No upcoming corporate actions / results found for Nifty 50 names, or NSE endpoint temporarily blocked.")
 else:
-    # High-visibility box
-    ca_html = '<div class="ca-box">'
-    for _, row in ca_df.iterrows():
-        ca_html += (f'<div style="margin-bottom:6px;"><b>{row.get("Symbol","")}</b> — {row.get("Purpose","—")} '
-                    f'| Ex: {row.get("Ex-Date","—")} | Record: {row.get("Record Date","—")}</div>')
-    ca_html += "</div>"
-    st.markdown(ca_html, unsafe_allow_html=True)
-    with st.expander("Full table"):
-        st.dataframe(ca_df, use_container_width=True, hide_index=True)
+    if not ca_df.empty:
+        ca_html = '<div class="ca-box"><div style="font-weight:700;margin-bottom:6px;">Corporate actions</div>'
+        for _, row in ca_df.iterrows():
+            ca_html += (f'<div style="margin-bottom:6px;"><b>{row.get("Symbol","")}</b> — {row.get("Purpose","—")} '
+                        f'| Ex: {row.get("Ex-Date","—")} | Record: {row.get("Record Date","—")}</div>')
+        ca_html += "</div>"
+        st.markdown(ca_html, unsafe_allow_html=True)
+        with st.expander("Full corporate-actions table"):
+            st.dataframe(ca_df, use_container_width=True, hide_index=True)
+    if res_df is not None and not res_df.empty:
+        res_html = '<div class="ca-box"><div style="font-weight:700;margin-bottom:6px;">Upcoming results (best-effort, ~7 days)</div>'
+        for _, row in res_df.iterrows():
+            res_html += (f'<div style="margin-bottom:6px;"><b>{row.get("Symbol","")}</b> — {row.get("Purpose","Results")} '
+                         f'| Date: {row.get("Ex-Date","—")} | {row.get("Record Date","")}</div>')
+        res_html += "</div>"
+        st.markdown(res_html, unsafe_allow_html=True)
+        with st.expander("Full results table"):
+            st.dataframe(res_df, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
@@ -3640,17 +4039,42 @@ st.markdown('<div class="section-header">📰 Top 6 Market-Moving Business News<
 st.caption("India-first + global headlines (ET / Moneycontrol / Bloomberg / FT / Trading Economics context via Google News). Auto-refreshes every 30 minutes.")
 
 biz_news = get_top_business_news()
-if not biz_news:
-    st.info("News feed temporarily unavailable.")
-else:
-    news_html = '<div class="news-box">'
-    for i, n in enumerate(biz_news, 1):
-        if n.get("link"):
-            news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> <a href="{n["link"]}" target="_blank">{n["title"]}</a></div>'
-        else:
-            news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> {n["title"]}</div>'
-    news_html += "</div>"
-    st.markdown(news_html, unsafe_allow_html=True)
+ncol1, ncol2 = st.columns([1.15, 1])
+with ncol1:
+    st.markdown("##### Top 6 headlines")
+    if not biz_news:
+        st.info("News feed temporarily unavailable.")
+    else:
+        news_html = '<div class="news-box">'
+        for i, n in enumerate(biz_news[:6], 1):
+            if n.get("link"):
+                news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> <a href="{n["link"]}" target="_blank">{n["title"]}</a></div>'
+            else:
+                news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> {n["title"]}</div>'
+        news_html += "</div>"
+        st.markdown(news_html, unsafe_allow_html=True)
+with ncol2:
+    st.markdown("##### 📌 Visual Daily Brief")
+    st.caption("Top-10 style takeaways (click expander). Inspired by daily market digest cards.")
+    try:
+        _brief = build_visual_daily_brief(
+            biz_news,
+            nifty_an=get_index_analytics("^NSEI"),
+            bank_an=get_index_analytics("^NSEBANK"),
+            gift=fetch_gift_nifty_50(),
+        )
+    except Exception:
+        _brief = build_visual_daily_brief(biz_news)
+    with st.expander("Open Visual Brief (10 cards)", expanded=False):
+        for i, card in enumerate(_brief, 1):
+            tag = card.get("tag", "")
+            st.markdown(
+                f'<div class="news-box" style="padding:10px 12px;">'
+                f'<div style="font-size:11px;color:#94a3b8;margin-bottom:2px;">{i}. {tag}</div>'
+                f'<div style="font-weight:600;margin-bottom:4px;">{card.get("title","")}</div>'
+                f'<div style="font-size:12px;opacity:0.9;">{card.get("body","")}</div></div>',
+                unsafe_allow_html=True,
+            )
 
 # Auto refresh
 if auto_refresh:
