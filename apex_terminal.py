@@ -1,20 +1,13 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-27 (v7.3.3)
-# v7.2 on top of v7.1:
-# 1) Stock snapshot box: compact last-5-day price bars (green/red/grey) inside the box.
-# 2) New VWAP+PCR screen box: top-5 above-VWAP lowest PCR + top-5 below-VWAP highest PCR,
-#    plus independent positional BUY/SELL analysis (expiry / month horizon).
-# 3) Renko scanner: Confidence % = live (TF+age+EMA) blended with sim Hit+2 by TF×Signal;
-#    sort order unchanged (BUY→BULLISH 15m→30m→1H newest first, then SELL→BEARISH).
-#    Live table = current two-brick signals only; fails drop when bricks reverse (sim tracks them).
-#    Positional layer = 5D VWAP×PCR screen (no separate Daily Renko scanner — avoids double noise).
-# 4) Nifty heatmap: ▲/▼ vs previous refresh for intraday direction change.
-# 5) Corporate actions: also surface upcoming results (next ~7 days) when available.
-# 6) News: top-6 list only (Aaj Ki Taaza Khabar pictorial removed).
-# v7.3: stock snapshot bars show small price; VWAP+PCR on-demand + desktop-only; no Taaza Khabar PNG.
-# v7.3.1: VWAP+PCR fully hidden on mobile/tablet/iPad via JS markers (Streamlit widgets ignore CSS wrappers).
-# v7.3.2: VWAP+PCR not rendered at all on mobile/tablet (server-side User-Agent) — no header, button, or tables.
-# v7.3.3: 5D bar labels readable (10px); Fast Refresh soft-clears live quotes only (skips Renko/sim/VWAP/corp).
-# v7.1/v7 core retained: signal rules, box ladder, simulation analytics, built-up.
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-27 (v7.4.0 Dashboard Redesign)
+# v7.4 changes:
+# 1) REMOVED: 5D VWAP × PCR positional screen section (and related helpers) — not required.
+# 2) Visual redesign toward clean multi-panel dashboard (inspired by Apex mockups):
+#    tighter index cards, glass-style panels, clearer section hierarchy, refined dark/light CSS.
+# 3) All prior features & logic retained: Renko scanner + confidence blend, simulation analytics,
+#    stock snapshot (incl. 5D bars + snapshot VWAP), options matrix, heatmap ▲/▼, built-up cycle,
+#    corporate actions + upcoming results, top-6 news, breadth/PCR/MaxPain/IV, most-active, etc.
+# 4) Fast Refresh still soft-clears live quotes only.
+# v7.1–v7.3 core retained: signal rules, box ladder, simulation analytics, built-up.
 
 import streamlit as st
 import yfinance as yf
@@ -204,6 +197,82 @@ def apply_theme(theme: str):
             .news-box a, .ca-box a { color: #a5b4fc !important; }
             .news-box, .news-box * , .ca-box, .ca-box * { color: #e2e8f0 !important; }
 
+            /* === v7.4 Dashboard polish === */
+            .dash-topbar {
+                display: flex; align-items: center; justify-content: space-between;
+                padding: 10px 4px 14px 4px; margin-bottom: 4px;
+                border-bottom: 1px solid rgba(99,102,241,0.25);
+            }
+            .dash-brand {
+                display: flex; align-items: center; gap: 10px;
+            }
+            .dash-brand .logo {
+                width: 36px; height: 36px; border-radius: 10px;
+                background: linear-gradient(135deg, #6366f1, #a855f7);
+                display: flex; align-items: center; justify-content: center;
+                font-size: 18px; font-weight: 800; color: #fff;
+            }
+            .dash-brand h1 {
+                font-size: 22px !important; margin: 0 !important; padding: 0 !important;
+                background: linear-gradient(90deg, #a5b4fc, #c4b5fd, #f0abfc);
+                -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+                font-weight: 800 !important; line-height: 1.15;
+            }
+            .dash-brand .tagline {
+                font-size: 11px; color: #94a3b8; letter-spacing: 0.4px;
+            }
+            .dash-live {
+                display: flex; align-items: center; gap: 8px;
+                font-size: 12px; color: #cbd5e1;
+            }
+            .live-dot {
+                width: 8px; height: 8px; border-radius: 50%;
+                background: #34d399; box-shadow: 0 0 8px #34d399;
+                animation: pulse 1.6s ease-in-out infinite;
+            }
+            @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.45; }
+            }
+            .panel-card {
+                background: linear-gradient(145deg, rgba(30,41,59,0.92), rgba(15,23,42,0.96));
+                border: 1px solid rgba(99,102,241,0.28);
+                border-radius: 12px;
+                padding: 14px 16px;
+                margin-bottom: 12px;
+                box-shadow: 0 4px 18px rgba(0,0,0,0.28);
+            }
+            .panel-title {
+                font-size: 13px; font-weight: 700; color: #c7d2fe;
+                letter-spacing: 0.3px; text-transform: uppercase;
+                margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
+            }
+            .metric-card {
+                transition: transform 0.15s ease, border-color 0.15s ease;
+            }
+            .metric-card:hover {
+                transform: translateY(-2px);
+                border-color: rgba(129,140,248,0.55) !important;
+            }
+            .section-header {
+                font-size: 16px !important; font-weight: 700;
+                background: linear-gradient(90deg, #818cf8, #c084fc);
+                -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+                margin-bottom: 10px; margin-top: 4px;
+                padding-bottom: 4px;
+                border-bottom: 1px solid rgba(99,102,241,0.15);
+            }
+            /* Tighter dataframe look */
+            div[data-testid="stDataFrame"] {
+                border-radius: 10px; overflow: hidden;
+                border: 1px solid rgba(148,163,184,0.18);
+            }
+            /* Soft divider */
+            .dash-divider {
+                height: 1px; background: linear-gradient(90deg, transparent, rgba(99,102,241,0.35), transparent);
+                margin: 14px 0;
+            }
+
         </style>
         """, unsafe_allow_html=True)
     else:
@@ -317,6 +386,65 @@ def apply_theme(theme: str):
                 color: #0f172a !important; box-shadow: 0 2px 8px rgba(99,102,241,0.08);
             }
             .news-box a, .ca-box a { color: #4f46e5 !important; }
+
+            /* === v7.4 Dashboard polish (light) === */
+            .dash-topbar {
+                display: flex; align-items: center; justify-content: space-between;
+                padding: 10px 4px 14px 4px; margin-bottom: 4px;
+                border-bottom: 1px solid #c7d2fe;
+            }
+            .dash-brand {
+                display: flex; align-items: center; gap: 10px;
+            }
+            .dash-brand .logo {
+                width: 36px; height: 36px; border-radius: 10px;
+                background: linear-gradient(135deg, #4f46e5, #7c3aed);
+                display: flex; align-items: center; justify-content: center;
+                font-size: 18px; font-weight: 800; color: #fff;
+            }
+            .dash-brand h1 {
+                font-size: 22px !important; margin: 0 !important; padding: 0 !important;
+                background: linear-gradient(90deg, #4f46e5, #7c3aed, #a855f7);
+                -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+                font-weight: 800 !important; line-height: 1.15;
+            }
+            .dash-brand .tagline {
+                font-size: 11px; color: #64748b; letter-spacing: 0.4px;
+            }
+            .dash-live {
+                display: flex; align-items: center; gap: 8px;
+                font-size: 12px; color: #475569;
+            }
+            .live-dot {
+                width: 8px; height: 8px; border-radius: 50%;
+                background: #059669; box-shadow: 0 0 6px #34d399;
+            }
+            .panel-card {
+                background: #ffffff;
+                border: 1px solid #c7d2fe;
+                border-radius: 12px;
+                padding: 14px 16px;
+                margin-bottom: 12px;
+                box-shadow: 0 2px 12px rgba(99,102,241,0.08);
+            }
+            .panel-title {
+                font-size: 13px; font-weight: 700; color: #4338ca;
+                letter-spacing: 0.3px; text-transform: uppercase;
+                margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
+            }
+            .section-header {
+                font-size: 16px !important;
+                border-bottom: 1px solid #e0e7ff;
+                padding-bottom: 4px;
+            }
+            div[data-testid="stDataFrame"] {
+                border-radius: 10px; overflow: hidden;
+                border: 1px solid #e2e8f0;
+            }
+            .dash-divider {
+                height: 1px; background: linear-gradient(90deg, transparent, #c7d2fe, transparent);
+                margin: 14px 0;
+            }
 
         </style>
         """, unsafe_allow_html=True)
@@ -2392,95 +2520,6 @@ def get_stock_summary_analytics(symbol: str):
         return None
 
 
-# ---------- VWAP + PCR positional screen (independent of Renko) ----------
-@st.cache_data(ttl=180, show_spinner=False)
-def get_vwap_pcr_screen(universe_tuple: tuple, top_n: int = 5):
-    """
-    Rank Nifty-50 names by 5-day VWAP bias + equity PCR.
-    Returns:
-      above_low_pcr: price ABOVE 5D VWAP, sorted lowest PCR first (potential long bias)
-      below_high_pcr: price BELOW 5D VWAP, sorted highest PCR first (potential short bias)
-    PCR from get_option_sentiment (NSE preferred). Failures skip silently.
-    """
-    universe = list(universe_tuple)
-    rows = []
-    # Batch daily history once
-    try:
-        tickers = [f"{s}.NS" for s in universe]
-        data = yf.download(tickers, period="10d", group_by="ticker", progress=False, threads=True)
-    except Exception:
-        data = None
-    for sym in universe:
-        try:
-            if data is None:
-                continue
-            hist = data if len(universe) == 1 else (data[f"{sym}.NS"] if f"{sym}.NS" in data.columns.get_level_values(0) else None)
-            if hist is None or hist.empty or len(hist) < 5:
-                continue
-            last5 = hist.tail(5).copy()
-            current = float(hist["Close"].iloc[-1])
-            last5["TP"] = (last5["High"] + last5["Low"] + last5["Close"]) / 3
-            vol_sum = float(last5["Volume"].sum())
-            vwap_5d = float((last5["TP"] * last5["Volume"]).sum() / vol_sum) if vol_sum > 0 else float(last5["Close"].mean())
-            above = current > vwap_5d
-            sent = get_option_sentiment(sym) or {}
-            pcr = sent.get("pcr")
-            if pcr is None:
-                continue
-            rows.append({
-                "Symbol": sym,
-                "LTP": round(current, 2),
-                "VWAP_5D": round(vwap_5d, 2),
-                "Above_VWAP": above,
-                "PCR": round(float(pcr), 3),
-                "MaxPain": sent.get("max_pain"),
-                "Source": sent.get("source") or "",
-            })
-        except Exception:
-            continue
-    if not rows:
-        return pd.DataFrame(), pd.DataFrame(), []
-    df = pd.DataFrame(rows)
-    above_df = df[df["Above_VWAP"]].sort_values("PCR", ascending=True).head(top_n).reset_index(drop=True)
-    below_df = df[~df["Above_VWAP"]].sort_values("PCR", ascending=False).head(top_n).reset_index(drop=True)
-    # Independent positional names (may overlap or extend the ranked lists)
-    analysis_names = []
-    for _, r in above_df.head(3).iterrows():
-        analysis_names.append(("BUY/Bullish", r["Symbol"], r["PCR"], r["LTP"]))
-    for _, r in below_df.head(3).iterrows():
-        analysis_names.append(("SELL/Bearish", r["Symbol"], r["PCR"], r["LTP"]))
-    return above_df, below_df, analysis_names
-
-
-def build_vwap_pcr_analysis(above_df, below_df, analysis_names):
-    """Rule-based independent read — positional horizon (expiry for longs, ~month for shorts). Not advice."""
-    lines = []
-    if analysis_names:
-        buys = [n for side, n, p, l in analysis_names if side.startswith("BUY")]
-        sells = [n for side, n, p, l in analysis_names if side.startswith("SELL")]
-        if buys:
-            lines.append(
-                f"<b>Potential BUY / Bullish (positional for this expiry):</b> "
-                f"{', '.join(buys)}. Price holds above 5-day VWAP while equity PCR is comparatively low "
-                f"(put OI light vs calls) — consistent with constructive positioning into the near expiry. "
-                f"Prefer confirmation on dips toward VWAP rather than chasing extended opens."
-            )
-        if sells:
-            lines.append(
-                f"<b>Potential SELL / Bearish (positional ~1 month):</b> "
-                f"{', '.join(sells)}. Price below 5-day VWAP with elevated PCR often reflects "
-                f"put-heavy hedging or residual long unwind risk. Useful as caution / hedge candidates "
-                f"into the monthly series rather than pure short-term scalps."
-            )
-    else:
-        lines.append("Insufficient PCR + VWAP overlap right now — wait for option-chain refresh during market hours.")
-    lines.append(
-        "<span style='font-size:12px;color:#94a3b8;'>Independent screen only (5D VWAP + equity PCR). "
-        "Separate from the Renko intraday scanner below. Not financial advice — confirm with price action and your broker.</span>"
-    )
-    return lines
-
-
 # ---------- Upcoming results (next ~7 days) helper ----------
 @st.cache_data(ttl=600, show_spinner=False)
 def get_upcoming_results(universe: list, days: int = 7):
@@ -3146,15 +3185,29 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko/sim/VWAP stay warm)")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko/sim stay warm)\nUI v7.4 — clean dashboard layout · VWAP+PCR screen removed")
 
 # -------------------------------------------------
-# Header + Time
+# Header + Time (dashboard top bar)
 # -------------------------------------------------
 ist = pytz.timezone("Asia/Kolkata")
-current_time = datetime.now(ist).strftime("%d %b %Y • %H:%M:%S IST")
-st.markdown("# 📈 Apex Market Terminal")
-st.caption(f"Live Indian Equities & Indices • **{current_time}**")
+current_time = datetime.now(ist).strftime("%a, %d %b %Y | %H:%M:%S IST")
+st.markdown(f"""
+<div class="dash-topbar">
+  <div class="dash-brand">
+    <div class="logo">A</div>
+    <div>
+      <h1>Apex Market Terminal</h1>
+      <div class="tagline">Trade · Track · Analyze</div>
+    </div>
+  </div>
+  <div class="dash-live">
+    <span class="live-dot"></span>
+    <span>{current_time}</span>
+    <span style="color:#34d399;font-weight:600;">● Live</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ========== MAIN CONTROLS ==========
 universe = get_stock_universe()
@@ -3168,7 +3221,7 @@ with col3:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("⚡ Fast Refresh", use_container_width=True):
         # Soft clear ONLY live quotes + selected stock snapshot (keeps universe / news /
-        # Renko / simulation / VWAP-PCR / corporate warm → much faster than full reload)
+        # Renko / simulation / corporate warm → much faster than full reload)
         for _fn in (
             fetch_yahoo_quote, fetch_index_quote, fetch_tradingview_quote,
             fetch_investing_quote, fetch_live_instrument, fetch_gift_nifty_50,
@@ -3226,8 +3279,8 @@ if summary:
             f'{"".join(cells)}</div>'
         )
     st.markdown(f"""
-    <div class="analysis-box">
-        <div style="font-size:16px; font-weight:700; margin-bottom:8px;">📌 {selected} • Instant Snapshot</div>
+    <div class="analysis-box panel-card" style="margin-top:4px;">
+        <div class="panel-title">📌 {selected} • Instant Snapshot</div>
         <div style="display:flex; flex-wrap:wrap; gap:14px 18px; font-size:13px; align-items:flex-start;">
             <div style="flex:1 1 auto; min-width:220px;">
                 <div style="display:flex; flex-wrap:wrap; gap:14px 18px;">
@@ -3256,106 +3309,6 @@ if summary:
 else:
     st.info(f"Snapshot for {selected} temporarily unavailable")
 
-
-# ========== VWAP + PCR Positional Screen (desktop only, on-demand) ==========
-# Never render on mobile / tablet / iPad (server-side UA check). Desktop: load only on button click.
-def _is_mobile_or_tablet() -> bool:
-    """True when the browser looks like phone / tablet / iPad — section is skipped entirely."""
-    ua = ""
-    try:
-        # Streamlit >= 1.40
-        headers = getattr(st, "context", None)
-        if headers is not None:
-            h = getattr(headers, "headers", None)
-            if h:
-                ua = (h.get("User-Agent") or h.get("user-agent") or "")
-    except Exception:
-        pass
-    if not ua:
-        try:
-            # Older Streamlit fallback
-            from streamlit.web.server.websocket_headers import _get_websocket_headers
-            h = _get_websocket_headers() or {}
-            ua = h.get("User-Agent") or h.get("user-agent") or ""
-        except Exception:
-            pass
-    ua = (ua or "").lower()
-    if not ua:
-        return False  # unknown → allow desktop path
-    needles = (
-        "iphone", "ipod", "ipad", "android", "mobile", "tablet",
-        "kindle", "silk", "playbook", "blackberry", "opera mini",
-        "iemobile", "webos", "windows phone",
-    )
-    if any(n in ua for n in needles):
-        return True
-    # iPadOS 13+ often sends Macintosh + Mobile token, or touch Mac
-    if "macintosh" in ua and ("mobile" in ua or "touch" in ua):
-        return True
-    return False
-
-
-if not _is_mobile_or_tablet():
-    st.markdown('<div class="section-header">🎯 5D VWAP × PCR · Positional (compact)</div>', unsafe_allow_html=True)
-    st.caption(
-        "Above VWAP + low PCR (constructive) · Below VWAP + high PCR (cautious). Independent of Renko. "
-        "Desktop only · runs only when you click Refresh (not shown on mobile / tablet)."
-    )
-
-    if "vwap_pcr_cache" not in st.session_state:
-        st.session_state.vwap_pcr_cache = None  # (above_df, below_df, names) or None
-
-    vp_col1, vp_col2 = st.columns([1, 4])
-    with vp_col1:
-        vwap_refresh = st.button("🔄 Refresh VWAP+PCR", use_container_width=True, key="vwap_pcr_refresh_btn")
-    with vp_col2:
-        st.caption("Click only when you need this screen — does not run on every page load.")
-
-    if vwap_refresh:
-        try:
-            get_vwap_pcr_screen.clear()
-        except Exception:
-            pass
-        with st.spinner("Screening VWAP + PCR…"):
-            _a, _b, _n = get_vwap_pcr_screen(tuple(universe), top_n=5)
-            st.session_state.vwap_pcr_cache = (_a, _b, _n)
-
-    if st.session_state.vwap_pcr_cache is None:
-        st.info("Click **Refresh VWAP+PCR** to load this screen (skipped by default for speed).")
-    else:
-        above_pcr_df, below_pcr_df, vwap_pcr_names = st.session_state.vwap_pcr_cache
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.markdown("##### ✅ Above VWAP · low PCR")
-            if above_pcr_df is not None and not above_pcr_df.empty:
-                show_a = above_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
-                st.dataframe(
-                    show_a.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.info("No above-VWAP names with PCR right now (option chain may be offline).")
-        with col_b:
-            st.markdown("##### ❌ Below VWAP · high PCR")
-            if below_pcr_df is not None and not below_pcr_df.empty:
-                show_b = below_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
-                st.dataframe(
-                    show_b.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.info("No below-VWAP names with PCR right now.")
-
-        _analysis_lines = build_vwap_pcr_analysis(above_pcr_df, below_pcr_df, vwap_pcr_names or [])
-        _ah = '<div class="analysis-box"><div style="font-weight:700;margin-bottom:6px;">🧠 Independent positional analysis</div>'
-        for _ln in _analysis_lines:
-            _ah += f'<div style="margin-bottom:6px;font-size:13px;">{_ln}</div>'
-        _ah += "</div>"
-        st.markdown(_ah, unsafe_allow_html=True)
-
-    st.markdown("---")
-
-st.markdown("---")
 
 # -------------------------------------------------
 # Market Indices + Global Instruments
