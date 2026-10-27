@@ -2716,12 +2716,14 @@ def build_taaza_khabar_image(
     return buf.getvalue(), None
 
 
-# ---------- Most Active (Value / Volume) from NSE ----------
+# ---------- Most Active (Value / Volume) from NSE + fallbacks ----------
 @st.cache_data(ttl=90, show_spinner=False)
 def get_most_active(by: str = "value"):
-    """Top most-active equities by value or volume from NSE live-analysis endpoint."""
+    """Top most-active equities by value or volume.
+    Primary: NSE live-analysis API. Fallback: Yahoo ranking of Nifty-50 by volume/value
+    (NSE often returns 403 from cloud/datacenter IPs — fallback keeps the panel alive).
+    """
     headers = nse_session_headers()
-    # Known NSE endpoints
     endpoints = [
         f"https://www.nseindia.com/api/live-analysis-most-active-securities?index={by}",
         f"https://www.nseindia.com/api/live-analysis-most-active-securities?index={'value' if by == 'value' else 'volume'}",
@@ -2736,7 +2738,6 @@ def get_most_active(by: str = "value"):
                 if r.status_code != 200:
                     continue
                 data = r.json()
-                # Response shapes vary: data / data.list / records
                 rows = data.get("data") or data.get("list") or data.get("records") or []
                 if isinstance(rows, dict):
                     rows = rows.get("data") or rows.get("list") or []
@@ -2751,13 +2752,19 @@ def get_most_active(by: str = "value"):
                     chg = item.get("pChange") or item.get("percentChange") or item.get("perChange") or 0
                     vol = item.get("totalTradedVolume") or item.get("volume") or item.get("tradedQuantity") or 0
                     val = item.get("totalTradedValue") or item.get("value") or item.get("tradedValue") or 0
-                    # value often in ₹ lakhs or crores; keep raw
+                    # NSE totalTradedValue is typically in ₹; convert to Lakh when looks like full rupees
+                    try:
+                        val_f = float(val) if val else 0.0
+                    except Exception:
+                        val_f = 0.0
+                    if val_f > 1e6:  # likely full ₹ → show in Lakh
+                        val_f = val_f / 1e5
                     out.append({
                         "Symbol": str(sym).strip(),
                         "LTP": round(float(ltp), 2) if ltp else 0,
                         "% Chg": round(float(chg), 2) if chg else 0,
                         "Volume": int(float(vol)) if vol else 0,
-                        "Value (₹ Lakh)": round(float(val), 2) if val else 0,
+                        "Value (₹ Lakh)": round(val_f, 2),
                     })
                 if out:
                     return pd.DataFrame(out[:10])
@@ -2770,7 +2777,56 @@ def get_most_active(by: str = "value"):
             session.close()
         except Exception:
             pass
-    return pd.DataFrame()
+
+    # ---- Fallback: rank Nifty-50 universe via Yahoo (volume / approx value) ----
+    try:
+        uni = list(get_stock_universe()) if "get_stock_universe" in globals() else []
+        if not uni:
+            uni = ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN", "BHARTIARTL",
+                   "ITC", "LT", "AXISBANK", "KOTAKBANK", "HINDUNILVR", "BAJFINANCE", "ASIANPAINT"]
+        tickers = [f"{s}.NS" for s in uni]
+        data = yf.download(tickers, period="5d", group_by="ticker", progress=False, threads=True)
+        rows = []
+        for sym in uni:
+            try:
+                tk = f"{sym}.NS"
+                hist = None
+                if hasattr(data, "columns") and getattr(data.columns, "nlevels", 1) > 1:
+                    if tk in data.columns.get_level_values(0):
+                        hist = data[tk]
+                elif hasattr(data, "columns") and "Close" in data.columns:
+                    hist = data
+                if hist is None or hist.empty:
+                    continue
+                hist = hist.dropna(subset=["Close"])
+                if hist.empty:
+                    continue
+                last = hist.iloc[-1]
+                prev = hist.iloc[-2] if len(hist) > 1 else last
+                ltp = float(last["Close"])
+                prevc = float(prev["Close"]) if prev is not None else ltp
+                vol = float(last["Volume"]) if "Volume" in last.index and pd.notnull(last["Volume"]) else 0.0
+                pct = ((ltp - prevc) / prevc * 100) if prevc else 0.0
+                val_lakh = (ltp * vol) / 1e5 if vol else 0.0
+                rows.append({
+                    "Symbol": sym,
+                    "LTP": round(ltp, 2),
+                    "% Chg": round(pct, 2),
+                    "Volume": int(vol),
+                    "Value (₹ Lakh)": round(val_lakh, 2),
+                })
+            except Exception:
+                continue
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        if by == "volume":
+            df = df.sort_values("Volume", ascending=False)
+        else:
+            df = df.sort_values("Value (₹ Lakh)", ascending=False)
+        return df.head(10).reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
 
 # ---------- Nifty 50 Heatmap ----------
 @st.cache_data(ttl=120, show_spinner=False)
@@ -2807,50 +2863,105 @@ def get_nifty50_heatmap(universe: list):
 # ---------- Corporate Actions (Nifty 50) ----------
 @st.cache_data(ttl=300, show_spinner=False)
 def get_corporate_actions(universe: list):
-    """Forthcoming corporate actions from NSE for Nifty-50 names."""
+    """Forthcoming corporate actions for Nifty-50 names.
+    Primary: NSE corporates-corporateActions API.
+    Fallback: Moneycontrol corporate-action calendar (HTML parse) when NSE returns 403.
+    """
     headers = nse_session_headers()
     session = requests.Session()
+    uni_set = set(s.upper() for s in universe)
+    out = []
     try:
         session.get("https://www.nseindia.com", headers=headers, timeout=6)
         session.get("https://www.nseindia.com/companies-listing/corporate-filings-actions", headers=headers, timeout=6)
-        # NSE corporates-corporateActions
-        url = "https://www.nseindia.com/api/corporates-corporateActions?index=equities"
-        r = session.get(url, headers=headers, timeout=10)
-        if r.status_code != 200:
-            # alternate
-            r = session.get("https://www.nseindia.com/api/corporates-corporateActions", headers=headers, timeout=10)
-        if r.status_code != 200:
-            return pd.DataFrame()
-        data = r.json()
-        rows = data if isinstance(data, list) else (data.get("data") or data.get("corporateActions") or [])
-        uni_set = set(s.upper() for s in universe)
-        out = []
-        for item in rows:
-            sym = (item.get("symbol") or item.get("Symbol") or item.get("company") or "").strip().upper()
-            if not sym or (uni_set and sym not in uni_set):
+        for url in (
+            "https://www.nseindia.com/api/corporates-corporateActions?index=equities",
+            "https://www.nseindia.com/api/corporates-corporateActions",
+        ):
+            try:
+                r = session.get(url, headers=headers, timeout=10)
+                if r.status_code != 200:
+                    continue
+                data = r.json()
+                rows = data if isinstance(data, list) else (data.get("data") or data.get("corporateActions") or [])
+                for item in rows:
+                    sym = (item.get("symbol") or item.get("Symbol") or item.get("company") or "").strip().upper()
+                    if not sym or (uni_set and sym not in uni_set):
+                        continue
+                    purpose = item.get("purpose") or item.get("subject") or item.get("desc") or item.get("action") or ""
+                    ex_date = item.get("exDate") or item.get("ex_date") or item.get("exdate") or item.get("recordDate") or ""
+                    rec_date = item.get("recordDate") or item.get("record_date") or ""
+                    face = item.get("faceValue") or item.get("face_value") or ""
+                    out.append({
+                        "Symbol": sym,
+                        "Purpose": (purpose[:80] if purpose else "—"),
+                        "Ex-Date": str(ex_date)[:16],
+                        "Record Date": str(rec_date)[:16],
+                        "Face Value": face,
+                    })
+                if out:
+                    break
+            except Exception:
                 continue
-            purpose = item.get("purpose") or item.get("subject") or item.get("desc") or item.get("action") or ""
-            ex_date = item.get("exDate") or item.get("ex_date") or item.get("exdate") or item.get("recordDate") or ""
-            rec_date = item.get("recordDate") or item.get("record_date") or ""
-            face = item.get("faceValue") or item.get("face_value") or ""
-            out.append({
-                "Symbol": sym,
-                "Purpose": purpose[:80] if purpose else "—",
-                "Ex-Date": ex_date,
-                "Record Date": rec_date,
-                "Face Value": face,
-            })
-        if not out:
-            return pd.DataFrame()
-        df = pd.DataFrame(out).drop_duplicates(subset=["Symbol", "Purpose", "Ex-Date"])
-        return df.head(25)
     except Exception:
-        return pd.DataFrame()
+        pass
     finally:
         try:
             session.close()
         except Exception:
             pass
+
+    # ---- Fallback: Moneycontrol equity corporate actions page (best-effort scrape) ----
+    if not out:
+        try:
+            mc_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            # Recent corporate actions list
+            mc_url = "https://www.moneycontrol.com/stocks/marketstats/nse_ca_latest.php"
+            r = requests.get(mc_url, headers=mc_headers, timeout=10)
+            if r.status_code == 200 and r.text:
+                html = r.text
+                # Simple row scrape: look for symbol-like tokens + purpose keywords
+                # Tables vary; parse <tr> blocks with multiple <td>
+                rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, flags=re.I | re.S)
+                for row in rows[:80]:
+                    cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.I | re.S)
+                    cells = [re.sub(r"<[^>]+>", "", c).strip() for c in cells]
+                    if len(cells) < 3:
+                        continue
+                    # Heuristic: first cell often company/symbol
+                    raw0 = cells[0]
+                    sym = re.sub(r"[^A-Z0-9]", "", raw0.upper())[:12]
+                    if not sym or (uni_set and sym not in uni_set and not any(sym.startswith(u[:4]) for u in uni_set)):
+                        # try to match any universe name inside
+                        matched = None
+                        up = " ".join(cells).upper()
+                        for u in uni_set:
+                            if u in up or u[:5] in up:
+                                matched = u
+                                break
+                        if not matched:
+                            continue
+                        sym = matched
+                    purpose = cells[1] if len(cells) > 1 else "—"
+                    ex_date = cells[2] if len(cells) > 2 else ""
+                    rec_date = cells[3] if len(cells) > 3 else ""
+                    out.append({
+                        "Symbol": sym,
+                        "Purpose": (purpose[:80] if purpose else "—"),
+                        "Ex-Date": str(ex_date)[:16],
+                        "Record Date": str(rec_date)[:16],
+                        "Face Value": "",
+                    })
+        except Exception:
+            pass
+
+    if not out:
+        return pd.DataFrame()
+    df = pd.DataFrame(out).drop_duplicates(subset=["Symbol", "Purpose", "Ex-Date"])
+    return df.head(25)
 
 # ---------- Top 5 market-moving business news (30-min cache) ----------
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -3984,7 +4095,7 @@ st.markdown("---")
 # Most Active — Value & Volume (NSE, all stocks)
 # -------------------------------------------------
 st.markdown('<div class="section-header">🔥 Most Active Stocks (NSE — All Equities)</div>', unsafe_allow_html=True)
-st.caption("Top 10 by traded value and by volume. Source: NSE India live-analysis. Not limited to Nifty 50.")
+st.caption("Top 10 by traded value and by volume. Source: NSE live-analysis → Yahoo Nifty-50 fallback when NSE blocks (403).")
 
 ma_val = get_most_active("value")
 ma_vol = get_most_active("volume")
@@ -3998,7 +4109,7 @@ with mac1:
             use_container_width=True, hide_index=True
         )
     else:
-        st.info("Most-active value list temporarily unavailable (NSE throttle or off-hours).")
+        st.info("Most-active value list temporarily unavailable (NSE 403 / throttle). Yahoo fallback also empty — try Fast Refresh after market open.")
 with mac2:
     st.markdown("##### 📦 Most Active by Volume")
     if not ma_vol.empty:
@@ -4007,7 +4118,7 @@ with mac2:
             use_container_width=True, hide_index=True
         )
     else:
-        st.info("Most-active volume list temporarily unavailable (NSE throttle or off-hours).")
+        st.info("Most-active volume list temporarily unavailable (NSE 403 / throttle). Yahoo fallback also empty — try Fast Refresh after market open.")
 
 st.markdown("---")
 
@@ -4136,12 +4247,12 @@ st.markdown("---")
 # Corporate Actions (Nifty 50)
 # -------------------------------------------------
 st.markdown('<div class="section-header">📋 Corporate Actions — Nifty 50</div>', unsafe_allow_html=True)
-st.caption("Forthcoming dividends, bonuses, splits, rights etc. Source: NSE corporate filings.")
+st.caption("Forthcoming dividends, bonuses, splits, rights etc. Source: NSE corporate filings → Moneycontrol fallback when NSE blocks.")
 
 ca_df = get_corporate_actions(universe)
 res_df = get_upcoming_results(universe, days=7)
 if ca_df.empty and (res_df is None or res_df.empty):
-    st.info("No upcoming corporate actions / results found for Nifty 50 names, or NSE endpoint temporarily blocked.")
+    st.info("No upcoming corporate actions / results for Nifty 50 right now (NSE often returns 403 from cloud IPs; Moneycontrol fallback also empty). Try again during market hours or from a home network.")
 else:
     if not ca_df.empty:
         ca_html = '<div class="ca-box"><div style="font-weight:700;margin-bottom:6px;">Corporate actions</div>'
