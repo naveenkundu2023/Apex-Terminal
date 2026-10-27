@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-27 (v7.3.2)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-27 (v7.3.3)
 # v7.2 on top of v7.1:
 # 1) Stock snapshot box: compact last-5-day price bars (green/red/grey) inside the box.
 # 2) New VWAP+PCR screen box: top-5 above-VWAP lowest PCR + top-5 below-VWAP highest PCR,
@@ -13,6 +13,7 @@
 # v7.3: stock snapshot bars show small price; VWAP+PCR on-demand + desktop-only; no Taaza Khabar PNG.
 # v7.3.1: VWAP+PCR fully hidden on mobile/tablet/iPad via JS markers (Streamlit widgets ignore CSS wrappers).
 # v7.3.2: VWAP+PCR not rendered at all on mobile/tablet (server-side User-Agent) — no header, button, or tables.
+# v7.3.3: 5D bar labels readable (10px); Fast Refresh soft-clears live quotes only (skips Renko/sim/VWAP/corp).
 # v7.1/v7 core retained: signal rules, box ladder, simulation analytics, built-up.
 
 import streamlit as st
@@ -3145,7 +3146,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  Speed pack: longer cache, parallel cards")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko/sim/VWAP stay warm)")
 
 # -------------------------------------------------
 # Header + Time
@@ -3165,15 +3166,17 @@ with col2:
     auto_refresh = st.checkbox("🔄 Auto-refresh every 2 min", value=False)
 with col3:
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("Refresh Now", use_container_width=True):
-        # Soft clear: only live quote caches (keeps universe/news/renko warm → faster)
+    if st.button("⚡ Fast Refresh", use_container_width=True):
+        # Soft clear ONLY live quotes + selected stock snapshot (keeps universe / news /
+        # Renko / simulation / VWAP-PCR / corporate warm → much faster than full reload)
         for _fn in (
             fetch_yahoo_quote, fetch_index_quote, fetch_tradingview_quote,
             fetch_investing_quote, fetch_live_instrument, fetch_gift_nifty_50,
             fetch_midcap_select, fetch_investing_brent, fetch_tradingeconomics_quote,
             fetch_tradingeconomics_commodity, fetch_stock_data, get_option_sentiment,
             get_options_chain, get_stock_summary_analytics, get_index_analytics,
-            get_vwap_pcr_screen, get_upcoming_results, get_nifty50_heatmap,
+            get_nifty50_heatmap, get_most_active, get_market_breadth, get_top_movers,
+            get_fno_builtup,
         ):
             try:
                 _fn.clear()
@@ -3207,19 +3210,19 @@ if summary:
         for b in bars:
             bg = "#059669" if b["color"] == "green" else ("#dc2626" if b["color"] == "red" else "#64748b")
             h = 10 + int(22 * (float(b["close"]) - lo) / span)  # 10–32px vertical
-            # Small price under bar (compact characters only)
+            # Readable price under bar (slightly larger for eyes)
             price_txt = f'{b["close"]:,.0f}' if b["close"] >= 100 else f'{b["close"]:.1f}'
             cells.append(
-                f'<div style="display:inline-block;width:40px;margin-right:3px;text-align:center;vertical-align:bottom;">'
-                f'<div style="height:34px;display:flex;align-items:flex-end;justify-content:center;">'
-                f'<div style="width:12px;height:{h}px;background:{bg};border-radius:2px;"></div></div>'
-                f'<div style="font-size:7px;color:#94a3b8;line-height:1.05;margin-top:2px;">{b["date"]}</div>'
-                f'<div style="font-size:7px;font-weight:600;color:#e2e8f0;line-height:1.05;">{price_txt}</div>'
-                f'<div style="font-size:7px;font-weight:600;color:#cbd5e1;">{b["pct"]:+.1f}%</div></div>'
+                f'<div style="display:inline-block;width:48px;margin-right:4px;text-align:center;vertical-align:bottom;">'
+                f'<div style="height:36px;display:flex;align-items:flex-end;justify-content:center;">'
+                f'<div style="width:14px;height:{h}px;background:{bg};border-radius:2px;"></div></div>'
+                f'<div style="font-size:10px;color:#94a3b8;line-height:1.15;margin-top:3px;">{b["date"]}</div>'
+                f'<div style="font-size:10px;font-weight:700;color:#f1f5f9;line-height:1.15;">{price_txt}</div>'
+                f'<div style="font-size:10px;font-weight:600;color:#cbd5e1;line-height:1.15;">{b["pct"]:+.1f}%</div></div>'
             )
         bar_html = (
             '<div style="margin-top:8px;display:flex;align-items:flex-end;gap:2px;">'
-            '<div style="font-size:9px;color:#94a3b8;writing-mode:horizontal-tb;margin-right:6px;align-self:center;">5D</div>'
+            '<div style="font-size:11px;font-weight:600;color:#94a3b8;writing-mode:horizontal-tb;margin-right:6px;align-self:center;">5D</div>'
             f'{"".join(cells)}</div>'
         )
     st.markdown(f"""
