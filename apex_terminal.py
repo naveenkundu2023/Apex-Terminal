@@ -9,7 +9,7 @@
 #    Positional layer = 5D VWAP×PCR screen (no separate Daily Renko scanner — avoids double noise).
 # 4) Nifty heatmap: ▲/▼ vs previous refresh for intraday direction change.
 # 5) Corporate actions: also surface upcoming results (next ~7 days) when available.
-# 6) News: top-6 list kept; Visual Daily Brief (top-10 style cards) in expander/popover.
+# 6) News: top-6 list + pictorial PNG digest (Aaj Ki Taaza Khabar) with snapshot strip + top 10.
 # v7.1/v7 core retained: signal rules, box ladder, simulation analytics, built-up.
 
 import streamlit as st
@@ -1282,7 +1282,7 @@ def fetch_stock_data(symbol: str):
     except Exception:
         return None
 
-@st.cache_data(ttl=90)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
     try:
         t = yf.Ticker(f"{symbol}.NS")
@@ -1298,7 +1298,7 @@ def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
     except Exception:
         return None
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_daily_atr(symbol: str, atr_period: int = 14, lookback_days: int = 30):
     try:
         t = yf.Ticker(f"{symbol}.NS")
@@ -1485,12 +1485,12 @@ def analyze_renko_signal(symbol: str, timeframe: str):
         "Confidence": confidence,
     }
 
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def scan_renko_universe(universe_tuple: tuple):
     jobs = [(symbol, timeframe) for symbol in universe_tuple
             for timeframe in ("1 Hour", "30 Minutes", "15 Minutes")]
     rows = []
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=14) as pool:
         futures = [pool.submit(analyze_renko_signal, symbol, timeframe) for symbol, timeframe in jobs]
         for future in as_completed(futures):
             try:
@@ -2531,44 +2531,146 @@ def get_upcoming_results(universe: list, days: int = 7):
     return df.head(20)
 
 
-# ---------- Visual Daily Brief (top-10 style cards from news + market cues) ----------
-def build_visual_daily_brief(biz_news, nifty_an=None, bank_an=None, gift=None):
-    """Build up to 10 short visual-style takeaway cards inspired by a daily market digest."""
-    cards = []
-    # Market snapshot card
-    if nifty_an:
-        cards.append({
-            "title": "Nifty 50 snapshot",
-            "body": f"₹{nifty_an['current']:,.0f} ({nifty_an['pct']:+.2f}%) · 5D VWAP ₹{nifty_an['vwap_5d']:,.0f} · "
-                    f"{'Above VWAP' if nifty_an['above_vwap'] else 'Below VWAP'}",
-            "tag": "INDEX",
-        })
-    if bank_an:
-        cards.append({
-            "title": "Bank Nifty snapshot",
-            "body": f"₹{bank_an['current']:,.0f} ({bank_an['pct']:+.2f}%) · 5D VWAP ₹{bank_an['vwap_5d']:,.0f}",
-            "tag": "INDEX",
-        })
-    if gift:
-        cards.append({
-            "title": "GIFT Nifty cue",
-            "body": f"{gift.get('price', 0):,.0f} ({gift.get('pct', 0):+.2f}%) · source {gift.get('source_short', '?')}",
-            "tag": "GLOBAL",
-        })
-    # News-derived cards
-    for n in (biz_news or [])[:7]:
-        title = (n.get("title") or "")[:90]
-        if not title:
-            continue
-        cards.append({"title": title, "body": "From market-moving feed · open full link in Top 6 list", "tag": "NEWS"})
-    # Pad with static guidance if thin
-    while len(cards) < 6:
-        cards.append({
-            "title": "Risk note",
-            "body": "Confirm levels with broker · positional bias ≠ intraday Renko signal",
-            "tag": "NOTE",
-        })
-    return cards[:10]
+# ---------- Aaj Ki Taaza Khabar — pictorial digest (PNG) ----------
+def build_taaza_khabar_image(
+    biz_news,
+    nifty_an=None,
+    bank_an=None,
+    sensex_q=None,
+    gold_q=None,
+    fii_txt="—",
+    dii_txt="—",
+):
+    """
+    Build a single downloadable/display PNG in the style of a daily market digest:
+    title strip + market snapshot (Nifty / BNF / Sensex / Gold / FII / DII) + top 10 headlines.
+    Returns (png_bytes, error_message).
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        from io import BytesIO
+    except Exception as e:
+        return None, f"Pillow not available: {e}"
+
+    W, H = 900, 1280
+    img = Image.new("RGB", (W, H), "#0f172a")
+    draw = ImageDraw.Draw(img)
+
+    def font(size, bold=False):
+        # DejaVu is commonly present on Linux; fall back to default
+        for name in (
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ):
+            try:
+                return ImageFont.truetype(name, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    f_title = font(36, True)
+    f_sub = font(14, False)
+    f_h = font(13, True)
+    f_body = font(12, False)
+    f_small = font(11, False)
+    f_num = font(14, True)
+
+    # Header band
+    draw.rectangle([0, 0, W, 110], fill="#1e1b4b")
+    draw.text((28, 22), "AAJ KI TAAZA KHABAR", fill="#c4b5fd", font=f_title)
+    from datetime import datetime as _dt
+    import pytz as _pz
+    ist = _pz.timezone("Asia/Kolkata")
+    now_s = _dt.now(ist).strftime("%A, %d %b %Y  ·  %H:%M IST")
+    draw.text((28, 70), f"Stock Market  |  Economy  |  Business   ·   {now_s}", fill="#94a3b8", font=f_sub)
+
+    # Snapshot strip
+    y0 = 125
+    draw.rounded_rectangle([16, y0, W - 16, y0 + 100], radius=12, fill="#1e293b", outline="#334155")
+
+    def _snap(label, val, chg, x):
+        draw.text((x, y0 + 12), label, fill="#94a3b8", font=f_small)
+        draw.text((x, y0 + 34), val, fill="#f8fafc", font=f_h)
+        col = "#34d399" if (chg or "").startswith("+") or (chg or "").startswith("▲") else (
+            "#f87171" if (chg or "").startswith("-") or (chg or "").startswith("▼") else "#cbd5e1"
+        )
+        draw.text((x, y0 + 58), chg or "", fill=col, font=f_small)
+
+    def _fmt_idx(an, prefix="₹"):
+        if not an:
+            return "—", ""
+        p = an.get("current") or an.get("price")
+        pct = an.get("pct")
+        ch = an.get("change")
+        if p is None:
+            return "—", ""
+        val = f"{prefix}{p:,.0f}" if prefix == "₹" else f"{p:,.2f}"
+        c = f"{ch:+.0f} ({pct:+.2f}%)" if ch is not None and pct is not None else (f"{pct:+.2f}%" if pct is not None else "")
+        return val, c
+
+    n_val, n_chg = _fmt_idx(nifty_an)
+    b_val, b_chg = _fmt_idx(bank_an)
+    s_val, s_chg = _fmt_idx(sensex_q) if isinstance(sensex_q, dict) else ("—", "")
+    if isinstance(sensex_q, dict) and "price" in sensex_q:
+        s_val = f"₹{sensex_q['price']:,.0f}"
+        s_chg = f"{sensex_q.get('change', 0):+.0f} ({sensex_q.get('pct', 0):+.2f}%)"
+    g_val, g_chg = "—", ""
+    if isinstance(gold_q, dict) and gold_q.get("price"):
+        g_val = f"{gold_q['price']:,.0f}"
+        g_chg = f"{gold_q.get('change', 0):+.0f} ({gold_q.get('pct', 0):+.2f}%)"
+
+    xs = [28, 170, 320, 480, 620, 760]
+    _snap("NIFTY 50", n_val, n_chg, xs[0])
+    _snap("BANK NIFTY", b_val, b_chg, xs[1])
+    _snap("SENSEX", s_val, s_chg, xs[2])
+    _snap("GOLD", g_val, g_chg, xs[3])
+    _snap("FII", str(fii_txt)[:14], "", xs[4])
+    _snap("DII", str(dii_txt)[:14], "", xs[5])
+
+    # News block
+    y = y0 + 120
+    draw.text((28, y), "TOP MARKET-MOVING HEADLINES", fill="#a5b4fc", font=f_h)
+    y += 28
+    items = list(biz_news or [])[:10]
+    if not items:
+        items = [{"title": "Headlines temporarily unavailable — refresh during market hours."}]
+
+    for i, n in enumerate(items, 1):
+        title = (n.get("title") or "").strip()
+        # wrap title
+        max_chars = 95
+        if len(title) > max_chars:
+            title = title[: max_chars - 1] + "…"
+        # card background
+        card_h = 78
+        draw.rounded_rectangle([16, y, W - 16, y + card_h], radius=10, fill="#1e293b", outline="#334155")
+        # number badge
+        draw.ellipse([28, y + 24, 54, y + 50], fill="#6366f1")
+        draw.text((34, y + 28), f"{i}", fill="#ffffff", font=f_num)
+        # title text (simple two-line wrap)
+        words = title.split()
+        line1, line2 = "", ""
+        for w in words:
+            trial = (line1 + " " + w).strip()
+            if len(trial) <= 78:
+                line1 = trial
+            else:
+                line2 = (line2 + " " + w).strip()
+        draw.text((66, y + 18), line1, fill="#f1f5f9", font=f_body)
+        if line2:
+            if len(line2) > 78:
+                line2 = line2[:77] + "…"
+            draw.text((66, y + 40), line2, fill="#cbd5e1", font=f_body)
+        y += card_h + 8
+        if y > H - 60:
+            break
+
+    # Footer
+    draw.text((28, H - 36), "Apex Market Terminal  ·  Not financial advice  ·  Confirm with your broker", fill="#64748b", font=f_small)
+
+    buf = BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue(), None
 
 
 # ---------- Most Active (Value / Volume) from NSE ----------
@@ -2951,33 +3053,40 @@ def assess_builtup_deep(bu_df: pd.DataFrame):
     long_candidates.sort(key=lambda x: (-x[3], -x[1]))
     short_candidates.sort(key=lambda x: (-x[3], x[1]))
     cover_candidates.sort(key=lambda x: (-x[1], -x[3]))
+    # HTML colour tags so the assessment box is easy to scan
     lines = []
     if long_candidates:
         top = long_candidates[:5]
+        body = ", ".join(f"{s} ({note}; {p:+.1f}% / OI {o:+.0f}%)" for s, p, o, n, note in top)
         lines.append(
-            "**Likely sustain LONG bias:** " +
-            ", ".join(f"{s} ({note}; {p:+.1f}% / OI {o:+.0f}%)" for s, p, o, n, note in top)
+            f'<span style="color:#059669;font-weight:700;">🟢 LONG bias:</span> '
+            f'<span style="color:#34d399;">{body}</span>'
         )
     if short_candidates:
         top = short_candidates[:5]
+        body = ", ".join(f"{s} ({note}; {p:+.1f}% / OI {o:+.0f}%)" for s, p, o, n, note in top)
         lines.append(
-            "**Likely sustain SHORT bias:** " +
-            ", ".join(f"{s} ({note}; {p:+.1f}% / OI {o:+.0f}%)" for s, p, o, n, note in top)
+            f'<span style="color:#dc2626;font-weight:700;">🔴 SHORT bias:</span> '
+            f'<span style="color:#f87171;">{body}</span>'
         )
     if cover_candidates:
         top = cover_candidates[:4]
+        body = ", ".join(f"{s} ({note})" for s, p, o, n, note in top)
         lines.append(
-            "**Short-covering / bounce watch:** " +
-            ", ".join(f"{s} ({note})" for s, p, o, n, note in top)
+            f'<span style="color:#2563eb;font-weight:700;">🔵 Short covering:</span> '
+            f'<span style="color:#60a5fa;">{body}</span>'
         )
     if unwind_caution:
         top = unwind_caution[:4]
+        body = ", ".join(f"{s} ({note})" for s, p, o, n, note in top)
         lines.append(
-            "**Caution — long unwinding:** " +
-            ", ".join(f"{s} ({note})" for s, p, o, n, note in top)
+            f'<span style="color:#a3a30a;font-weight:700;">🟡 Long unwinding:</span> '
+            f'<span style="color:#fbbf24;">{body}</span>'
         )
     if not lines:
-        lines.append("Mixed / transitional built-up across the active set — no dominant multi-day LB or SB cluster.")
+        lines.append(
+            '<span style="color:#94a3b8;">Mixed / transitional built-up — no dominant multi-day LB or SB cluster.</span>'
+        )
     # Overall tone
     n_lb = sum(1 for _, r in bu_df.iterrows() if r.get("Today") == "LB")
     n_sb = sum(1 for _, r in bu_df.iterrows() if r.get("Today") == "SB")
@@ -3083,40 +3192,48 @@ if summary:
     bias_color = "#34d399" if summary["bias"] == "BULLISH" else "#f87171" if summary["bias"] == "BEARISH" else "#fbbf24"
     pcr_html = f"<div><b>PCR (OI):</b> {stock_pcr:.3f}" + (f" <span style='font-size:11px;color:#94a3b8;'>({stock_pcr_src})</span>" if stock_pcr_src else "") + "</div>" if stock_pcr is not None else "<div><b>PCR (OI):</b> —</div>"
     mp_html = f"<div><b>Max Pain:</b> ₹{stock_mp:,.0f}</div>" if stock_mp is not None else "<div><b>Max Pain:</b> —</div>"
-    # Compact last-5 day price bars (fit inside snapshot box)
+    # Compact vertical last-5 bars — left cluster, small footprint
     bars = summary.get("last5_bars") or []
     bar_html = ""
     if bars:
+        # Scale bar height by relative close range within the 5 days
+        closes = [float(b["close"]) for b in bars]
+        lo, hi = min(closes), max(closes)
+        span = (hi - lo) or 1.0
         cells = []
         for b in bars:
             bg = "#059669" if b["color"] == "green" else ("#dc2626" if b["color"] == "red" else "#64748b")
+            h = 10 + int(22 * (float(b["close"]) - lo) / span)  # 10–32px vertical
             cells.append(
-                f'<div style="display:inline-block;width:18%;margin:0 1%;text-align:center;vertical-align:bottom;">'
-                f'<div style="height:28px;display:flex;align-items:flex-end;justify-content:center;">'
-                f'<div style="width:70%;height:18px;background:{bg};border-radius:3px;opacity:0.9;"></div></div>'
-                f'<div style="font-size:9px;color:#94a3b8;line-height:1.1;">{b["date"]}</div>'
-                f'<div style="font-size:10px;font-weight:600;color:#e2e8f0;">₹{b["close"]:,.0f}</div>'
-                f'<div style="font-size:9px;color:{bg};">{b["pct"]:+.1f}%</div></div>'
+                f'<div style="display:inline-block;width:36px;margin-right:4px;text-align:center;vertical-align:bottom;">'
+                f'<div style="height:34px;display:flex;align-items:flex-end;justify-content:center;">'
+                f'<div style="width:12px;height:{h}px;background:{bg};border-radius:2px;"></div></div>'
+                f'<div style="font-size:8px;color:#94a3b8;line-height:1.05;margin-top:2px;">{b["date"]}</div>'
+                f'<div style="font-size:8px;font-weight:600;color:#cbd5e1;">{b["pct"]:+.1f}%</div></div>'
             )
         bar_html = (
-            '<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(148,163,184,0.25);">'
-            '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">Last 5 sessions</div>'
-            f'<div style="display:flex;justify-content:space-between;align-items:flex-end;">{"".join(cells)}</div></div>'
+            '<div style="margin-top:8px;display:flex;align-items:flex-end;gap:2px;">'
+            '<div style="font-size:9px;color:#94a3b8;writing-mode:horizontal-tb;margin-right:6px;align-self:center;">5D</div>'
+            f'{"".join(cells)}</div>'
         )
     st.markdown(f"""
     <div class="analysis-box">
         <div style="font-size:16px; font-weight:700; margin-bottom:8px;">📌 {selected} • Instant Snapshot</div>
-        <div style="display:flex; flex-wrap:wrap; gap:18px; font-size:13px;">
-            <div><b>LTP:</b> ₹{summary['current']:,.2f} <span style="color:{'#34d399' if summary['change']>=0 else '#f87171'}">({summary['change']:+.2f} | {summary['pct']:+.2f}%)</span></div>
-            <div><b>Day H/L:</b> ₹{summary['day_high']:,.2f} / ₹{summary['day_low']:,.2f}</div>
-            <div><b>5D Avg:</b> ₹{summary['avg_5d']:,.2f}</div>
-            <div><b>5D High/Low:</b> ₹{summary['high_5d']:,.2f} / ₹{summary['low_5d']:,.2f}</div>
-            <div><b>5D VWAP:</b> ₹{summary['vwap_5d']:,.2f} {'✅ Above' if summary['above_vwap'] else '❌ Below'}</div>
-            <div><b>Bias:</b> <span style="color:{bias_color}; font-weight:700;">{summary['bias']}</span></div>
-            {pcr_html}
-            {mp_html}
+        <div style="display:flex; flex-wrap:wrap; gap:14px 18px; font-size:13px; align-items:flex-start;">
+            <div style="flex:1 1 auto; min-width:220px;">
+                <div style="display:flex; flex-wrap:wrap; gap:14px 18px;">
+                    <div><b>LTP:</b> ₹{summary['current']:,.2f} <span style="color:{'#34d399' if summary['change']>=0 else '#f87171'}">({summary['change']:+.2f} | {summary['pct']:+.2f}%)</span></div>
+                    <div><b>Day H/L:</b> ₹{summary['day_high']:,.2f} / ₹{summary['day_low']:,.2f}</div>
+                    <div><b>5D Avg:</b> ₹{summary['avg_5d']:,.2f}</div>
+                    <div><b>5D High/Low:</b> ₹{summary['high_5d']:,.2f} / ₹{summary['low_5d']:,.2f}</div>
+                    <div><b>5D VWAP:</b> ₹{summary['vwap_5d']:,.2f} {'✅ Above' if summary['above_vwap'] else '❌ Below'}</div>
+                    <div><b>Bias:</b> <span style="color:{bias_color}; font-weight:700;">{summary['bias']}</span></div>
+                    {pcr_html}
+                    {mp_html}
+                </div>
+            </div>
+            <div style="flex:0 0 auto;">{bar_html}</div>
         </div>
-        {bar_html}
     </div>
     """, unsafe_allow_html=True)
 
@@ -3132,17 +3249,17 @@ else:
 
 
 # ========== VWAP + PCR Positional Screen ==========
-st.markdown('<div class="section-header">🎯 5D VWAP × PCR Screen · Positional Candidates</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">🎯 5D VWAP × PCR · Positional (compact)</div>', unsafe_allow_html=True)
 st.caption(
-    "Above 5-day VWAP + lowest equity PCR (constructive) · Below 5-day VWAP + highest PCR (cautious). "
-    "Independent of the Renko intraday scanner. Analysis is rule-based positional read for near expiry / ~1 month — not advice."
+    "Above VWAP + low PCR (constructive) · Below VWAP + high PCR (cautious). Independent of Renko. "
+    "Rule-based only — reliability depends on live equity option-chain PCR (best during market hours)."
 )
 with st.spinner("Screening VWAP + PCR…"):
     above_pcr_df, below_pcr_df, vwap_pcr_names = get_vwap_pcr_screen(tuple(universe), top_n=5)
 
 col_a, col_b = st.columns(2)
 with col_a:
-    st.markdown("##### ✅ Above 5D VWAP · Lowest PCR (Top 5)")
+    st.markdown("##### ✅ Above VWAP · low PCR")
     if above_pcr_df is not None and not above_pcr_df.empty:
         show_a = above_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
         st.dataframe(
@@ -3152,7 +3269,7 @@ with col_a:
     else:
         st.info("No above-VWAP names with PCR right now (option chain may be offline).")
 with col_b:
-    st.markdown("##### ❌ Below 5D VWAP · Highest PCR (Top 5)")
+    st.markdown("##### ❌ Below VWAP · high PCR")
     if below_pcr_df is not None and not below_pcr_df.empty:
         show_b = below_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
         st.dataframe(
@@ -3648,13 +3765,8 @@ st.caption("Only stocks with the latest two Renko bricks in the same direction a
 scan_col1, scan_col2 = st.columns([1, 4])
 with scan_col1:
     if st.button("🔄 Scan All Stocks", use_container_width=True):
+        # Keep OHLC/ATR warm — only invalidate scan result for a fast re-run
         scan_renko_universe.clear()
-        get_ohlc_data.clear()
-        get_daily_atr.clear()
-        try:
-            run_renko_simulation.clear()
-        except Exception:
-            pass
         st.rerun()
 with scan_col2:
     st.caption(f"Scanning {len(universe)} Nifty 50 stocks across 15-minute, 30-minute and 1-hour timeframes.")
@@ -4039,42 +4151,57 @@ st.markdown('<div class="section-header">📰 Top 6 Market-Moving Business News<
 st.caption("India-first + global headlines (ET / Moneycontrol / Bloomberg / FT / Trading Economics context via Google News). Auto-refreshes every 30 minutes.")
 
 biz_news = get_top_business_news()
-ncol1, ncol2 = st.columns([1.15, 1])
-with ncol1:
-    st.markdown("##### Top 6 headlines")
-    if not biz_news:
-        st.info("News feed temporarily unavailable.")
-    else:
-        news_html = '<div class="news-box">'
-        for i, n in enumerate(biz_news[:6], 1):
-            if n.get("link"):
-                news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> <a href="{n["link"]}" target="_blank">{n["title"]}</a></div>'
-            else:
-                news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> {n["title"]}</div>'
-        news_html += "</div>"
-        st.markdown(news_html, unsafe_allow_html=True)
-with ncol2:
-    st.markdown("##### 📌 Visual Daily Brief")
-    st.caption("Top-10 style takeaways (click expander). Inspired by daily market digest cards.")
-    try:
-        _brief = build_visual_daily_brief(
-            biz_news,
-            nifty_an=get_index_analytics("^NSEI"),
-            bank_an=get_index_analytics("^NSEBANK"),
-            gift=fetch_gift_nifty_50(),
-        )
-    except Exception:
-        _brief = build_visual_daily_brief(biz_news)
-    with st.expander("Open Visual Brief (10 cards)", expanded=False):
-        for i, card in enumerate(_brief, 1):
-            tag = card.get("tag", "")
-            st.markdown(
-                f'<div class="news-box" style="padding:10px 12px;">'
-                f'<div style="font-size:11px;color:#94a3b8;margin-bottom:2px;">{i}. {tag}</div>'
-                f'<div style="font-weight:600;margin-bottom:4px;">{card.get("title","")}</div>'
-                f'<div style="font-size:12px;opacity:0.9;">{card.get("body","")}</div></div>',
-                unsafe_allow_html=True,
-            )
+
+# Top 6 linked list (quick scan)
+if not biz_news:
+    st.info("News feed temporarily unavailable.")
+else:
+    news_html = '<div class="news-box">'
+    for i, n in enumerate(biz_news[:6], 1):
+        if n.get("link"):
+            news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> <a href="{n["link"]}" target="_blank">{n["title"]}</a></div>'
+        else:
+            news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> {n["title"]}</div>'
+    news_html += "</div>"
+    st.markdown(news_html, unsafe_allow_html=True)
+
+# Pictorial digest — Aaj Ki Taaza Khabar (PNG, downloadable)
+st.markdown("#### 📰 Aaj Ki Taaza Khabar · pictorial digest")
+st.caption("Market snapshot strip + top 10 headlines as a single image (share / download).")
+try:
+    _sensex = fetch_index_quote("^BSESN")
+except Exception:
+    _sensex = None
+try:
+    _gold = fetch_live_instrument("GC=F", ("MCX:GOLD1!", "COMEX:GC1!", "TVC:GOLD"), "GC=F", "GC=F")
+except Exception:
+    _gold = None
+try:
+    _n_an = nifty_an
+    _b_an = bank_an
+except NameError:
+    _n_an = get_index_analytics("^NSEI")
+    _b_an = get_index_analytics("^NSEBANK")
+_png, _png_err = build_taaza_khabar_image(
+    biz_news,
+    nifty_an=_n_an,
+    bank_an=_b_an,
+    sensex_q=_sensex,
+    gold_q=_gold,
+    fii_txt="See MC",
+    dii_txt="See MC",
+)
+if _png:
+    st.image(_png, use_container_width=True)
+    st.download_button(
+        "⬇️ Download Taaza Khabar (PNG)",
+        data=_png,
+        file_name="aaj_ki_taaza_khabar.png",
+        mime="image/png",
+        use_container_width=True,
+    )
+else:
+    st.caption(f"Pictorial digest unavailable ({_png_err or 'unknown'}). Top 6 list above still works.")
 
 # Auto refresh
 if auto_refresh:
