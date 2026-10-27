@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-27 (v7.2)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-27 (v7.3)
 # v7.2 on top of v7.1:
 # 1) Stock snapshot box: compact last-5-day price bars (green/red/grey) inside the box.
 # 2) New VWAP+PCR screen box: top-5 above-VWAP lowest PCR + top-5 below-VWAP highest PCR,
@@ -9,7 +9,8 @@
 #    Positional layer = 5D VWAP×PCR screen (no separate Daily Renko scanner — avoids double noise).
 # 4) Nifty heatmap: ▲/▼ vs previous refresh for intraday direction change.
 # 5) Corporate actions: also surface upcoming results (next ~7 days) when available.
-# 6) News: top-6 list + pictorial PNG digest (Aaj Ki Taaza Khabar) with snapshot strip + top 10.
+# 6) News: top-6 list only (Aaj Ki Taaza Khabar pictorial removed).
+# v7.3: stock snapshot bars show small price; VWAP+PCR on-demand + desktop-only; no Taaza Khabar PNG.
 # v7.1/v7 core retained: signal rules, box ladder, simulation analytics, built-up.
 
 import streamlit as st
@@ -3204,12 +3205,15 @@ if summary:
         for b in bars:
             bg = "#059669" if b["color"] == "green" else ("#dc2626" if b["color"] == "red" else "#64748b")
             h = 10 + int(22 * (float(b["close"]) - lo) / span)  # 10–32px vertical
+            # Small price under bar (compact characters only)
+            price_txt = f'{b["close"]:,.0f}' if b["close"] >= 100 else f'{b["close"]:.1f}'
             cells.append(
-                f'<div style="display:inline-block;width:36px;margin-right:4px;text-align:center;vertical-align:bottom;">'
+                f'<div style="display:inline-block;width:40px;margin-right:3px;text-align:center;vertical-align:bottom;">'
                 f'<div style="height:34px;display:flex;align-items:flex-end;justify-content:center;">'
                 f'<div style="width:12px;height:{h}px;background:{bg};border-radius:2px;"></div></div>'
-                f'<div style="font-size:8px;color:#94a3b8;line-height:1.05;margin-top:2px;">{b["date"]}</div>'
-                f'<div style="font-size:8px;font-weight:600;color:#cbd5e1;">{b["pct"]:+.1f}%</div></div>'
+                f'<div style="font-size:7px;color:#94a3b8;line-height:1.05;margin-top:2px;">{b["date"]}</div>'
+                f'<div style="font-size:7px;font-weight:600;color:#e2e8f0;line-height:1.05;">{price_txt}</div>'
+                f'<div style="font-size:7px;font-weight:600;color:#cbd5e1;">{b["pct"]:+.1f}%</div></div>'
             )
         bar_html = (
             '<div style="margin-top:8px;display:flex;align-items:flex-end;gap:2px;">'
@@ -3248,43 +3252,75 @@ else:
     st.info(f"Snapshot for {selected} temporarily unavailable")
 
 
-# ========== VWAP + PCR Positional Screen ==========
+# ========== VWAP + PCR Positional Screen (desktop only, on-demand) ==========
+# Hide entirely on mobile / tablet (narrow viewports) to avoid slow loads.
+st.markdown("""
+<style>
+@media (max-width: 900px) {
+  .vwap-pcr-desktop-only { display: none !important; }
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="vwap-pcr-desktop-only">', unsafe_allow_html=True)
 st.markdown('<div class="section-header">🎯 5D VWAP × PCR · Positional (compact)</div>', unsafe_allow_html=True)
 st.caption(
     "Above VWAP + low PCR (constructive) · Below VWAP + high PCR (cautious). Independent of Renko. "
-    "Rule-based only — reliability depends on live equity option-chain PCR (best during market hours)."
+    "Desktop only · runs only when you click Refresh (avoids slow mobile loads)."
 )
-with st.spinner("Screening VWAP + PCR…"):
-    above_pcr_df, below_pcr_df, vwap_pcr_names = get_vwap_pcr_screen(tuple(universe), top_n=5)
 
-col_a, col_b = st.columns(2)
-with col_a:
-    st.markdown("##### ✅ Above VWAP · low PCR")
-    if above_pcr_df is not None and not above_pcr_df.empty:
-        show_a = above_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
-        st.dataframe(
-            show_a.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
-            use_container_width=True, hide_index=True,
-        )
-    else:
-        st.info("No above-VWAP names with PCR right now (option chain may be offline).")
-with col_b:
-    st.markdown("##### ❌ Below VWAP · high PCR")
-    if below_pcr_df is not None and not below_pcr_df.empty:
-        show_b = below_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
-        st.dataframe(
-            show_b.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
-            use_container_width=True, hide_index=True,
-        )
-    else:
-        st.info("No below-VWAP names with PCR right now.")
+if "vwap_pcr_cache" not in st.session_state:
+    st.session_state.vwap_pcr_cache = None  # (above_df, below_df, names) or None
 
-_analysis_lines = build_vwap_pcr_analysis(above_pcr_df, below_pcr_df, vwap_pcr_names or [])
-_ah = '<div class="analysis-box"><div style="font-weight:700;margin-bottom:6px;">🧠 Independent positional analysis</div>'
-for _ln in _analysis_lines:
-    _ah += f'<div style="margin-bottom:6px;font-size:13px;">{_ln}</div>'
-_ah += "</div>"
-st.markdown(_ah, unsafe_allow_html=True)
+vp_col1, vp_col2 = st.columns([1, 4])
+with vp_col1:
+    vwap_refresh = st.button("🔄 Refresh VWAP+PCR", use_container_width=True, key="vwap_pcr_refresh_btn")
+with vp_col2:
+    st.caption("Click only when you need this screen — does not run on every page load.")
+
+if vwap_refresh:
+    try:
+        get_vwap_pcr_screen.clear()
+    except Exception:
+        pass
+    with st.spinner("Screening VWAP + PCR…"):
+        _a, _b, _n = get_vwap_pcr_screen(tuple(universe), top_n=5)
+        st.session_state.vwap_pcr_cache = (_a, _b, _n)
+
+if st.session_state.vwap_pcr_cache is None:
+    st.info("Click **Refresh VWAP+PCR** to load this screen (skipped by default for speed).")
+else:
+    above_pcr_df, below_pcr_df, vwap_pcr_names = st.session_state.vwap_pcr_cache
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("##### ✅ Above VWAP · low PCR")
+        if above_pcr_df is not None and not above_pcr_df.empty:
+            show_a = above_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
+            st.dataframe(
+                show_a.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.info("No above-VWAP names with PCR right now (option chain may be offline).")
+    with col_b:
+        st.markdown("##### ❌ Below VWAP · high PCR")
+        if below_pcr_df is not None and not below_pcr_df.empty:
+            show_b = below_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
+            st.dataframe(
+                show_b.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.info("No below-VWAP names with PCR right now.")
+
+    _analysis_lines = build_vwap_pcr_analysis(above_pcr_df, below_pcr_df, vwap_pcr_names or [])
+    _ah = '<div class="analysis-box"><div style="font-weight:700;margin-bottom:6px;">🧠 Independent positional analysis</div>'
+    for _ln in _analysis_lines:
+        _ah += f'<div style="margin-bottom:6px;font-size:13px;">{_ln}</div>'
+    _ah += "</div>"
+    st.markdown(_ah, unsafe_allow_html=True)
+
+st.markdown("</div>", unsafe_allow_html=True)  # close .vwap-pcr-desktop-only
 
 st.markdown("---")
 
@@ -4164,44 +4200,6 @@ else:
             news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> {n["title"]}</div>'
     news_html += "</div>"
     st.markdown(news_html, unsafe_allow_html=True)
-
-# Pictorial digest — Aaj Ki Taaza Khabar (PNG, downloadable)
-st.markdown("#### 📰 Aaj Ki Taaza Khabar · pictorial digest")
-st.caption("Market snapshot strip + top 10 headlines as a single image (share / download).")
-try:
-    _sensex = fetch_index_quote("^BSESN")
-except Exception:
-    _sensex = None
-try:
-    _gold = fetch_live_instrument("GC=F", ("MCX:GOLD1!", "COMEX:GC1!", "TVC:GOLD"), "GC=F", "GC=F")
-except Exception:
-    _gold = None
-try:
-    _n_an = nifty_an
-    _b_an = bank_an
-except NameError:
-    _n_an = get_index_analytics("^NSEI")
-    _b_an = get_index_analytics("^NSEBANK")
-_png, _png_err = build_taaza_khabar_image(
-    biz_news,
-    nifty_an=_n_an,
-    bank_an=_b_an,
-    sensex_q=_sensex,
-    gold_q=_gold,
-    fii_txt="See MC",
-    dii_txt="See MC",
-)
-if _png:
-    st.image(_png, use_container_width=True)
-    st.download_button(
-        "⬇️ Download Taaza Khabar (PNG)",
-        data=_png,
-        file_name="aaj_ki_taaza_khabar.png",
-        mime="image/png",
-        use_container_width=True,
-    )
-else:
-    st.caption(f"Pictorial digest unavailable ({_png_err or 'unknown'}). Top 6 list above still works.")
 
 # Auto refresh
 if auto_refresh:
