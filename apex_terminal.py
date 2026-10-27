@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-27 (v7.3.1)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-27 (v7.3.2)
 # v7.2 on top of v7.1:
 # 1) Stock snapshot box: compact last-5-day price bars (green/red/grey) inside the box.
 # 2) New VWAP+PCR screen box: top-5 above-VWAP lowest PCR + top-5 below-VWAP highest PCR,
@@ -12,6 +12,7 @@
 # 6) News: top-6 list only (Aaj Ki Taaza Khabar pictorial removed).
 # v7.3: stock snapshot bars show small price; VWAP+PCR on-demand + desktop-only; no Taaza Khabar PNG.
 # v7.3.1: VWAP+PCR fully hidden on mobile/tablet/iPad via JS markers (Streamlit widgets ignore CSS wrappers).
+# v7.3.2: VWAP+PCR not rendered at all on mobile/tablet (server-side User-Agent) — no header, button, or tables.
 # v7.1/v7 core retained: signal rules, box ladder, simulation analytics, built-up.
 
 import streamlit as st
@@ -3254,138 +3255,102 @@ else:
 
 
 # ========== VWAP + PCR Positional Screen (desktop only, on-demand) ==========
-# Streamlit widgets are NOT children of our HTML divs, so plain CSS on a wrapper
-# cannot hide them. Markers + JS hide the whole block on mobile / tablet / iPad.
-st.markdown(
-    '<div id="vwap-pcr-start" style="height:0;overflow:hidden;margin:0;padding:0;"></div>',
-    unsafe_allow_html=True,
-)
-
-st.markdown('<div class="section-header">🎯 5D VWAP × PCR · Positional (compact)</div>', unsafe_allow_html=True)
-st.caption(
-    "Above VWAP + low PCR (constructive) · Below VWAP + high PCR (cautious). Independent of Renko. "
-    "Desktop only · runs only when you click Refresh (hidden on mobile / tablet)."
-)
-
-if "vwap_pcr_cache" not in st.session_state:
-    st.session_state.vwap_pcr_cache = None  # (above_df, below_df, names) or None
-
-vp_col1, vp_col2 = st.columns([1, 4])
-with vp_col1:
-    vwap_refresh = st.button("🔄 Refresh VWAP+PCR", use_container_width=True, key="vwap_pcr_refresh_btn")
-with vp_col2:
-    st.caption("Click only when you need this screen — does not run on every page load.")
-
-if vwap_refresh:
+# Never render on mobile / tablet / iPad (server-side UA check). Desktop: load only on button click.
+def _is_mobile_or_tablet() -> bool:
+    """True when the browser looks like phone / tablet / iPad — section is skipped entirely."""
+    ua = ""
     try:
-        get_vwap_pcr_screen.clear()
+        # Streamlit >= 1.40
+        headers = getattr(st, "context", None)
+        if headers is not None:
+            h = getattr(headers, "headers", None)
+            if h:
+                ua = (h.get("User-Agent") or h.get("user-agent") or "")
     except Exception:
         pass
-    with st.spinner("Screening VWAP + PCR…"):
-        _a, _b, _n = get_vwap_pcr_screen(tuple(universe), top_n=5)
-        st.session_state.vwap_pcr_cache = (_a, _b, _n)
+    if not ua:
+        try:
+            # Older Streamlit fallback
+            from streamlit.web.server.websocket_headers import _get_websocket_headers
+            h = _get_websocket_headers() or {}
+            ua = h.get("User-Agent") or h.get("user-agent") or ""
+        except Exception:
+            pass
+    ua = (ua or "").lower()
+    if not ua:
+        return False  # unknown → allow desktop path
+    needles = (
+        "iphone", "ipod", "ipad", "android", "mobile", "tablet",
+        "kindle", "silk", "playbook", "blackberry", "opera mini",
+        "iemobile", "webos", "windows phone",
+    )
+    if any(n in ua for n in needles):
+        return True
+    # iPadOS 13+ often sends Macintosh + Mobile token, or touch Mac
+    if "macintosh" in ua and ("mobile" in ua or "touch" in ua):
+        return True
+    return False
 
-if st.session_state.vwap_pcr_cache is None:
-    st.info("Click **Refresh VWAP+PCR** to load this screen (skipped by default for speed).")
-else:
-    above_pcr_df, below_pcr_df, vwap_pcr_names = st.session_state.vwap_pcr_cache
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.markdown("##### ✅ Above VWAP · low PCR")
-        if above_pcr_df is not None and not above_pcr_df.empty:
-            show_a = above_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
-            st.dataframe(
-                show_a.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.info("No above-VWAP names with PCR right now (option chain may be offline).")
-    with col_b:
-        st.markdown("##### ❌ Below VWAP · high PCR")
-        if below_pcr_df is not None and not below_pcr_df.empty:
-            show_b = below_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
-            st.dataframe(
-                show_b.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.info("No below-VWAP names with PCR right now.")
 
-    _analysis_lines = build_vwap_pcr_analysis(above_pcr_df, below_pcr_df, vwap_pcr_names or [])
-    _ah = '<div class="analysis-box"><div style="font-weight:700;margin-bottom:6px;">🧠 Independent positional analysis</div>'
-    for _ln in _analysis_lines:
-        _ah += f'<div style="margin-bottom:6px;font-size:13px;">{_ln}</div>'
-    _ah += "</div>"
-    st.markdown(_ah, unsafe_allow_html=True)
+if not _is_mobile_or_tablet():
+    st.markdown('<div class="section-header">🎯 5D VWAP × PCR · Positional (compact)</div>', unsafe_allow_html=True)
+    st.caption(
+        "Above VWAP + low PCR (constructive) · Below VWAP + high PCR (cautious). Independent of Renko. "
+        "Desktop only · runs only when you click Refresh (not shown on mobile / tablet)."
+    )
 
-st.markdown(
-    '<div id="vwap-pcr-end" style="height:0;overflow:hidden;margin:0;padding:0;"></div>',
-    unsafe_allow_html=True,
-)
+    if "vwap_pcr_cache" not in st.session_state:
+        st.session_state.vwap_pcr_cache = None  # (above_df, below_df, names) or None
 
-# Hide entire VWAP+PCR block on mobile / tablet / iPad (width OR UA).
-# Walks Streamlit element-containers between #vwap-pcr-start and #vwap-pcr-end.
-st.markdown("""
-<script>
-(function () {
-  function isMobileOrTablet() {
-    try {
-      var w = window.innerWidth || document.documentElement.clientWidth || 1200;
-      var ua = (navigator.userAgent || navigator.vendor || "").toLowerCase();
-      var uaHit = /iphone|ipod|ipad|android|mobile|tablet|kindle|silk|playbook|blackberry|opera mini|iemobile/.test(ua);
-      // iPadOS 13+ may report as Mac — treat touch + coarse pointer as tablet
-      var touchPad = (navigator.maxTouchPoints > 1) && /macintosh|mac os/.test(ua);
-      return (w <= 1024) || uaHit || touchPad;
-    } catch (e) {
-      return false;
-    }
-  }
-  function hideVwapPcr() {
-    if (!isMobileOrTablet()) return;
-    var start = document.getElementById("vwap-pcr-start");
-    var end = document.getElementById("vwap-pcr-end");
-    if (!start || !end) return;
-    function blockOf(el) {
-      return el.closest('[data-testid="stVerticalBlockBorderWrapper"]')
-          || el.closest('[data-testid="element-container"]')
-          || el.closest('.element-container')
-          || el.parentElement;
-    }
-    var a = blockOf(start);
-    var b = blockOf(end);
-    if (!a || !b || !a.parentElement) return;
-    var parent = a.parentElement;
-    var kids = Array.prototype.slice.call(parent.children);
-    var i0 = kids.indexOf(a);
-    var i1 = kids.indexOf(b);
-    if (i0 < 0 || i1 < 0 || i1 < i0) {
-      // Fallback: hide start/end containers only + scan siblings of start
-      [a, b].forEach(function (n) { if (n) n.style.display = "none"; });
-      var n = a ? a.nextElementSibling : null;
-      var guard = 0;
-      while (n && n !== b && guard < 80) {
-        n.style.display = "none";
-        n = n.nextElementSibling;
-        guard++;
-      }
-      if (b) b.style.display = "none";
-      return;
-    }
-    for (var i = i0; i <= i1; i++) {
-      kids[i].style.display = "none";
-    }
-  }
-  // Run now and after Streamlit finishes painting
-  hideVwapPcr();
-  setTimeout(hideVwapPcr, 50);
-  setTimeout(hideVwapPcr, 250);
-  setTimeout(hideVwapPcr, 800);
-  window.addEventListener("resize", hideVwapPcr);
-})();
-</script>
-""", unsafe_allow_html=True)
+    vp_col1, vp_col2 = st.columns([1, 4])
+    with vp_col1:
+        vwap_refresh = st.button("🔄 Refresh VWAP+PCR", use_container_width=True, key="vwap_pcr_refresh_btn")
+    with vp_col2:
+        st.caption("Click only when you need this screen — does not run on every page load.")
 
-st.markdown("---")
+    if vwap_refresh:
+        try:
+            get_vwap_pcr_screen.clear()
+        except Exception:
+            pass
+        with st.spinner("Screening VWAP + PCR…"):
+            _a, _b, _n = get_vwap_pcr_screen(tuple(universe), top_n=5)
+            st.session_state.vwap_pcr_cache = (_a, _b, _n)
+
+    if st.session_state.vwap_pcr_cache is None:
+        st.info("Click **Refresh VWAP+PCR** to load this screen (skipped by default for speed).")
+    else:
+        above_pcr_df, below_pcr_df, vwap_pcr_names = st.session_state.vwap_pcr_cache
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("##### ✅ Above VWAP · low PCR")
+            if above_pcr_df is not None and not above_pcr_df.empty:
+                show_a = above_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
+                st.dataframe(
+                    show_a.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.info("No above-VWAP names with PCR right now (option chain may be offline).")
+        with col_b:
+            st.markdown("##### ❌ Below VWAP · high PCR")
+            if below_pcr_df is not None and not below_pcr_df.empty:
+                show_b = below_pcr_df[["Symbol", "LTP", "VWAP_5D", "PCR"]].copy()
+                st.dataframe(
+                    show_b.style.format({"LTP": "₹{:,.2f}", "VWAP_5D": "₹{:,.2f}", "PCR": "{:.3f}"}),
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.info("No below-VWAP names with PCR right now.")
+
+        _analysis_lines = build_vwap_pcr_analysis(above_pcr_df, below_pcr_df, vwap_pcr_names or [])
+        _ah = '<div class="analysis-box"><div style="font-weight:700;margin-bottom:6px;">🧠 Independent positional analysis</div>'
+        for _ln in _analysis_lines:
+            _ah += f'<div style="margin-bottom:6px;font-size:13px;">{_ln}</div>'
+        _ah += "</div>"
+        st.markdown(_ah, unsafe_allow_html=True)
+
+    st.markdown("---")
 
 st.markdown("---")
 
