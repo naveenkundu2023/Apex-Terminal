@@ -1,4 +1,5 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-28 (v7.5.0)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-28 (v7.6.0)
+# v7.6: Heatmap cells now an equal-size responsive grid (5/4/3 columns) — no mid-word wrapping on mobile.
 # v7.5 changes (only these two; everything else identical to v7.4.0):
 # 1) Stock Instant Snapshot box: dark background replaced with the same soft light-green
 #    used by the index "up" cards (#eaf6ed / border #d3e9d8); text colours made dark for contrast.
@@ -292,6 +293,26 @@ def apply_theme(theme: str):
             }
             .snapshot-box .panel-title { color: #386b49 !important; }
 
+            /* === v7.6: Heatmap — equal-size responsive grid (5 cols desktop / 4 tablet / 3 mobile) === */
+            .heat-grid {
+                display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+                gap: 6px; width: 100%;
+            }
+            .heat-grid .heat-cell {
+                width: auto !important; margin: 0 !important; padding: 8px 2px !important;
+                min-height: 70px; display: flex; flex-direction: column;
+                align-items: center; justify-content: center; gap: 2px;
+                box-sizing: border-box; overflow: hidden; line-height: 1.2;
+            }
+            .heat-grid .hc-sym {
+                font-size: clamp(9px, 2.6vw, 12px); font-weight: 700;
+                white-space: nowrap; max-width: 100%; letter-spacing: -0.2px;
+            }
+            .heat-grid .hc-pct { font-size: clamp(10px, 2.8vw, 12px); font-weight: 600; white-space: nowrap; }
+            .heat-grid .hc-ltp { font-size: clamp(9px, 2.4vw, 11px); font-weight: 500; opacity: 0.92; white-space: nowrap; }
+            @media (max-width: 900px) { .heat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+            @media (max-width: 600px) { .heat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; } }
+
         </style>
         """, unsafe_allow_html=True)
     else:
@@ -473,6 +494,26 @@ def apply_theme(theme: str):
                 color: #26332b !important;
             }
             .snapshot-box .panel-title { color: #386b49 !important; }
+
+            /* === v7.6: Heatmap — equal-size responsive grid (5 cols desktop / 4 tablet / 3 mobile) === */
+            .heat-grid {
+                display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+                gap: 6px; width: 100%;
+            }
+            .heat-grid .heat-cell {
+                width: auto !important; margin: 0 !important; padding: 8px 2px !important;
+                min-height: 70px; display: flex; flex-direction: column;
+                align-items: center; justify-content: center; gap: 2px;
+                box-sizing: border-box; overflow: hidden; line-height: 1.2;
+            }
+            .heat-grid .hc-sym {
+                font-size: clamp(9px, 2.6vw, 12px); font-weight: 700;
+                white-space: nowrap; max-width: 100%; letter-spacing: -0.2px;
+            }
+            .heat-grid .hc-pct { font-size: clamp(10px, 2.8vw, 12px); font-weight: 600; white-space: nowrap; }
+            .heat-grid .hc-ltp { font-size: clamp(9px, 2.4vw, 11px); font-weight: 500; opacity: 0.92; white-space: nowrap; }
+            @media (max-width: 900px) { .heat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+            @media (max-width: 600px) { .heat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; } }
 
         </style>
         """, unsafe_allow_html=True)
@@ -4220,10 +4261,12 @@ else:
                 arrow = ' <span style="font-size:10px;opacity:0.5;">●</span>'
         html_cells.append(
             f'<div class="heat-cell" style="background:{bg};">'
-            f'{sym}{arrow}<br>{pct:+.2f}%<br>₹{row["LTP"]:,.1f}</div>'
+            f'<div class="hc-sym">{sym}{arrow}</div>'
+            f'<div class="hc-pct">{pct:+.2f}%</div>'
+            f'<div class="hc-ltp">₹{row["LTP"]:,.1f}</div></div>'
         )
     st.session_state.heatmap_prev_pct = new_map
-    st.markdown("".join(html_cells), unsafe_allow_html=True)
+    st.markdown('<div class="heat-grid">' + "".join(html_cells) + "</div>", unsafe_allow_html=True)
     st.caption("▲ / ▼ = day-% moved up / down vs previous refresh on this session (intraday path). Colour = full-day % change.")
 
 st.markdown("---")
