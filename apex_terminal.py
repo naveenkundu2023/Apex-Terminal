@@ -1,4 +1,14 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-27 (v7.4.0 Dashboard Redesign)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-28 (v7.5.0)
+# v7.5 changes (only these two; everything else identical to v7.4.0):
+# 1) Stock Instant Snapshot box: dark background replaced with the same soft light-green
+#    used by the index "up" cards (#eaf6ed / border #d3e9d8); text colours made dark for contrast.
+# 2) Renko Signal Simulation Analytics:
+#    - Primary look-back is now 7 days (selector: 7d primary, 15d, 30d, 60d) — rolling-day basis.
+#    - Runs ONCE per calendar day (IST): cache is keyed on today's date, never expires intraday,
+#      and is NOT cleared by Fast Refresh / Scan All Stocks / auto-refresh.
+#    - Only completed sessions are tracked (today's still-forming signals are excluded), so the
+#      table shows up to the previous day's signals; next day it rolls forward automatically.
+#    - Scanner Confidence blend uses the 7d window first (then 15d / 30d / 60d fallback).
 # v7.4 changes:
 # 1) REMOVED: 5D VWAP × PCR positional screen section (and related helpers) — not required.
 # 2) Visual redesign toward clean multi-panel dashboard (inspired by Apex mockups):
@@ -273,6 +283,15 @@ def apply_theme(theme: str):
                 margin: 14px 0;
             }
 
+            /* === v7.5: Instant Snapshot box — soft light green (same as index "up" cards) === */
+            .snapshot-box {
+                background: #eaf6ed !important;
+                border: 1px solid #d3e9d8 !important;
+                box-shadow: none !important;
+                color: #26332b !important;
+            }
+            .snapshot-box .panel-title { color: #386b49 !important; }
+
         </style>
         """, unsafe_allow_html=True)
     else:
@@ -445,6 +464,15 @@ def apply_theme(theme: str):
                 height: 1px; background: linear-gradient(90deg, transparent, #c7d2fe, transparent);
                 margin: 14px 0;
             }
+
+            /* === v7.5: Instant Snapshot box — soft light green (same as index "up" cards) === */
+            .snapshot-box {
+                background: #eaf6ed !important;
+                border: 1px solid #d3e9d8 !important;
+                box-shadow: none !important;
+                color: #26332b !important;
+            }
+            .snapshot-box .panel-title { color: #386b49 !important; }
 
         </style>
         """, unsafe_allow_html=True)
@@ -1652,14 +1680,14 @@ def scan_renko_universe(universe_tuple: tuple):
 
 
 def _extract_renko_conf_weights(sim: dict) -> dict:
-    """Map (Timeframe, Signal) -> Hit+2 % from primary sim window (30d → 60/15/7).
+    """Map (Timeframe, Signal) -> Hit+2 % from primary sim window (7d → 15/30/60 fallback).
     Used to nudge live Confidence % toward historically stronger setups.
     """
     if not sim or not sim.get("ok"):
         return {}
     periods = sim.get("periods") or {}
     block = None
-    for d in (30, 60, 15, 7):
+    for d in (7, 15, 30, 60):
         b = periods.get(d)
         if b and b.get("total", 0) >= 8:
             block = b
@@ -1743,8 +1771,11 @@ def _renko_sim_inline_atr(symbol: str, price_fallback: float) -> float:
         return max(price_fallback * 0.005, 0.5)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
+# v7.5: runs ONCE per calendar day (IST). `day_key` (today's date string) is part of the cache key,
+# ttl=None means it never expires intraday, and no refresh button clears it. Tomorrow's new
+# day_key triggers a single fresh computation (first load of the day) and the old entry is dropped.
+@st.cache_data(ttl=None, show_spinner=False, max_entries=2)
+def run_renko_simulation(universe_tuple: tuple, primary_days: int = 7, day_key: str = ""):
     """
     Replay the *same* two-brick scanner rules on history.
     For each signal:
@@ -1752,7 +1783,9 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
       Stop  = 2 bricks against the signal
       Targets = +2 / +3 / +4 bricks
     Outcome: Failed if stop hit before any target; else Qualified at highest target reached.
-    Aggregates for 7 / 15 / 30 / 60 day windows so a 30-day review can suggest filter tweaks.
+    Aggregates for 7 / 15 / 30 / 60 day rolling windows. Primary review = 7 days.
+    Only COMPLETED sessions are tracked (signals formed before today 00:00 IST), so the
+    output is stable for the whole day and shows up to the previous day's signals.
     """
     lookbacks = [7, 15, 30, 60]
     tfs = [
@@ -1764,6 +1797,13 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
     # Full universe can be slow; 35 is enough for stable rates
     symbols = list(universe_tuple)[:35]
     all_rows = []
+
+    # Start of today in IST, expressed as naive UTC (same basis as normalised bar dates)
+    try:
+        _today_start_ist = pd.Timestamp.now(tz="Asia/Kolkata").normalize()
+        cutoff_utc = _today_start_ist.tz_convert("UTC").tz_localize(None)
+    except Exception:
+        cutoff_utc = None
 
     def _norm_date_series(s: pd.Series) -> pd.Series:
         s = pd.to_datetime(s, errors="coerce", utc=True)
@@ -1823,6 +1863,13 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
                 r2 = closes[i] < opens[i]
                 if not ((g1 and g2) or (r1 and r2)):
                     continue
+                # v7.5: skip today's still-forming signals — only completed sessions are tracked
+                if cutoff_utc is not None:
+                    try:
+                        if pd.Timestamp(dates[i]) >= cutoff_utc:
+                            continue
+                    except Exception:
+                        pass
                 entry = float(closes[i])
                 # EMA context at signal time (naive-date compare)
                 try:
@@ -1918,8 +1965,8 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
             "periods": {},
             "analysis_30d": (
                 "No historical signals reconstructed yet. Common causes: Yahoo throttle, "
-                "weekend/holiday gap, or first-run cache miss. Click **Refresh Now** or "
-                "**Scan All Stocks** and wait ~1 minute."
+                "weekend/holiday gap, or first-run miss. This view is built once per day — "
+                "it will retry automatically on the next app restart or the next day."
             ),
             "recommend": "",
         }
@@ -1927,7 +1974,7 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
     rdf = pd.DataFrame(all_rows)
     # Safety: if age failed for everything (999), treat as usable within 60d so tables still show
     if (rdf["AgeDays"] >= 900).all():
-        rdf["AgeDays"] = 15  # fallback so primary 30d window still populates
+        rdf["AgeDays"] = 5  # fallback so primary 7d window still populates
 
     periods = {}
     for days in lookbacks:
@@ -1980,10 +2027,11 @@ def run_renko_simulation(universe_tuple: tuple, primary_days: int = 30):
             "outcomes": outcome_counts,
         }
 
-    p30 = periods.get(30)
+    # v7.5: primary review window = 7 days (fallback to 15 / 30 / 60 when 7d is empty)
+    p30 = periods.get(7)
     if not p30 or p30["total"] == 0:
-        # Fall back to widest available window for analysis text
-        for d in (60, 15, 7):
+        # Fall back to next-widest available window for analysis text
+        for d in (15, 30, 60):
             if periods.get(d) and periods[d]["total"] > 0:
                 p30 = periods[d]
                 break
@@ -3296,7 +3344,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko/sim stay warm)\nUI v7.4 — clean dashboard layout · VWAP+PCR screen removed")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko/sim stay warm)\nUI v7.5 — snapshot light-green · Renko simulation: 7d primary, computed once per day")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3333,6 +3381,7 @@ with col3:
     if st.button("⚡ Fast Refresh", use_container_width=True):
         # Soft clear ONLY live quotes + selected stock snapshot (keeps universe / news /
         # Renko / simulation / corporate warm → much faster than full reload)
+        # NOTE (v7.5): run_renko_simulation is intentionally NOT cleared — it runs once per day.
         for _fn in (
             fetch_yahoo_quote, fetch_index_quote, fetch_tradingview_quote,
             fetch_investing_quote, fetch_live_instrument, fetch_gift_nifty_50,
@@ -3359,8 +3408,10 @@ stock_mp = stock_sent.get("max_pain")
 stock_pcr_src = stock_sent.get("source") or ""
 
 if summary:
-    bias_color = "#34d399" if summary["bias"] == "BULLISH" else "#f87171" if summary["bias"] == "BEARISH" else "#fbbf24"
-    pcr_html = f"<div><b>PCR (OI):</b> {stock_pcr:.3f}" + (f" <span style='font-size:11px;color:#94a3b8;'>({stock_pcr_src})</span>" if stock_pcr_src else "") + "</div>" if stock_pcr is not None else "<div><b>PCR (OI):</b> —</div>"
+    # v7.5: light-green snapshot box → dark, high-contrast text colours
+    bias_color = "#1f8a4c" if summary["bias"] == "BULLISH" else "#c0392b" if summary["bias"] == "BEARISH" else "#b7791f"
+    chg_color = "#1f8a4c" if summary['change'] >= 0 else "#c0392b"
+    pcr_html = f"<div><b>PCR (OI):</b> {stock_pcr:.3f}" + (f" <span style='font-size:11px;color:#52615a;'>({stock_pcr_src})</span>" if stock_pcr_src else "") + "</div>" if stock_pcr is not None else "<div><b>PCR (OI):</b> —</div>"
     mp_html = f"<div><b>Max Pain:</b> ₹{stock_mp:,.0f}</div>" if stock_mp is not None else "<div><b>Max Pain:</b> —</div>"
     # Compact vertical last-5 bars — left cluster, small footprint
     bars = summary.get("last5_bars") or []
@@ -3380,22 +3431,22 @@ if summary:
                 f'<div style="display:inline-block;width:48px;margin-right:4px;text-align:center;vertical-align:bottom;">'
                 f'<div style="height:36px;display:flex;align-items:flex-end;justify-content:center;">'
                 f'<div style="width:14px;height:{h}px;background:{bg};border-radius:2px;"></div></div>'
-                f'<div style="font-size:10px;color:#94a3b8;line-height:1.15;margin-top:3px;">{b["date"]}</div>'
-                f'<div style="font-size:10px;font-weight:700;color:#f1f5f9;line-height:1.15;">{price_txt}</div>'
-                f'<div style="font-size:10px;font-weight:600;color:#cbd5e1;line-height:1.15;">{b["pct"]:+.1f}%</div></div>'
+                f'<div style="font-size:10px;color:#52615a;line-height:1.15;margin-top:3px;">{b["date"]}</div>'
+                f'<div style="font-size:10px;font-weight:700;color:#26332b;line-height:1.15;">{price_txt}</div>'
+                f'<div style="font-size:10px;font-weight:600;color:#3b4a42;line-height:1.15;">{b["pct"]:+.1f}%</div></div>'
             )
         bar_html = (
             '<div style="margin-top:8px;display:flex;align-items:flex-end;gap:2px;">'
-            '<div style="font-size:11px;font-weight:600;color:#94a3b8;writing-mode:horizontal-tb;margin-right:6px;align-self:center;">5D</div>'
+            '<div style="font-size:11px;font-weight:600;color:#52615a;writing-mode:horizontal-tb;margin-right:6px;align-self:center;">5D</div>'
             f'{"".join(cells)}</div>'
         )
     st.markdown(f"""
-    <div class="analysis-box panel-card" style="margin-top:4px;">
+    <div class="analysis-box panel-card snapshot-box" style="margin-top:4px;">
         <div class="panel-title">📌 {selected} • Instant Snapshot</div>
         <div style="display:flex; flex-wrap:wrap; gap:14px 18px; font-size:13px; align-items:flex-start;">
             <div style="flex:1 1 auto; min-width:220px;">
                 <div style="display:flex; flex-wrap:wrap; gap:14px 18px;">
-                    <div><b>LTP:</b> ₹{summary['current']:,.2f} <span style="color:{'#34d399' if summary['change']>=0 else '#f87171'}">({summary['change']:+.2f} | {summary['pct']:+.2f}%)</span></div>
+                    <div><b>LTP:</b> ₹{summary['current']:,.2f} <span style="color:{chg_color}">({summary['change']:+.2f} | {summary['pct']:+.2f}%)</span></div>
                     <div><b>Day H/L:</b> ₹{summary['day_high']:,.2f} / ₹{summary['day_low']:,.2f}</div>
                     <div><b>5D Avg:</b> ₹{summary['avg_5d']:,.2f}</div>
                     <div><b>5D High/Low:</b> ₹{summary['high_5d']:,.2f} / ₹{summary['low_5d']:,.2f}</div>
@@ -3948,7 +3999,7 @@ else:
         "Price": "{:.2f}", "EMA 20": "{:.2f}", "Entry": "{:.2f}", "Exit": "{:.2f}", "Box Size": "{:.2f}", "Age Minutes": "{:.1f}"
     })
     st.dataframe(styled, use_container_width=True, hide_index=True)
-    st.caption("⚡ = Just entered (≤20 min) • Yellow = fresh • Confidence % = live (TF + age + EMA edge) blended with simulation Hit+2 rates for that TF×Signal when available — improves as the 30d sample grows")
+    st.caption("⚡ = Just entered (≤20 min) • Yellow = fresh • Confidence % = live (TF + age + EMA edge) blended with simulation Hit+2 rates for that TF×Signal when available (7-day window, updated once a day)")
     st.download_button("⬇️ Download signal list (CSV)",
                        data=signal_df.drop(columns=["Last Brick TS"], errors="ignore").to_csv(index=False).encode("utf-8"),
                        file_name="intraday_renko_signals.csv", mime="text/csv")
@@ -3959,12 +4010,14 @@ st.caption(
     "Tracks every signal that the **same scanner rules** would have generated. "
     "Entry = 2nd brick close · Stop = 2 bricks against · Targets = +2 / +3 / +4. "
     "**Qualified** = reached ≥ +2 before stop · **Failed** = 2-brick stop first. "
-    "Windows: 7d / 15d / 30d / 60d. Primary review = **30 days**. "
-    "First load may take 1–2 min (Yahoo rate limits). Use **Scan All Stocks** or **Refresh Now** to rebuild cache if tables are empty."
+    "Rolling windows: 7d / 15d / 30d / 60d. Primary review = **7 days**. "
+    "**Built once per day (first load of the day) from completed sessions up to the previous day — "
+    "no refresh button re-runs it intraday; it rolls forward automatically the next day.**"
 )
 
-with st.spinner("Tracking historical scanner signals (cached)…"):
-    sim = run_renko_simulation(tuple(universe), primary_days=30)
+_sim_day_key = datetime.now(ist).strftime("%Y-%m-%d")
+with st.spinner("Building today's simulation (once per day, cached)…"):
+    sim = run_renko_simulation(tuple(universe), primary_days=7, day_key=_sim_day_key)
 
 # Persist TF×Signal hit rates so the next scanner pass can lift/lower Confidence
 try:
@@ -3978,24 +4031,24 @@ if not sim.get("ok"):
     st.info(sim.get("analysis_30d", "Simulation temporarily unavailable."))
 else:
     period_choice = st.radio(
-        "Tracked look-back",
-        ["30d (primary)", "7d", "15d", "60d"],
+        "Tracked look-back (rolling days)",
+        ["7d (primary)", "15d", "30d", "60d"],
         index=0,
         horizontal=True,
         key="renko_sim_period",
     )
-    day_map = {"30d (primary)": 30, "7d": 7, "15d": 15, "60d": 60}
+    day_map = {"7d (primary)": 7, "15d": 15, "30d": 30, "60d": 60}
     days = day_map[period_choice]
     block = sim["periods"].get(days)
     if not block or block.get("total", 0) == 0:
         raw = sim.get("raw_count", 0)
         if raw:
-            st.info(f"No signals fell inside the last {days} days (raw tracked={raw}). Try **60d** look-back.")
+            st.info(f"No signals fell inside the last {days} days (raw tracked={raw}). Try a wider look-back (15d / 30d / 60d).")
         else:
-            st.info(f"No tracked signals yet. Click **Scan All Stocks** once and wait for the cache to fill.")
+            st.info("No tracked signals available for today's build.")
     else:
         st.markdown(
-            f"**Tracked:** {block['total']} signals · "
+            f"**Tracked (last {days} days, through previous session):** {block['total']} signals · "
             f"**Qualified (≥+2):** {block.get('qualified', 0)} · "
             f"**Failed (stop first):** {block.get('failed', 0)}"
         )
@@ -4026,7 +4079,7 @@ else:
             st.caption("Outcome log: " + " · ".join(f"{k}: {v}" for k, v in sorted(oc.items(), key=lambda x: -x[1])))
 
     st.markdown("---")
-    st.markdown("#### 🔍 Analysis & recommendation (30-day tracked review)")
+    st.markdown("#### 🔍 Analysis & recommendation (7-day tracked review)")
     st.markdown(sim.get("analysis_30d", ""))
     if sim.get("recommend"):
         st.markdown(
@@ -4035,7 +4088,7 @@ else:
         )
     st.caption(
         "Outcomes are reconstructed from the same brick + EMA20 rules as the live scanner. "
-        "Use the 30-day fail/qualify rates to tighten filters over time — not live trade advice."
+        "Use the 7-day fail/qualify rates (cross-check with 15d/30d) to tighten filters over time — not live trade advice."
     )
 
 st.markdown("---")
