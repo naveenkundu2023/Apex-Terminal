@@ -1,24 +1,18 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-28 (v7.6.0)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-28 (v7.6.1)
+# v7.6.1:
+# 1) REMOVED: Renko Signal Simulation Analytics block (and related helpers / confidence blend) — was slowing the app.
+# 2) Nifty 50 Heatmap: softer, lighter green/red shades (less eye strain) + slightly larger mobile text (still no-wrap).
 # v7.6: Heatmap cells now an equal-size responsive grid (5/4/3 columns) — no mid-word wrapping on mobile.
-# v7.5 changes (only these two; everything else identical to v7.4.0):
-# 1) Stock Instant Snapshot box: dark background replaced with the same soft light-green
-#    used by the index "up" cards (#eaf6ed / border #d3e9d8); text colours made dark for contrast.
-# 2) Renko Signal Simulation Analytics:
-#    - Primary look-back is now 7 days (selector: 7d primary, 15d, 30d, 60d) — rolling-day basis.
-#    - Runs ONCE per calendar day (IST): cache is keyed on today's date, never expires intraday,
-#      and is NOT cleared by Fast Refresh / Scan All Stocks / auto-refresh.
-#    - Only completed sessions are tracked (today's still-forming signals are excluded), so the
-#      table shows up to the previous day's signals; next day it rolls forward automatically.
-#    - Scanner Confidence blend uses the 7d window first (then 15d / 30d / 60d fallback).
+# v7.5: Stock Instant Snapshot box light-green; other retained features.
 # v7.4 changes:
 # 1) REMOVED: 5D VWAP × PCR positional screen section (and related helpers) — not required.
 # 2) Visual redesign toward clean multi-panel dashboard (inspired by Apex mockups):
 #    tighter index cards, glass-style panels, clearer section hierarchy, refined dark/light CSS.
-# 3) All prior features & logic retained: Renko scanner + confidence blend, simulation analytics,
-#    stock snapshot (incl. 5D bars + snapshot VWAP), options matrix, heatmap ▲/▼, built-up cycle,
-#    corporate actions + upcoming results, top-6 news, breadth/PCR/MaxPain/IV, most-active, etc.
+# 3) All prior features & logic retained: Renko scanner, stock snapshot (incl. 5D bars + snapshot VWAP),
+#    options matrix, heatmap ▲/▼, built-up cycle, corporate actions + upcoming results, top-6 news,
+#    breadth/PCR/MaxPain/IV, most-active, etc.
 # 4) Fast Refresh still soft-clears live quotes only.
-# v7.1–v7.3 core retained: signal rules, box ladder, simulation analytics, built-up.
+# v7.1–v7.3 core retained: signal rules, box ladder, built-up.
 
 import streamlit as st
 import yfinance as yf
@@ -74,9 +68,6 @@ if "last_pcr_time" not in st.session_state:
     st.session_state.last_pcr_time = None
 if "heatmap_prev_pct" not in st.session_state:
     st.session_state.heatmap_prev_pct = {}
-if "renko_conf_weights" not in st.session_state:
-    st.session_state.renko_conf_weights = {}  # (Timeframe, Signal) -> hit2 rate 0-100
-
 # -------------------------------------------------
 # Theme CSS
 # -------------------------------------------------
@@ -300,16 +291,16 @@ def apply_theme(theme: str):
             }
             .heat-grid .heat-cell {
                 width: auto !important; margin: 0 !important; padding: 8px 2px !important;
-                min-height: 70px; display: flex; flex-direction: column;
+                min-height: 74px; display: flex; flex-direction: column;
                 align-items: center; justify-content: center; gap: 2px;
                 box-sizing: border-box; overflow: hidden; line-height: 1.2;
             }
             .heat-grid .hc-sym {
-                font-size: clamp(9px, 2.6vw, 12px); font-weight: 700;
+                font-size: clamp(11px, 2.9vw, 13px); font-weight: 700;
                 white-space: nowrap; max-width: 100%; letter-spacing: -0.2px;
             }
-            .heat-grid .hc-pct { font-size: clamp(10px, 2.8vw, 12px); font-weight: 600; white-space: nowrap; }
-            .heat-grid .hc-ltp { font-size: clamp(9px, 2.4vw, 11px); font-weight: 500; opacity: 0.92; white-space: nowrap; }
+            .heat-grid .hc-pct { font-size: clamp(11px, 3.0vw, 13px); font-weight: 600; white-space: nowrap; }
+            .heat-grid .hc-ltp { font-size: clamp(10px, 2.6vw, 12px); font-weight: 500; opacity: 0.92; white-space: nowrap; }
             @media (max-width: 900px) { .heat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
             @media (max-width: 600px) { .heat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; } }
 
@@ -502,16 +493,16 @@ def apply_theme(theme: str):
             }
             .heat-grid .heat-cell {
                 width: auto !important; margin: 0 !important; padding: 8px 2px !important;
-                min-height: 70px; display: flex; flex-direction: column;
+                min-height: 74px; display: flex; flex-direction: column;
                 align-items: center; justify-content: center; gap: 2px;
                 box-sizing: border-box; overflow: hidden; line-height: 1.2;
             }
             .heat-grid .hc-sym {
-                font-size: clamp(9px, 2.6vw, 12px); font-weight: 700;
+                font-size: clamp(11px, 2.9vw, 13px); font-weight: 700;
                 white-space: nowrap; max-width: 100%; letter-spacing: -0.2px;
             }
-            .heat-grid .hc-pct { font-size: clamp(10px, 2.8vw, 12px); font-weight: 600; white-space: nowrap; }
-            .heat-grid .hc-ltp { font-size: clamp(9px, 2.4vw, 11px); font-weight: 500; opacity: 0.92; white-space: nowrap; }
+            .heat-grid .hc-pct { font-size: clamp(11px, 3.0vw, 13px); font-weight: 600; white-space: nowrap; }
+            .heat-grid .hc-ltp { font-size: clamp(10px, 2.6vw, 12px); font-weight: 500; opacity: 0.92; white-space: nowrap; }
             @media (max-width: 900px) { .heat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
             @media (max-width: 600px) { .heat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; } }
 
@@ -1719,424 +1710,6 @@ def scan_renko_universe(universe_tuple: tuple):
     return result_df
 
 
-
-def _extract_renko_conf_weights(sim: dict) -> dict:
-    """Map (Timeframe, Signal) -> Hit+2 % from primary sim window (7d → 15/30/60 fallback).
-    Used to nudge live Confidence % toward historically stronger setups.
-    """
-    if not sim or not sim.get("ok"):
-        return {}
-    periods = sim.get("periods") or {}
-    block = None
-    for d in (7, 15, 30, 60):
-        b = periods.get(d)
-        if b and b.get("total", 0) >= 8:
-            block = b
-            break
-    if not block:
-        return {}
-    tf_df = block.get("by_tf_sig")
-    if tf_df is None or tf_df.empty:
-        return {}
-    weights = {}
-    for _, r in tf_df.iterrows():
-        n = int(r.get("Signals") or 0)
-        if n < 3:
-            continue
-        tf = r.get("Timeframe")
-        sig = r.get("Signal")
-        hit2 = float(r.get("Hit +2 (%)") or 50)
-        weights[(str(tf), str(sig))] = hit2
-    return weights
-
-
-def _apply_sim_confidence(df: pd.DataFrame, weights: dict) -> pd.DataFrame:
-    """Blend base Confidence with sim Hit+2 rates. Neutral (50%) → no change.
-    + up to ~12 pts for historically strong TF+Signal; - up to ~12 for weak.
-    Requires n>=3 samples in weights (already filtered). Sort order unchanged.
-    """
-    if df is None or df.empty or not weights or "Confidence" not in df.columns:
-        return df
-    out = df.copy()
-    confs = []
-    for _, row in out.iterrows():
-        base = float(row.get("Confidence") or 55)
-        key = (str(row.get("Timeframe")), str(row.get("Signal")))
-        hit2 = weights.get(key)
-        if hit2 is None:
-            # fallback: same TF any signal average
-            tf_hits = [v for (t, s), v in weights.items() if t == key[0]]
-            hit2 = sum(tf_hits) / len(tf_hits) if tf_hits else None
-        if hit2 is None:
-            confs.append(int(base))
-            continue
-        # Map hit2 30→-12, 50→0, 70→+12 (clamp)
-        adj = max(-12, min(12, (hit2 - 50.0) * 0.6))
-        confs.append(int(max(25, min(95, round(base + adj)))))
-    out["Confidence"] = confs
-    return out
-
-
-# ---------- Renko Simulation Analytics (scanner-aligned entry/exit tracking) ----------
-def _renko_sim_age_days(ts) -> int:
-    """Safe calendar-day age of a brick/candle timestamp (handles tz-aware and naive)."""
-    try:
-        t = pd.Timestamp(ts)
-        if t.tzinfo is not None:
-            t = t.tz_convert("UTC").tz_localize(None)
-        now = pd.Timestamp.utcnow().tz_localize(None) if hasattr(pd.Timestamp, "utcnow") else pd.Timestamp.now(tz=None)
-        # pandas 2.x: Timestamp.now("UTC").tz_localize(None)
-        try:
-            now = pd.Timestamp.now(tz="UTC").tz_localize(None)
-        except Exception:
-            now = pd.Timestamp.now(tz=None)
-        return max(0, int((now - t).days))
-    except Exception:
-        return 999
-
-
-def _renko_sim_inline_atr(symbol: str, price_fallback: float) -> float:
-    """Daily ATR(14) mean of last 7 readings — no Streamlit cache, safe in worker threads."""
-    try:
-        t = yf.Ticker(f"{symbol}.NS")
-        d = t.history(period="3mo", interval="1d")
-        if d is None or d.empty or len(d) < 20:
-            return max(price_fallback * 0.005, 0.5)
-        high, low, close = d["High"], d["Low"], d["Close"]
-        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean().dropna().tail(7)
-        if atr.empty:
-            return max(price_fallback * 0.005, 0.5)
-        return float(atr.mean())
-    except Exception:
-        return max(price_fallback * 0.005, 0.5)
-
-
-# v7.5: runs ONCE per calendar day (IST). `day_key` (today's date string) is part of the cache key,
-# ttl=None means it never expires intraday, and no refresh button clears it. Tomorrow's new
-# day_key triggers a single fresh computation (first load of the day) and the old entry is dropped.
-@st.cache_data(ttl=None, show_spinner=False, max_entries=2)
-def run_renko_simulation(universe_tuple: tuple, primary_days: int = 7, day_key: str = ""):
-    """
-    Replay the *same* two-brick scanner rules on history.
-    For each signal:
-      Entry = close of 2nd brick (as live scanner)
-      Stop  = 2 bricks against the signal
-      Targets = +2 / +3 / +4 bricks
-    Outcome: Failed if stop hit before any target; else Qualified at highest target reached.
-    Aggregates for 7 / 15 / 30 / 60 day rolling windows. Primary review = 7 days.
-    Only COMPLETED sessions are tracked (signals formed before today 00:00 IST), so the
-    output is stable for the whole day and shows up to the previous day's signals.
-    """
-    lookbacks = [7, 15, 30, 60]
-    tfs = [
-        ("15 Minutes", "15m", 24.0, "5d"),   # yfinance 15m depth is limited
-        ("30 Minutes", "30m", 12.0, "1mo"),
-        ("1 Hour", "1h", 6.0, "1mo"),
-        ("Daily", "1d", 1.0, "4mo"),
-    ]
-    # Full universe can be slow; 35 is enough for stable rates
-    symbols = list(universe_tuple)[:35]
-    all_rows = []
-
-    # Start of today in IST, expressed as naive UTC (same basis as normalised bar dates)
-    try:
-        _today_start_ist = pd.Timestamp.now(tz="Asia/Kolkata").normalize()
-        cutoff_utc = _today_start_ist.tz_convert("UTC").tz_localize(None)
-    except Exception:
-        cutoff_utc = None
-
-    def _norm_date_series(s: pd.Series) -> pd.Series:
-        s = pd.to_datetime(s, errors="coerce", utc=True)
-        try:
-            return s.dt.tz_localize(None)
-        except Exception:
-            try:
-                return s.dt.tz_convert(None)
-            except Exception:
-                return pd.to_datetime(s, errors="coerce")
-
-    def _sim_one(symbol, tf_label, interval, box_div, period):
-        try:
-            t = yf.Ticker(f"{symbol}.NS")
-            df = t.history(period=period, interval=interval, auto_adjust=True)
-            if df is None or df.empty or len(df) < 25:
-                return []
-            df = df.dropna(subset=["Close"]).copy()
-            df = df.reset_index()
-            # Standardise timestamp column name
-            for cand in ("Datetime", "Date", "index"):
-                if cand in df.columns:
-                    if cand != "Date":
-                        df = df.rename(columns={cand: "Date"})
-                    break
-            if "Date" not in df.columns:
-                return []
-            df["Date"] = _norm_date_series(df["Date"])
-            df = df.dropna(subset=["Date", "Close"]).reset_index(drop=True)
-            if len(df) < 25:
-                return []
-
-            price0 = float(df["Close"].iloc[-1])
-            daily_atr = _renko_sim_inline_atr(symbol, price0)
-            box = float(daily_atr) / float(box_div)
-            if box <= 0 or not np.isfinite(box):
-                return []
-
-            df["EMA20"] = calculate_ema(df["Close"], 20)
-            df["EMA50"] = calculate_ema(df["Close"], 50)
-            bricks = generate_renko(df, box)
-            if bricks is None or bricks.empty or len(bricks) < 6:
-                return []
-
-            # Normalise brick dates too
-            bricks = bricks.copy()
-            bricks["Date"] = _norm_date_series(bricks["Date"])
-            closes = bricks["Close"].astype(float).values
-            opens = bricks["Open"].astype(float).values
-            dates = bricks["Date"].values
-            out = []
-
-            for i in range(1, len(bricks) - 4):
-                g1 = closes[i - 1] > opens[i - 1]
-                g2 = closes[i] > opens[i]
-                r1 = closes[i - 1] < opens[i - 1]
-                r2 = closes[i] < opens[i]
-                if not ((g1 and g2) or (r1 and r2)):
-                    continue
-                # v7.5: skip today's still-forming signals — only completed sessions are tracked
-                if cutoff_utc is not None:
-                    try:
-                        if pd.Timestamp(dates[i]) >= cutoff_utc:
-                            continue
-                    except Exception:
-                        pass
-                entry = float(closes[i])
-                # EMA context at signal time (naive-date compare)
-                try:
-                    ts = pd.Timestamp(dates[i])
-                    if ts.tzinfo is not None:
-                        ts = ts.tz_localize(None) if ts.tzinfo is None else ts.tz_convert("UTC").tz_localize(None)
-                    sub = df[df["Date"] <= ts]
-                    if sub.empty:
-                        # fallback: use last known EMA row
-                        sub = df.iloc[: max(1, min(i + 1, len(df)))]
-                    px = float(sub["Close"].iloc[-1])
-                    e20 = float(sub["EMA20"].iloc[-1])
-                    e50 = float(sub["EMA50"].iloc[-1]) if "EMA50" in sub.columns else e20
-                except Exception:
-                    px = entry
-                    e20 = entry
-                    e50 = entry
-
-                if g1 and g2:
-                    side = "BUY" if px > e20 else "BULLISH"
-                    direction = 1
-                else:
-                    side = "SELL" if px < e20 else "BEARISH"
-                    direction = -1
-
-                above20 = px > e20
-                above50 = px > e50
-                if above20 and above50:
-                    regime = "Above both EMA20+50"
-                elif (not above20) and (not above50):
-                    regime = "Below both EMA20+50"
-                elif above20:
-                    regime = "Above EMA20 only"
-                else:
-                    regime = "Below EMA20 only"
-
-                stop_hit = False
-                hit2 = hit3 = hit4 = False
-                for j in range(i + 1, min(i + 40, len(bricks))):
-                    move = (float(closes[j]) - entry) / box * direction
-                    if move <= -2.0:
-                        stop_hit = True
-                        break
-                    if move >= 2.0:
-                        hit2 = True
-                    if move >= 3.0:
-                        hit3 = True
-                    if move >= 4.0:
-                        hit4 = True
-                        break
-
-                if hit4:
-                    outcome = "Qualified +4"
-                elif hit3:
-                    outcome = "Qualified +3"
-                elif hit2:
-                    outcome = "Qualified +2"
-                elif stop_hit:
-                    outcome = "Failed (stop 2-brick)"
-                else:
-                    outcome = "Open / unresolved"
-
-                age_days = _renko_sim_age_days(dates[i])
-                out.append({
-                    "Stock": symbol,
-                    "Timeframe": tf_label,
-                    "Signal": side,
-                    "Regime": regime,
-                    "AgeDays": age_days,
-                    "Hit2": bool(hit2),
-                    "Hit3": bool(hit3),
-                    "Hit4": bool(hit4),
-                    "Stopped": bool(stop_hit and not hit2),
-                    "Outcome": outcome,
-                })
-            return out
-        except Exception:
-            return []
-
-    # Sequential is more reliable than threads with yfinance rate limits
-    for sym in symbols:
-        for tf_label, interval, box_div, period in tfs:
-            try:
-                rows = _sim_one(sym, tf_label, interval, box_div, period)
-                if rows:
-                    all_rows.extend(rows)
-            except Exception:
-                continue
-
-    if not all_rows:
-        return {
-            "ok": False,
-            "periods": {},
-            "analysis_30d": (
-                "No historical signals reconstructed yet. Common causes: Yahoo throttle, "
-                "weekend/holiday gap, or first-run miss. This view is built once per day — "
-                "it will retry automatically on the next app restart or the next day."
-            ),
-            "recommend": "",
-        }
-
-    rdf = pd.DataFrame(all_rows)
-    # Safety: if age failed for everything (999), treat as usable within 60d so tables still show
-    if (rdf["AgeDays"] >= 900).all():
-        rdf["AgeDays"] = 5  # fallback so primary 7d window still populates
-
-    periods = {}
-    for days in lookbacks:
-        sub = rdf[rdf["AgeDays"] <= days]
-        if sub.empty:
-            periods[days] = None
-            continue
-        rows = []
-        for tf in ["15 Minutes", "30 Minutes", "1 Hour", "Daily"]:
-            for sig in ["BUY", "BULLISH", "SELL", "BEARISH"]:
-                g = sub[(sub["Timeframe"] == tf) & (sub["Signal"] == sig)]
-                n = len(g)
-                if n == 0:
-                    continue
-                qual = int(g["Hit2"].sum())
-                failed = int(g["Stopped"].sum())
-                rows.append({
-                    "Timeframe": tf,
-                    "Signal": sig,
-                    "Signals": n,
-                    "Qualified (≥+2)": qual,
-                    "Failed (stop)": failed,
-                    "Hit +2 (%)": round(100.0 * float(g["Hit2"].mean()), 1),
-                    "Hit +3 (%)": round(100.0 * float(g["Hit3"].mean()), 1),
-                    "Hit +4 (%)": round(100.0 * float(g["Hit4"].mean()), 1),
-                    "Fail rate (%)": round(100.0 * float(g["Stopped"].mean()), 1),
-                })
-        reg_rows = []
-        for regime in ["Above both EMA20+50", "Above EMA20 only", "Below EMA20 only", "Below both EMA20+50"]:
-            g = sub[sub["Regime"] == regime]
-            n = len(g)
-            if n == 0:
-                continue
-            reg_rows.append({
-                "Regime": regime,
-                "Signals": n,
-                "Qualified (≥+2)": int(g["Hit2"].sum()),
-                "Failed (stop)": int(g["Stopped"].sum()),
-                "Hit +2 (%)": round(100.0 * float(g["Hit2"].mean()), 1),
-                "Hit +3 (%)": round(100.0 * float(g["Hit3"].mean()), 1),
-                "Fail rate (%)": round(100.0 * float(g["Stopped"].mean()), 1),
-            })
-        outcome_counts = sub["Outcome"].value_counts().to_dict()
-        periods[days] = {
-            "by_tf_sig": pd.DataFrame(rows) if rows else pd.DataFrame(),
-            "by_regime": pd.DataFrame(reg_rows) if reg_rows else pd.DataFrame(),
-            "total": int(len(sub)),
-            "qualified": int(sub["Hit2"].sum()),
-            "failed": int(sub["Stopped"].sum()),
-            "outcomes": outcome_counts,
-        }
-
-    # v7.5: primary review window = 7 days (fallback to 15 / 30 / 60 when 7d is empty)
-    p30 = periods.get(7)
-    if not p30 or p30["total"] == 0:
-        # Fall back to next-widest available window for analysis text
-        for d in (15, 30, 60):
-            if periods.get(d) and periods[d]["total"] > 0:
-                p30 = periods[d]
-                break
-    if not p30 or p30["total"] == 0:
-        analysis_30d = "Insufficient completed signals for a reliable review."
-        recommend = ""
-    else:
-        bt = p30["by_tf_sig"]
-        br = p30["by_regime"]
-        lines = [
-            f"Tracked sample: **{p30['total']}** signals · "
-            f"**{p30['qualified']}** qualified (≥ +2 bricks before stop) · "
-            f"**{p30['failed']}** failed (2-brick stop first)."
-        ]
-        tips = []
-        if bt is not None and not bt.empty:
-            viable = bt[bt["Signals"] >= 5].copy()
-            if not viable.empty:
-                best = viable.sort_values("Hit +2 (%)", ascending=False).iloc[0]
-                worst = viable.sort_values("Hit +2 (%)", ascending=True).iloc[0]
-                lines.append(
-                    f"Best setup (n≥5): **{best['Timeframe']} {best['Signal']}** — "
-                    f"Qualify {best['Hit +2 (%)']}% · Fail {best['Fail rate (%)']}% (n={int(best['Signals'])})."
-                )
-                lines.append(
-                    f"Weakest setup (n≥5): **{worst['Timeframe']} {worst['Signal']}** — "
-                    f"Qualify {worst['Hit +2 (%)']}% · Fail {worst['Fail rate (%)']}% (n={int(worst['Signals'])})."
-                )
-            m15 = bt[bt["Timeframe"] == "15 Minutes"]
-            if not m15.empty and float(m15["Fail rate (%)"].mean()) > 50:
-                tips.append("15m shows high early-stop rate — prefer 3 consecutive bricks or EMA50 alignment on 15m.")
-            h1 = bt[bt["Timeframe"] == "1 Hour"]
-            if not h1.empty and float(h1["Hit +2 (%)"].mean()) >= 50:
-                tips.append("1H remains the most stable TF in this window; keep it as primary.")
-            sell_like = bt[bt["Signal"].isin(["SELL", "BEARISH"])]
-            if not sell_like.empty and float(sell_like["Hit +2 (%)"].mean()) < 42 and int(sell_like["Signals"].sum()) >= 10:
-                tips.append("SELL/BEARISH qualify-rate is soft — require extra confirmation or tighter regime filter.")
-        if br is not None and not br.empty:
-            viable_r = br[br["Signals"] >= 8].copy()
-            if not viable_r.empty:
-                best_r = viable_r.sort_values("Hit +2 (%)", ascending=False).iloc[0]
-                lines.append(
-                    f"Best EMA regime: **{best_r['Regime']}** — Qualify {best_r['Hit +2 (%)']}% "
-                    f"(n={int(best_r['Signals'])})."
-                )
-                if "Above both" in str(best_r["Regime"]) and float(best_r["Hit +2 (%)"]) >= 55:
-                    tips.append("Prefer signals only when price is above both EMA20 and EMA50.")
-        if tips:
-            recommend = "**Logic-change prompt (from tracked outcomes):** " + " ".join(tips)
-        else:
-            recommend = (
-                "**Logic-change prompt (from tracked outcomes):** "
-                "No strong structural change indicated. Two-brick + EMA20 filter is acceptable; "
-                "re-check after the next ~30 sessions with this same outcome log."
-            )
-        analysis_30d = " ".join(lines)
-
-    return {
-        "ok": True,
-        "periods": periods,
-        "analysis_30d": analysis_30d,
-        "recommend": recommend,
-        "raw_count": len(rdf),
-    }
 
 
 @st.cache_data(ttl=60)
@@ -3385,7 +2958,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko/sim stay warm)\nUI v7.5 — snapshot light-green · Renko simulation: 7d primary, computed once per day")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.1 — snapshot light-green · heatmap softer colours + larger mobile text · simulation removed")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3421,8 +2994,7 @@ with col3:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("⚡ Fast Refresh", use_container_width=True):
         # Soft clear ONLY live quotes + selected stock snapshot (keeps universe / news /
-        # Renko / simulation / corporate warm → much faster than full reload)
-        # NOTE (v7.5): run_renko_simulation is intentionally NOT cleared — it runs once per day.
+        # Renko scan / corporate warm → much faster than full reload)
         for _fn in (
             fetch_yahoo_quote, fetch_index_quote, fetch_tradingview_quote,
             fetch_investing_quote, fetch_live_instrument, fetch_gift_nifty_50,
@@ -3997,10 +3569,6 @@ with scan_col2:
 with st.spinner("Scanning Renko bricks… first scan may take a little time."):
     signal_df = scan_renko_universe(tuple(universe))
 
-# Blend live Confidence with last simulation Hit+2 rates (learns as sim cache warms)
-if not signal_df.empty:
-    signal_df = _apply_sim_confidence(signal_df, st.session_state.get("renko_conf_weights") or {})
-
 if signal_df.empty:
     st.info("No stocks currently meet the two-consecutive-brick criteria, or intraday data is unavailable.")
 else:
@@ -4040,103 +3608,14 @@ else:
         "Price": "{:.2f}", "EMA 20": "{:.2f}", "Entry": "{:.2f}", "Exit": "{:.2f}", "Box Size": "{:.2f}", "Age Minutes": "{:.1f}"
     })
     st.dataframe(styled, use_container_width=True, hide_index=True)
-    st.caption("⚡ = Just entered (≤20 min) • Yellow = fresh • Confidence % = live (TF + age + EMA edge) blended with simulation Hit+2 rates for that TF×Signal when available (7-day window, updated once a day)")
+    st.caption("⚡ = Just entered (≤20 min) • Yellow = fresh • Confidence % = live (TF + age + EMA edge)")
     st.download_button("⬇️ Download signal list (CSV)",
                        data=signal_df.drop(columns=["Last Brick TS"], errors="ignore").to_csv(index=False).encode("utf-8"),
                        file_name="intraday_renko_signals.csv", mime="text/csv")
 
-# ---------- Renko Simulation Analytics (below scanner table) ----------
-st.markdown('<div class="section-header">📈 Renko Signal Simulation Analytics</div>', unsafe_allow_html=True)
-st.caption(
-    "Tracks every signal that the **same scanner rules** would have generated. "
-    "Entry = 2nd brick close · Stop = 2 bricks against · Targets = +2 / +3 / +4. "
-    "**Qualified** = reached ≥ +2 before stop · **Failed** = 2-brick stop first. "
-    "Rolling windows: 7d / 15d / 30d / 60d. Primary review = **7 days**. "
-    "**Built once per day (first load of the day) from completed sessions up to the previous day — "
-    "no refresh button re-runs it intraday; it rolls forward automatically the next day.**"
-)
-
-_sim_day_key = datetime.now(ist).strftime("%Y-%m-%d")
-with st.spinner("Building today's simulation (once per day, cached)…"):
-    sim = run_renko_simulation(tuple(universe), primary_days=7, day_key=_sim_day_key)
-
-# Persist TF×Signal hit rates so the next scanner pass can lift/lower Confidence
-try:
-    _w = _extract_renko_conf_weights(sim)
-    if _w:
-        st.session_state.renko_conf_weights = _w
-except Exception:
-    pass
-
-if not sim.get("ok"):
-    st.info(sim.get("analysis_30d", "Simulation temporarily unavailable."))
-else:
-    period_choice = st.radio(
-        "Tracked look-back (rolling days)",
-        ["7d (primary)", "15d", "30d", "60d"],
-        index=0,
-        horizontal=True,
-        key="renko_sim_period",
-    )
-    day_map = {"7d (primary)": 7, "15d": 15, "30d": 30, "60d": 60}
-    days = day_map[period_choice]
-    block = sim["periods"].get(days)
-    if not block or block.get("total", 0) == 0:
-        raw = sim.get("raw_count", 0)
-        if raw:
-            st.info(f"No signals fell inside the last {days} days (raw tracked={raw}). Try a wider look-back (15d / 30d / 60d).")
-        else:
-            st.info("No tracked signals available for today's build.")
-    else:
-        st.markdown(
-            f"**Tracked (last {days} days, through previous session):** {block['total']} signals · "
-            f"**Qualified (≥+2):** {block.get('qualified', 0)} · "
-            f"**Failed (stop first):** {block.get('failed', 0)}"
-        )
-        tf_df = block.get("by_tf_sig")
-        if tf_df is not None and not tf_df.empty:
-            fmt = {
-                "Hit +2 (%)": "{:.1f}",
-                "Hit +3 (%)": "{:.1f}",
-                "Hit +4 (%)": "{:.1f}",
-                "Fail rate (%)": "{:.1f}",
-            }
-            st.dataframe(tf_df.style.format(fmt), use_container_width=True, hide_index=True)
-        st.markdown("**EMA regime filter** (same tracked window)")
-        reg_df = block.get("by_regime")
-        if reg_df is not None and not reg_df.empty:
-            st.dataframe(
-                reg_df.style.format({
-                    "Hit +2 (%)": "{:.1f}",
-                    "Hit +3 (%)": "{:.1f}",
-                    "Fail rate (%)": "{:.1f}",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
-        # Outcome counts
-        oc = block.get("outcomes") or {}
-        if oc:
-            st.caption("Outcome log: " + " · ".join(f"{k}: {v}" for k, v in sorted(oc.items(), key=lambda x: -x[1])))
-
-    st.markdown("---")
-    st.markdown("#### 🔍 Analysis & recommendation (7-day tracked review)")
-    st.markdown(sim.get("analysis_30d", ""))
-    if sim.get("recommend"):
-        st.markdown(
-            f'<div class="analysis-box" style="border-left:4px solid #fbbf24;">{sim["recommend"]}</div>',
-            unsafe_allow_html=True,
-        )
-    st.caption(
-        "Outcomes are reconstructed from the same brick + EMA20 rules as the live scanner. "
-        "Use the 7-day fail/qualify rates (cross-check with 15d/30d) to tighten filters over time — not live trade advice."
-    )
 
 st.markdown("---")
 
-# -------------------------------------------------
-# Options
-# -------------------------------------------------
 st.markdown('<div class="section-header">⚡ Options Strike Matrix (ATM ±2)</div>', unsafe_allow_html=True)
 st.caption(f"Spot: **₹{metrics['ltp']:,.2f}** • Source: NSE Option Chain (nearest expiry) • Auto-refreshes every 30 seconds")
 
@@ -4236,19 +3715,19 @@ else:
         new_map[sym] = pct
         # colour scale (day % change)
         if pct >= 2:
-            bg = "#059669"
-        elif pct >= 1:
             bg = "#10b981"
-        elif pct >= 0.3:
+        elif pct >= 1:
             bg = "#34d399"
+        elif pct >= 0.3:
+            bg = "#6ee7b7"
         elif pct > -0.3:
-            bg = "#64748b"
+            bg = "#94a3b8"
         elif pct > -1:
-            bg = "#f87171"
+            bg = "#fca5a5"
         elif pct > -2:
-            bg = "#ef4444"
+            bg = "#f87171"
         else:
-            bg = "#b91c1c"
+            bg = "#ef4444"
         # Refresh-to-refresh direction arrow (intraday movement of the day-% figure)
         arrow = ""
         if sym in prev_map:
