@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.12)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.13)
 # v7.6.2:
 # 1) Corporate Actions & Upcoming Results: removed expander/duplication.
 #    Results shown as 10-day rolling date strip with symbols under each date (simple Q2-style heading).
@@ -3683,7 +3683,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.12 — natural strike order · ATM auto-scroll · caption above")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.13 — matched snapshot|options card heights · caption below")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3839,47 +3839,50 @@ with snap_col:
 with opt_col:
     _exp_lbl = _chain_full.get("expiry") or "—"
     _src_lbl = _chain_full.get("source") or ""
-    # Caption ABOVE the box (does not eat table height)
-    st.caption(
-        f"ATM ±6 · exp {_exp_lbl}"
-        + (f" · {_src_lbl}" if _src_lbl else "")
-        + (f" · Spot ₹{_spot_for_opt:,.2f}" if _spot_for_opt else "")
-        + (f" · Max pain {_chain_full.get('max_pain')}" if _chain_full.get("max_pain") else "")
-    )
     if _opt_matrix is None or _opt_matrix.empty:
         st.info("Option premiums temporarily unavailable.")
     else:
-        # Portal-style HTML table: ascending strikes, ATM highlighted + scrolled into view
+        # Matching Instant Snapshot card chrome + height (rectangle = rectangle)
+        # Outer card fixed height; table scrolls inside; ATM centered on open
         _rows_html = []
         for _, r in _opt_matrix.iterrows():
             is_atm = bool(r.get("_is_atm"))
             tr_id = ' id="atm-row"' if is_atm else ""
             tr_style = (
                 ' style="background:#c8e6c9;color:#1b5e20;font-weight:700;"'
-                if is_atm else ""
+                if is_atm else
+                ' style="background:transparent;"'
             )
             _rows_html.append(
                 f"<tr{tr_id}{tr_style}>"
-                f"<td style='text-align:right;padding:3px 6px;'>₹{float(r['Call Price (CE)']):,.2f}</td>"
-                f"<td style='text-align:center;padding:3px 6px;font-weight:600;'>₹{float(r['Strike Price']):,.0f}</td>"
-                f"<td style='text-align:right;padding:3px 6px;'>₹{float(r['Put Price (PE)']):,.2f}</td>"
+                f"<td style='text-align:right;padding:4px 8px;'>₹{float(r['Call Price (CE)']):,.2f}</td>"
+                f"<td style='text-align:center;padding:4px 8px;font-weight:600;'>₹{float(r['Strike Price']):,.0f}</td>"
+                f"<td style='text-align:right;padding:4px 8px;'>₹{float(r['Put Price (PE)']):,.2f}</td>"
                 f"</tr>"
             )
+        # height 148px scroll body ≈ same visual mass as Instant Snapshot card
         _table_html = f"""
-<div style="height:210px;overflow-y:auto;border:1px solid #d3e9d8;border-radius:10px;
-            background:#f8faf9;font-family:Inter,system-ui,sans-serif;font-size:11px;">
-  <table style="width:100%;border-collapse:collapse;color:#26332b;">
-    <thead style="position:sticky;top:0;background:#eaf6ed;z-index:1;">
-      <tr>
-        <th style="text-align:right;padding:5px 6px;font-size:10px;font-weight:600;border-bottom:1px solid #d3e9d8;">Call (CE)</th>
-        <th style="text-align:center;padding:5px 6px;font-size:10px;font-weight:600;border-bottom:1px solid #d3e9d8;">Strike</th>
-        <th style="text-align:right;padding:5px 6px;font-size:10px;font-weight:600;border-bottom:1px solid #d3e9d8;">Put (PE)</th>
-      </tr>
-    </thead>
-    <tbody>
-      {''.join(_rows_html)}
-    </tbody>
-  </table>
+<div style="height:172px;box-sizing:border-box;overflow:hidden;
+            border:1px solid #d3e9d8;border-radius:12px;background:#eaf6ed;
+            font-family:Inter,system-ui,sans-serif;font-size:11px;color:#26332b;
+            display:flex;flex-direction:column;">
+  <div style="flex:1 1 auto;overflow-y:auto;overflow-x:hidden;border-radius:12px;">
+    <table style="width:100%;border-collapse:collapse;">
+      <thead style="position:sticky;top:0;background:#eaf6ed;z-index:1;">
+        <tr>
+          <th style="text-align:right;padding:6px 8px;font-size:10px;font-weight:600;
+                     color:#386b49;border-bottom:1px solid #d3e9d8;background:#eaf6ed;">Call (CE)</th>
+          <th style="text-align:center;padding:6px 8px;font-size:10px;font-weight:600;
+                     color:#386b49;border-bottom:1px solid #d3e9d8;background:#eaf6ed;">Strike</th>
+          <th style="text-align:right;padding:6px 8px;font-size:10px;font-weight:600;
+                     color:#386b49;border-bottom:1px solid #d3e9d8;background:#eaf6ed;">Put (PE)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {''.join(_rows_html)}
+      </tbody>
+    </table>
+  </div>
 </div>
 <script>
   (function() {{
@@ -3888,7 +3891,15 @@ with opt_col:
   }})();
 </script>
 """
-        components.html(_table_html, height=220, scrolling=False)
+        # component height = card only (no extra chrome gap)
+        components.html(_table_html, height=176, scrolling=False)
+    # Caption BELOW the rectangle so both cards top-align
+    st.caption(
+        f"ATM ±6 · exp {_exp_lbl}"
+        + (f" · {_src_lbl}" if _src_lbl else "")
+        + (f" · Spot ₹{_spot_for_opt:,.2f}" if _spot_for_opt else "")
+        + (f" · Max pain {_chain_full.get('max_pain')}" if _chain_full.get("max_pain") else "")
+    )
 
 # ---- OI Chart (current-month full chain) ----
 _oi_rows = _chain_full.get("rows") or []
