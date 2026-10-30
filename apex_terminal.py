@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.10)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.11)
 # v7.6.2:
 # 1) Corporate Actions & Upcoming Results: removed expander/duplication.
 #    Results shown as 10-day rolling date strip with symbols under each date (simple Q2-style heading).
@@ -2054,7 +2054,7 @@ def fetch_option_chain_full(symbol: str, ltp: float = 0.0):
 
 @st.cache_data(ttl=45, show_spinner=False)
 def get_options_chain(ltp: float, symbol: str):
-    """ATM ±6 premium matrix for the side panel table."""
+    """ATM ±6 premium matrix. ATM is always the first row (window start), then higher strikes, then lower."""
     full = fetch_option_chain_full(symbol, ltp)
     rows = full.get("rows") or []
     if not rows:
@@ -2065,9 +2065,12 @@ def get_options_chain(ltp: float, symbol: str):
     strikes = [r["strike"] for r in rows]
     atm = min(strikes, key=lambda x: abs(x - und))
     atm_idx = strikes.index(atm)
-    selected = rows[max(0, atm_idx - 6): atm_idx + 7]
+    # Window opens at ATM: ATM, then above (higher), then below (lower) for scroll
+    above = rows[atm_idx + 1: atm_idx + 7]          # up to +6
+    below = list(reversed(rows[max(0, atm_idx - 6): atm_idx]))  # up to -6
+    ordered = [rows[atm_idx]] + above + below
     out = []
-    for r in selected:
+    for r in ordered:
         out.append({
             "Call Price (CE)": round(float(r.get("ce") or 0), 2),
             "Strike Price": r["strike"],
@@ -3681,7 +3684,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.10 — options compact+caption · ATM/MaxPain values on OI")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.11 — options no green bar · ATM first row · smaller font")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3837,40 +3840,34 @@ with snap_col:
 with opt_col:
     _exp_lbl = _chain_full.get("expiry") or "—"
     _src_lbl = _chain_full.get("source") or ""
-    # Same outer card as Instant Snapshot; no top header inside the box
-    st.markdown(
-        '<div class="analysis-box panel-card snapshot-box" style="margin-top:4px; padding-top:8px; padding-bottom:6px;">',
-        unsafe_allow_html=True,
-    )
+    # No outer green card / header bar — plain table only (Streamlit cannot nest dataframe in HTML)
     if _opt_matrix is None or _opt_matrix.empty:
         st.info("Option premiums temporarily unavailable.")
     else:
         def _hl_atm(row):
-            mid = len(_opt_matrix) // 2
-            if row.name == mid:
-                return ["background-color: #c8e6c9; color: #1b5e20; font-weight: 700; font-size: 11px"] * len(row)
-            return ["font-size: 11px"] * len(row)
-        # Fixed short height to match Instant Snapshot; ATM row pre-scrolled to center via mid highlight
+            # Row 0 is always ATM (ordered that way in get_options_chain)
+            if row.name == 0:
+                return ["background-color: #c8e6c9; color: #1b5e20; font-weight: 700; font-size: 10px"] * len(row)
+            return ["font-size: 10px"] * len(row)
         st.dataframe(
             _opt_matrix.style.format({
                 "Call Price (CE)": "₹{:,.2f}",
                 "Strike Price": "₹{:,.0f}",
                 "Put Price (PE)": "₹{:,.2f}",
             }).apply(_hl_atm, axis=1).set_table_styles([
-                {"selector": "th", "props": [("font-size", "11px"), ("padding", "2px 4px")]},
-                {"selector": "td", "props": [("font-size", "11px"), ("padding", "2px 4px")]},
+                {"selector": "th", "props": [("font-size", "10px"), ("padding", "1px 3px"), ("font-weight", "600")]},
+                {"selector": "td", "props": [("font-size", "10px"), ("padding", "1px 3px")]},
             ]),
             use_container_width=True,
             hide_index=True,
-            height=168,
+            height=160,
         )
-    st.markdown("</div>", unsafe_allow_html=True)
-    # Small line under the box (replaces top header)
     st.caption(
         f"ATM ±6 · exp {_exp_lbl}"
         + (f" · {_src_lbl}" if _src_lbl else "")
         + (f" · Spot ₹{_spot_for_opt:,.2f}" if _spot_for_opt else "")
         + (f" · Max pain {_chain_full.get('max_pain')}" if _chain_full.get("max_pain") else "")
+        + " · ATM is first row — scroll for more"
     )
 
 # ---- OI Chart (current-month full chain) ----
