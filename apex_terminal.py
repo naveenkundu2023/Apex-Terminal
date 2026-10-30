@@ -2154,15 +2154,34 @@ def get_stock_summary_analytics(symbol: str):
         pct = (change / prev_close) * 100 if prev_close else 0
         bias = "BULLISH" if current > vwap_5d and current > avg_5d else "BEARISH" if current < vwap_5d and current < avg_5d else "NEUTRAL"
         # Compact last-5 daily bars for snapshot UI (green up / red down / grey flat)
+        # Skip non-finite closes so NaNs never reach the snapshot bar renderer.
         bars = []
-        closes = last5["Close"].tolist()
+        closes_raw = last5["Close"].tolist()
         dates = [pd.Timestamp(d).strftime("%d %b") for d in last5.index]
-        for i, c in enumerate(closes):
-            prev_c = closes[i - 1] if i > 0 else (float(hist["Close"].iloc[-6]) if len(hist) >= 6 else c)
-            dlt = c - prev_c
-            p = (dlt / prev_c * 100) if prev_c else 0
-            color = "green" if p > 0.15 else ("red" if p < -0.15 else "grey")
-            bars.append({"date": dates[i], "close": round(float(c), 2), "pct": round(float(p), 2), "color": color})
+        for i, c in enumerate(closes_raw):
+            try:
+                c_f = float(c)
+                if not np.isfinite(c_f):
+                    continue
+                if i > 0:
+                    prev_c = float(closes_raw[i - 1])
+                else:
+                    prev_c = float(hist["Close"].iloc[-6]) if len(hist) >= 6 else c_f
+                if not np.isfinite(prev_c) or prev_c == 0:
+                    prev_c = c_f
+                dlt = c_f - prev_c
+                p = (dlt / prev_c * 100) if prev_c else 0.0
+                if not np.isfinite(p):
+                    p = 0.0
+                color = "green" if p > 0.15 else ("red" if p < -0.15 else "grey")
+                bars.append({
+                    "date": dates[i],
+                    "close": round(c_f, 2),
+                    "pct": round(float(p), 2),
+                    "color": color,
+                })
+            except (TypeError, ValueError, IndexError):
+                continue
         return {
             "current": round(current, 2),
             "prev_close": round(prev_close, 2),
@@ -3030,23 +3049,52 @@ if summary:
     bars = summary.get("last5_bars") or []
     bar_html = ""
     if bars:
-        # Scale bar height by relative close range within the 5 days
-        closes = [float(b["close"]) for b in bars]
-        lo, hi = min(closes), max(closes)
-        span = (hi - lo) or 1.0
+        # Scale bar height by relative close range within the 5 days.
+        # Guard against NaN / Inf / zero-span (yfinance missing bars → ValueError on int(nan)).
+        closes = []
+        for b in bars:
+            try:
+                c = float(b.get("close"))
+                if np.isfinite(c):
+                    closes.append(c)
+            except (TypeError, ValueError):
+                continue
+        if closes:
+            lo, hi = min(closes), max(closes)
+            span = hi - lo
+            if not np.isfinite(span) or span <= 0:
+                span = 1.0
+        else:
+            lo, span = 0.0, 1.0
         cells = []
         for b in bars:
-            bg = "#059669" if b["color"] == "green" else ("#dc2626" if b["color"] == "red" else "#64748b")
-            h = 10 + int(22 * (float(b["close"]) - lo) / span)  # 10–32px vertical
+            bg = "#059669" if b.get("color") == "green" else ("#dc2626" if b.get("color") == "red" else "#64748b")
+            try:
+                c = float(b.get("close", 0))
+                if not np.isfinite(c):
+                    h = 16
+                else:
+                    h = 10 + int(22 * max(0.0, min(1.0, (c - lo) / span)))
+            except (TypeError, ValueError, OverflowError):
+                h = 16
             # Readable price under bar (slightly larger for eyes)
-            price_txt = f'{b["close"]:,.0f}' if b["close"] >= 100 else f'{b["close"]:.1f}'
+            try:
+                close_val = float(b.get("close", 0))
+                price_txt = f'{close_val:,.0f}' if close_val >= 100 else f'{close_val:.1f}'
+            except (TypeError, ValueError):
+                price_txt = "—"
+            try:
+                pct_val = float(b.get("pct", 0))
+                pct_txt = f"{pct_val:+.1f}%"
+            except (TypeError, ValueError):
+                pct_txt = "—"
             cells.append(
                 f'<div style="display:inline-block;width:48px;margin-right:4px;text-align:center;vertical-align:bottom;">'
                 f'<div style="height:36px;display:flex;align-items:flex-end;justify-content:center;">'
                 f'<div style="width:14px;height:{h}px;background:{bg};border-radius:2px;"></div></div>'
-                f'<div style="font-size:10px;color:#52615a;line-height:1.15;margin-top:3px;">{b["date"]}</div>'
+                f'<div style="font-size:10px;color:#52615a;line-height:1.15;margin-top:3px;">{b.get("date", "")}</div>'
                 f'<div style="font-size:10px;font-weight:700;color:#26332b;line-height:1.15;">{price_txt}</div>'
-                f'<div style="font-size:10px;font-weight:600;color:#3b4a42;line-height:1.15;">{b["pct"]:+.1f}%</div></div>'
+                f'<div style="font-size:10px;font-weight:600;color:#3b4a42;line-height:1.15;">{pct_txt}</div></div>'
             )
         bar_html = (
             '<div style="margin-top:8px;display:flex;align-items:flex-end;gap:2px;">'
