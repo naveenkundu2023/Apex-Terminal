@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.13)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.14)
 # v7.6.2:
 # 1) Corporate Actions & Upcoming Results: removed expander/duplication.
 #    Results shown as 10-day rolling date strip with symbols under each date (simple Q2-style heading).
@@ -3683,7 +3683,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.13 — matched snapshot|options card heights · caption below")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.14 — options card = snapshot height · tiny caption above outside")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3752,6 +3752,11 @@ _opt_matrix = get_options_chain(_spot_for_opt, selected)
 snap_col, opt_col = st.columns(2)
 
 with snap_col:
+    # Spacer matches the tiny options meta line height so both green cards top-align
+    st.markdown(
+        "<div style='font-size:10px;line-height:1.2;margin:0 0 4px 0;padding:0;visibility:hidden;'>.</div>",
+        unsafe_allow_html=True,
+    )
     if summary:
         bias_color = "#1f8a4c" if summary["bias"] == "BULLISH" else "#c0392b" if summary["bias"] == "BEARISH" else "#b7791f"
         chg_color = "#1f8a4c" if summary["change"] >= 0 else "#c0392b"
@@ -3839,11 +3844,19 @@ with snap_col:
 with opt_col:
     _exp_lbl = _chain_full.get("expiry") or "—"
     _src_lbl = _chain_full.get("source") or ""
+    # Tiny meta line ABOVE the options card (outside the box — does not affect card height)
+    st.markdown(
+        f"<div style='font-size:10px;line-height:1.2;color:#94a3b8;margin:0 0 4px 2px;padding:0;'>"
+        f"ATM ±6 · exp {_exp_lbl}"
+        + (f" · {_src_lbl}" if _src_lbl else "")
+        + (f" · Spot ₹{_spot_for_opt:,.2f}" if _spot_for_opt else "")
+        + (f" · Max pain {_chain_full.get('max_pain')}" if _chain_full.get("max_pain") else "")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
     if _opt_matrix is None or _opt_matrix.empty:
         st.info("Option premiums temporarily unavailable.")
     else:
-        # Matching Instant Snapshot card chrome + height (rectangle = rectangle)
-        # Outer card fixed height; table scrolls inside; ATM centered on open
         _rows_html = []
         for _, r in _opt_matrix.iterrows():
             is_atm = bool(r.get("_is_atm"))
@@ -3860,9 +3873,9 @@ with opt_col:
                 f"<td style='text-align:right;padding:4px 8px;'>₹{float(r['Put Price (PE)']):,.2f}</td>"
                 f"</tr>"
             )
-        # height 148px scroll body ≈ same visual mass as Instant Snapshot card
+        # Card height matched to Instant Snapshot (title + metrics + 5D bars ≈ 220px)
         _table_html = f"""
-<div style="height:172px;box-sizing:border-box;overflow:hidden;
+<div style="height:220px;box-sizing:border-box;overflow:hidden;
             border:1px solid #d3e9d8;border-radius:12px;background:#eaf6ed;
             font-family:Inter,system-ui,sans-serif;font-size:11px;color:#26332b;
             display:flex;flex-direction:column;">
@@ -3891,15 +3904,8 @@ with opt_col:
   }})();
 </script>
 """
-        # component height = card only (no extra chrome gap)
-        components.html(_table_html, height=176, scrolling=False)
-    # Caption BELOW the rectangle so both cards top-align
-    st.caption(
-        f"ATM ±6 · exp {_exp_lbl}"
-        + (f" · {_src_lbl}" if _src_lbl else "")
-        + (f" · Spot ₹{_spot_for_opt:,.2f}" if _spot_for_opt else "")
-        + (f" · Max pain {_chain_full.get('max_pain')}" if _chain_full.get("max_pain") else "")
-    )
+        # iframe height = card only (caption is outside, above)
+        components.html(_table_html, height=224, scrolling=False)
 
 # ---- OI Chart (current-month full chain) ----
 _oi_rows = _chain_full.get("rows") or []
