@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.11)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.12)
 # v7.6.2:
 # 1) Corporate Actions & Upcoming Results: removed expander/duplication.
 #    Results shown as 10-day rolling date strip with symbols under each date (simple Q2-style heading).
@@ -21,6 +21,7 @@
 # v7.1–v7.3 core retained: signal rules, box ladder, built-up.
 
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -2054,7 +2055,7 @@ def fetch_option_chain_full(symbol: str, ltp: float = 0.0):
 
 @st.cache_data(ttl=45, show_spinner=False)
 def get_options_chain(ltp: float, symbol: str):
-    """ATM ±6 premium matrix. ATM is always the first row (window start), then higher strikes, then lower."""
+    """ATM ±6 premium matrix in natural ascending strike order (portal-style)."""
     full = fetch_option_chain_full(symbol, ltp)
     rows = full.get("rows") or []
     if not rows:
@@ -2065,16 +2066,14 @@ def get_options_chain(ltp: float, symbol: str):
     strikes = [r["strike"] for r in rows]
     atm = min(strikes, key=lambda x: abs(x - und))
     atm_idx = strikes.index(atm)
-    # Window opens at ATM: ATM, then above (higher), then below (lower) for scroll
-    above = rows[atm_idx + 1: atm_idx + 7]          # up to +6
-    below = list(reversed(rows[max(0, atm_idx - 6): atm_idx]))  # up to -6
-    ordered = [rows[atm_idx]] + above + below
+    selected = rows[max(0, atm_idx - 6): atm_idx + 7]  # ascending: low → high
     out = []
-    for r in ordered:
+    for r in selected:
         out.append({
             "Call Price (CE)": round(float(r.get("ce") or 0), 2),
             "Strike Price": r["strike"],
             "Put Price (PE)": round(float(r.get("pe") or 0), 2),
+            "_is_atm": abs(float(r["strike"]) - float(atm)) < 1e-6,
         })
     return pd.DataFrame(out)
 
@@ -3684,7 +3683,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.11 — options no green bar · ATM first row · smaller font")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.12 — natural strike order · ATM auto-scroll · caption above")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3840,35 +3839,56 @@ with snap_col:
 with opt_col:
     _exp_lbl = _chain_full.get("expiry") or "—"
     _src_lbl = _chain_full.get("source") or ""
-    # No outer green card / header bar — plain table only (Streamlit cannot nest dataframe in HTML)
-    if _opt_matrix is None or _opt_matrix.empty:
-        st.info("Option premiums temporarily unavailable.")
-    else:
-        def _hl_atm(row):
-            # Row 0 is always ATM (ordered that way in get_options_chain)
-            if row.name == 0:
-                return ["background-color: #c8e6c9; color: #1b5e20; font-weight: 700; font-size: 10px"] * len(row)
-            return ["font-size: 10px"] * len(row)
-        st.dataframe(
-            _opt_matrix.style.format({
-                "Call Price (CE)": "₹{:,.2f}",
-                "Strike Price": "₹{:,.0f}",
-                "Put Price (PE)": "₹{:,.2f}",
-            }).apply(_hl_atm, axis=1).set_table_styles([
-                {"selector": "th", "props": [("font-size", "10px"), ("padding", "1px 3px"), ("font-weight", "600")]},
-                {"selector": "td", "props": [("font-size", "10px"), ("padding", "1px 3px")]},
-            ]),
-            use_container_width=True,
-            hide_index=True,
-            height=160,
-        )
+    # Caption ABOVE the box (does not eat table height)
     st.caption(
         f"ATM ±6 · exp {_exp_lbl}"
         + (f" · {_src_lbl}" if _src_lbl else "")
         + (f" · Spot ₹{_spot_for_opt:,.2f}" if _spot_for_opt else "")
         + (f" · Max pain {_chain_full.get('max_pain')}" if _chain_full.get("max_pain") else "")
-        + " · ATM is first row — scroll for more"
     )
+    if _opt_matrix is None or _opt_matrix.empty:
+        st.info("Option premiums temporarily unavailable.")
+    else:
+        # Portal-style HTML table: ascending strikes, ATM highlighted + scrolled into view
+        _rows_html = []
+        for _, r in _opt_matrix.iterrows():
+            is_atm = bool(r.get("_is_atm"))
+            tr_id = ' id="atm-row"' if is_atm else ""
+            tr_style = (
+                ' style="background:#c8e6c9;color:#1b5e20;font-weight:700;"'
+                if is_atm else ""
+            )
+            _rows_html.append(
+                f"<tr{tr_id}{tr_style}>"
+                f"<td style='text-align:right;padding:3px 6px;'>₹{float(r['Call Price (CE)']):,.2f}</td>"
+                f"<td style='text-align:center;padding:3px 6px;font-weight:600;'>₹{float(r['Strike Price']):,.0f}</td>"
+                f"<td style='text-align:right;padding:3px 6px;'>₹{float(r['Put Price (PE)']):,.2f}</td>"
+                f"</tr>"
+            )
+        _table_html = f"""
+<div style="height:210px;overflow-y:auto;border:1px solid #d3e9d8;border-radius:10px;
+            background:#f8faf9;font-family:Inter,system-ui,sans-serif;font-size:11px;">
+  <table style="width:100%;border-collapse:collapse;color:#26332b;">
+    <thead style="position:sticky;top:0;background:#eaf6ed;z-index:1;">
+      <tr>
+        <th style="text-align:right;padding:5px 6px;font-size:10px;font-weight:600;border-bottom:1px solid #d3e9d8;">Call (CE)</th>
+        <th style="text-align:center;padding:5px 6px;font-size:10px;font-weight:600;border-bottom:1px solid #d3e9d8;">Strike</th>
+        <th style="text-align:right;padding:5px 6px;font-size:10px;font-weight:600;border-bottom:1px solid #d3e9d8;">Put (PE)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {''.join(_rows_html)}
+    </tbody>
+  </table>
+</div>
+<script>
+  (function() {{
+    var el = document.getElementById('atm-row');
+    if (el) {{ el.scrollIntoView({{block: 'center', behavior: 'instant'}}); }}
+  }})();
+</script>
+"""
+        components.html(_table_html, height=220, scrolling=False)
 
 # ---- OI Chart (current-month full chain) ----
 _oi_rows = _chain_full.get("rows") or []
