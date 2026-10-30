@@ -1,4 +1,10 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-28 (v7.6.1)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.2)
+# v7.6.2:
+# 1) Corporate Actions & Upcoming Results: removed expander/duplication.
+#    Results shown as 10-day rolling date strip with symbols under each date (simple Q2-style heading).
+#    Corporate actions stay as compact list (no dropdown).
+# 2) Market Indices cards: CSS responsive grid (6 / 3 / 2 cols) so mobile shows 2 cards per row;
+#    long names truncated with ellipsis — no ugly wrap.
 # v7.6.1:
 # 1) REMOVED: Renko Signal Simulation Analytics block (and related helpers / confidence blend) — was slowing the app.
 # 2) Nifty 50 Heatmap: softer, lighter green/red shades (less eye strain) + slightly larger mobile text (still no-wrap).
@@ -305,6 +311,70 @@ def apply_theme(theme: str):
             @media (max-width: 900px) { .heat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
             @media (max-width: 600px) { .heat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; } }
 
+            /* === v7.6.2: Index cards responsive grid (6 / 3 / 2) — mobile 2-per-row === */
+            .index-grid {
+                display: grid;
+                grid-template-columns: repeat(6, minmax(0, 1fr));
+                gap: 8px;
+                width: 100%;
+            }
+            .index-grid .metric-card {
+                min-height: 72px !important;
+                padding: 6px 4px !important;
+                overflow: hidden;
+            }
+            .index-grid .index-title {
+                font-size: 9px !important;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                max-width: 100%;
+                display: block;
+            }
+            .index-grid .index-price { font-size: 13px !important; }
+            .index-grid .index-change { font-size: 10px !important; }
+            @media (max-width: 1100px) {
+                .index-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+                .index-grid .index-title { font-size: 10px !important; }
+                .index-grid .index-price { font-size: 14px !important; }
+            }
+            @media (max-width: 600px) {
+                .index-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+                .index-grid .metric-card { min-height: 68px !important; padding: 6px 3px !important; }
+                .index-grid .index-title { font-size: 9px !important; }
+                .index-grid .index-price { font-size: 13px !important; }
+                .index-grid .index-change { font-size: 10px !important; }
+            }
+
+            /* Results date-strip */
+            .res-date-strip {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+                gap: 6px;
+                width: 100%;
+            }
+            .res-day {
+                background: rgba(30,41,59,0.75);
+                border: 1px solid rgba(99,102,241,0.28);
+                border-radius: 8px;
+                padding: 6px 4px;
+                text-align: center;
+                min-height: 64px;
+            }
+            .res-day .rd-date {
+                font-size: 11px; font-weight: 700; color: #c7d2fe;
+                margin-bottom: 4px; white-space: nowrap;
+            }
+            .res-day .rd-syms {
+                font-size: 10px; font-weight: 600; color: #e2e8f0;
+                line-height: 1.25; word-break: break-word;
+            }
+            .res-day.empty .rd-syms { color: #64748b; font-weight: 500; }
+            @media (max-width: 600px) {
+                .res-date-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+                .res-day { min-height: 58px; padding: 5px 3px; }
+            }
+
         </style>
         """, unsafe_allow_html=True)
     else:
@@ -506,6 +576,71 @@ def apply_theme(theme: str):
             .heat-grid .hc-ltp { font-size: clamp(10px, 2.6vw, 12px); font-weight: 500; opacity: 0.92; white-space: nowrap; }
             @media (max-width: 900px) { .heat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
             @media (max-width: 600px) { .heat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; } }
+
+            /* === v7.6.2: Index cards responsive grid (6 / 3 / 2) — mobile 2-per-row === */
+            .index-grid {
+                display: grid;
+                grid-template-columns: repeat(6, minmax(0, 1fr));
+                gap: 8px;
+                width: 100%;
+            }
+            .index-grid .metric-card {
+                min-height: 72px !important;
+                padding: 6px 4px !important;
+                overflow: hidden;
+            }
+            .index-grid .index-title {
+                font-size: 9px !important;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                max-width: 100%;
+                display: block;
+            }
+            .index-grid .index-price { font-size: 13px !important; }
+            .index-grid .index-change { font-size: 10px !important; }
+            @media (max-width: 1100px) {
+                .index-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+                .index-grid .index-title { font-size: 10px !important; }
+                .index-grid .index-price { font-size: 14px !important; }
+            }
+            @media (max-width: 600px) {
+                .index-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+                .index-grid .metric-card { min-height: 68px !important; padding: 6px 3px !important; }
+                .index-grid .index-title { font-size: 9px !important; }
+                .index-grid .index-price { font-size: 13px !important; }
+                .index-grid .index-change { font-size: 10px !important; }
+            }
+
+            /* Results date-strip (light) */
+            .res-date-strip {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+                gap: 6px;
+                width: 100%;
+            }
+            .res-day {
+                background: #ffffff;
+                border: 1px solid #c7d2fe;
+                border-radius: 8px;
+                padding: 6px 4px;
+                text-align: center;
+                min-height: 64px;
+                box-shadow: 0 1px 4px rgba(99,102,241,0.06);
+            }
+            .res-day .rd-date {
+                font-size: 11px; font-weight: 700; color: #4338ca;
+                margin-bottom: 4px; white-space: nowrap;
+            }
+            .res-day .rd-syms {
+                font-size: 10px; font-weight: 600; color: #0f172a;
+                line-height: 1.25; word-break: break-word;
+            }
+            .res-day.empty .rd-syms { color: #94a3b8; font-weight: 500; }
+            @media (max-width: 600px) {
+                .res-date-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+                .res-day { min-height: 58px; padding: 5px 3px; }
+            }
 
         </style>
         """, unsafe_allow_html=True)
@@ -3299,7 +3434,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.1 — snapshot light-green · heatmap softer colours + larger mobile text · simulation removed")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.2 — results date-strip · index grid 2-col mobile · snapshot light-green · heatmap softer")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3518,55 +3653,55 @@ with ThreadPoolExecutor(max_workers=12) as _pool:
     for _name, _data in _pool.map(_fetch_instrument_card, items):
         _instrument_data[_name] = _data
 
-for i in range(0, len(items), 6):
-    row_items = items[i:i + 6]
-    cols = st.columns(6)
-    for j, (name, meta) in enumerate(row_items):
-        mode, key, tv_symbols, inv_key, yahoo_tk = meta  # needed for price formatting
-        data = _instrument_data.get(name)
-
-        with cols[j]:
-            if data:
-                sign = "+" if data["change"] >= 0 else ""
-                color = "pos" if data["change"] >= 0 else "neg"
-                card_cls = "metric-card metric-card-up" if data["change"] >= 0 else "metric-card metric-card-down"
-                if name in yield_keys:
-                    price_str = f"{data['price']:.2f}%"
-                    change_str = f"{sign}{data['change']:.2f}"
-                else:
-                    if (mode in ("cash", "gift", "midselect")) and name not in vix_keys:
-                        price_str = f"₹{data['price']:,.2f}"
-                    else:
-                        price_str = f"{data['price']:,.2f}"
-                    change_str = f"{sign}{data['change']:.2f}"
-                # Source prefix + IST refresh / source timestamp (same 7px style as GIFT Nifty)
-                # GIFT already builds "M 21 Oct 2026, 11:54:00 IST"; other sources store short + ts separately.
-                short = data.get("source_short") or _source_short(data.get("source", ""))
-                existing = (data.get("source_time_label") or "").strip()
-                if existing and short and existing.upper().startswith(short.upper() + " "):
-                    time_label = existing  # already "M 21 Oct ..."
-                else:
-                    ts = existing or data.get("fetched_at") or _ist_now_label()
-                    time_label = f"{short} {ts}" if short else ts
-                time_html = (
-                    f'<div style="font-size:7px;color:#8a8a8a;text-align:center;'
-                    f'margin-top:2px;line-height:1.1;">{time_label}</div>'
-                )
-                st.markdown(f"""
-                <div class="{card_cls}">
-                    <div class="index-title">{name}</div>
-                    <div class="index-price">{price_str}</div>
-                    <div class="index-change {color}">{change_str} ({sign}{data['pct']:.2f}%)</div>
-                    {time_html}
-                </div>
-                """, unsafe_allow_html=True)
+# v7.6.2: single responsive CSS grid (6 desktop / 3 tablet / 2 mobile) instead of st.columns(6)
+_cards_html = ['<div class="index-grid">']
+for name, meta in items:
+    mode, key, tv_symbols, inv_key, yahoo_tk = meta
+    data = _instrument_data.get(name)
+    if data:
+        sign = "+" if data["change"] >= 0 else ""
+        color = "pos" if data["change"] >= 0 else "neg"
+        card_cls = "metric-card metric-card-up" if data["change"] >= 0 else "metric-card metric-card-down"
+        if name in yield_keys:
+            price_str = f"{data['price']:.2f}%"
+            change_str = f"{sign}{data['change']:.2f}"
+        else:
+            if (mode in ("cash", "gift", "midselect")) and name not in vix_keys:
+                price_str = f"₹{data['price']:,.2f}"
             else:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="index-title">{name}</div>
-                    <div class="index-price" style="font-size:12px; color:#94a3b8; padding-top:8px;">Unavailable</div>
-                </div>
-                """, unsafe_allow_html=True)
+                price_str = f"{data['price']:,.2f}"
+            change_str = f"{sign}{data['change']:.2f}"
+        short = data.get("source_short") or _source_short(data.get("source", ""))
+        existing = (data.get("source_time_label") or "").strip()
+        if existing and short and existing.upper().startswith(short.upper() + " "):
+            time_label = existing
+        else:
+            ts = existing or data.get("fetched_at") or _ist_now_label()
+            time_label = f"{short} {ts}" if short else ts
+        time_html = (
+            f'<div style="font-size:7px;color:#8a8a8a;text-align:center;'
+            f'margin-top:2px;line-height:1.1;">{time_label}</div>'
+        )
+        # Truncate very long display names for mobile ellipsis safety
+        display_name = name if len(name) <= 18 else (name[:16] + "…")
+        _cards_html.append(
+            f'<div class="{card_cls}">'
+            f'<div class="index-title" title="{name}">{display_name}</div>'
+            f'<div class="index-price">{price_str}</div>'
+            f'<div class="index-change {color}">{change_str} ({sign}{data["pct"]:.2f}%)</div>'
+            f'{time_html}'
+            f'</div>'
+        )
+    else:
+        display_name = name if len(name) <= 18 else (name[:16] + "…")
+        _cards_html.append(
+            f'<div class="metric-card">'
+            f'<div class="index-title" title="{name}">{display_name}</div>'
+            f'<div class="index-price" style="font-size:12px; color:#94a3b8; padding-top:8px;">Unavailable</div>'
+            f'</div>'
+        )
+_cards_html.append("</div>")
+st.markdown("".join(_cards_html), unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -4189,7 +4324,7 @@ else:
 st.markdown("---")
 
 # -------------------------------------------------
-# Corporate Actions + Upcoming Results (Nifty 50)
+# Corporate Actions + Upcoming Results (Nifty 50)  — v7.6.2 display
 # -------------------------------------------------
 st.markdown('<div class="section-header">📋 Corporate Actions & Upcoming Results — Nifty 50</div>', unsafe_allow_html=True)
 st.caption(
@@ -4207,7 +4342,7 @@ if ca_df.empty and (res_df is None or res_df.empty):
         "Try again during market hours or from a home network."
     )
 else:
-    # --- Dividends / bonuses / splits / rights ---
+    # --- Corporate actions (compact list, no expander) ---
     if not ca_df.empty:
         ca_html = (
             '<div class="ca-box">'
@@ -4223,33 +4358,79 @@ else:
             )
         ca_html += "</div>"
         st.markdown(ca_html, unsafe_allow_html=True)
-        with st.expander("Full corporate-actions table"):
-            st.dataframe(ca_df, use_container_width=True, hide_index=True)
 
-    # --- Upcoming results (next 10 days) — same card style ---
+    # --- Upcoming results: 10-day rolling date strip + symbols under each date ---
     if res_df is not None and not res_df.empty:
-        res_html = (
-            '<div class="ca-box">'
-            '<div style="font-weight:700;margin-bottom:8px;">📊 Upcoming results '
-            '(Nifty 50 · next 10 days)</div>'
-        )
+        from datetime import timedelta as _td
+        _today = datetime.now(ist).date()
+        # Build 10-day window starting today
+        day_list = [_today + _td(days=i) for i in range(10)]
+        # Group symbols by date
+        by_date = {d: [] for d in day_list}
+        purposes = []
         for _, row in res_df.iterrows():
-            src = row.get("Source") or ""
-            src_tag = f' <span style="font-size:11px;opacity:0.75;">({src})</span>' if src else ""
-            co = row.get("Company") or ""
-            sym = row.get("Symbol", "")
-            label = f"{sym}" + (f" ({co})" if co and co.upper() != str(sym).upper() else "")
-            res_html += (
-                f'<div style="margin-bottom:6px;">'
-                f'<b>{label}</b> — {row.get("Purpose", "Results")} '
-                f'| Date: {row.get("Date", "—")}{src_tag}'
+            sym = str(row.get("Symbol") or "").strip().upper()
+            if not sym:
+                continue
+            d_raw = row.get("Date") or ""
+            d_obj = None
+            # Prefer SortDate-like parsing via common formats in the Date column
+            for fmt in ("%d %b %Y", "%d %B %Y", "%Y-%m-%d", "%d-%b-%Y", "%d/%m/%Y"):
+                try:
+                    d_obj = datetime.strptime(str(d_raw).strip()[:16], fmt).date()
+                    break
+                except Exception:
+                    continue
+            if d_obj is None:
+                # try day-month only with current/next year
+                for fmt in ("%d %b", "%d %B"):
+                    try:
+                        tmp = datetime.strptime(str(d_raw).strip()[:12], fmt).date().replace(year=_today.year)
+                        if tmp < _today - _td(days=20):
+                            tmp = tmp.replace(year=_today.year + 1)
+                        d_obj = tmp
+                        break
+                    except Exception:
+                        continue
+            if d_obj is None:
+                continue
+            # Snap into nearest day in our 10-day window if within range
+            if d_obj in by_date:
+                if sym not in by_date[d_obj]:
+                    by_date[d_obj].append(sym)
+            purpose = str(row.get("Purpose") or "Results")
+            purposes.append(purpose.lower())
+
+        # Simple heading: if everything looks like Q2 / quarterly results, label as Q2
+        q2ish = sum(1 for p in purposes if "q2" in p or "quarter" in p or "result" in p)
+        if purposes and q2ish >= max(1, int(0.6 * len(purposes))):
+            heading = "📊 Q2 Results — next 10 days"
+        else:
+            heading = "📊 Upcoming Results — next 10 days"
+
+        cells = []
+        for d in day_list:
+            syms = by_date.get(d) or []
+            label = d.strftime("%d %b")  # e.g. 30 Oct
+            if syms:
+                sym_txt = ", ".join(syms)
+                empty_cls = ""
+            else:
+                sym_txt = "—"
+                empty_cls = " empty"
+            cells.append(
+                f'<div class="res-day{empty_cls}">'
+                f'<div class="rd-date">{label}</div>'
+                f'<div class="rd-syms">{sym_txt}</div>'
                 f'</div>'
             )
-        res_html += "</div>"
+        res_html = (
+            '<div class="ca-box">'
+            f'<div style="font-weight:700;margin-bottom:10px;">{heading}</div>'
+            '<div class="res-date-strip">' + "".join(cells) + '</div>'
+            '</div>'
+        )
         st.markdown(res_html, unsafe_allow_html=True)
-        with st.expander("Full upcoming-results table"):
-            show_cols = [c for c in ["Symbol", "Company", "Purpose", "Date", "Source", "Type"] if c in res_df.columns]
-            st.dataframe(res_df[show_cols] if show_cols else res_df, use_container_width=True, hide_index=True)
     else:
         st.caption("No Nifty 50 results found in the next 10 days from available sources.")
 
