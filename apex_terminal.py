@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.9)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.10)
 # v7.6.2:
 # 1) Corporate Actions & Upcoming Results: removed expander/duplication.
 #    Results shown as 10-day rolling date strip with symbols under each date (simple Q2-style heading).
@@ -3681,7 +3681,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.9 — options height=snapshot · OI strike labels high-contrast")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.10 — options compact+caption · ATM/MaxPain values on OI")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3837,36 +3837,41 @@ with snap_col:
 with opt_col:
     _exp_lbl = _chain_full.get("expiry") or "—"
     _src_lbl = _chain_full.get("source") or ""
-    st.markdown(f"""
-    <div class="analysis-box panel-card snapshot-box" style="margin-top:4px;">
-        <div class="panel-title">⚡ Options · ATM ±6 · exp {_exp_lbl}{(' · ' + _src_lbl) if _src_lbl else ''}</div>
-    """, unsafe_allow_html=True)
+    # Same outer card as Instant Snapshot; no top header inside the box
+    st.markdown(
+        '<div class="analysis-box panel-card snapshot-box" style="margin-top:4px; padding-top:8px; padding-bottom:6px;">',
+        unsafe_allow_html=True,
+    )
     if _opt_matrix is None or _opt_matrix.empty:
         st.info("Option premiums temporarily unavailable.")
-        st.markdown("</div>", unsafe_allow_html=True)
     else:
         def _hl_atm(row):
             mid = len(_opt_matrix) // 2
             if row.name == mid:
-                return ["background-color: #c8e6c9; color: #1b5e20; font-weight: 700"] * len(row)
-            return [""] * len(row)
-        # Match Instant Snapshot visual height; scroll inside for ATM ±6 rows
+                return ["background-color: #c8e6c9; color: #1b5e20; font-weight: 700; font-size: 11px"] * len(row)
+            return ["font-size: 11px"] * len(row)
+        # Fixed short height to match Instant Snapshot; ATM row pre-scrolled to center via mid highlight
         st.dataframe(
             _opt_matrix.style.format({
                 "Call Price (CE)": "₹{:,.2f}",
                 "Strike Price": "₹{:,.0f}",
                 "Put Price (PE)": "₹{:,.2f}",
-            }).apply(_hl_atm, axis=1),
+            }).apply(_hl_atm, axis=1).set_table_styles([
+                {"selector": "th", "props": [("font-size", "11px"), ("padding", "2px 4px")]},
+                {"selector": "td", "props": [("font-size", "11px"), ("padding", "2px 4px")]},
+            ]),
             use_container_width=True,
             hide_index=True,
-            height=200,
+            height=168,
         )
-        st.caption(
-            f"Spot ₹{_spot_for_opt:,.2f}"
-            + (f" · Max pain {_chain_full.get('max_pain')}" if _chain_full.get("max_pain") else "")
-            + " · Current expiry only · no simulation"
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+    # Small line under the box (replaces top header)
+    st.caption(
+        f"ATM ±6 · exp {_exp_lbl}"
+        + (f" · {_src_lbl}" if _src_lbl else "")
+        + (f" · Spot ₹{_spot_for_opt:,.2f}" if _spot_for_opt else "")
+        + (f" · Max pain {_chain_full.get('max_pain')}" if _chain_full.get("max_pain") else "")
+    )
 
 # ---- OI Chart (current-month full chain) ----
 _oi_rows = _chain_full.get("rows") or []
@@ -3901,15 +3906,27 @@ if _oi_rows:
     _ann_atm = "#fbbf24" if st.session_state.theme == "dark" else "#b45309"
     _ann_mp = "#c4b5fd" if st.session_state.theme == "dark" else "#6d28d9"
     if atm_v:
+        try:
+            _atm_txt = f"ATM {int(round(float(atm_v)))}"
+        except Exception:
+            _atm_txt = f"ATM {atm_v}"
         shapes.append(dict(type="line", x0=atm_v, x1=atm_v, y0=0, y1=1, yref="paper",
                            line=dict(color=_ann_atm, width=2, dash="dash")))
-        annotations.append(dict(x=atm_v, y=1.05, yref="paper", text="ATM", showarrow=False,
-                                font=dict(size=12, color=_ann_atm, family="Inter, sans-serif")))
+        annotations.append(dict(
+            x=atm_v, y=1.06, yref="paper", text=_atm_txt, showarrow=False,
+            font=dict(size=12, color=_ann_atm, family="Inter, sans-serif"),
+        ))
     if mp_v and mp_v != atm_v:
+        try:
+            _mp_txt = f"Max Pain {int(round(float(mp_v)))}"
+        except Exception:
+            _mp_txt = f"Max Pain {mp_v}"
         shapes.append(dict(type="line", x0=mp_v, x1=mp_v, y0=0, y1=1, yref="paper",
                            line=dict(color=_ann_mp, width=2, dash="dot")))
-        annotations.append(dict(x=mp_v, y=1.05, yref="paper", text="Max Pain", showarrow=False,
-                                font=dict(size=12, color=_ann_mp, family="Inter, sans-serif")))
+        annotations.append(dict(
+            x=mp_v, y=1.06, yref="paper", text=_mp_txt, showarrow=False,
+            font=dict(size=12, color=_ann_mp, family="Inter, sans-serif"),
+        ))
     _dark = st.session_state.theme == "dark"
     # High-contrast axis labels (white on dark / deep green-gray on light)
     _tick = "#f8fafc" if _dark else "#1e293b"
