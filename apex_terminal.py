@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.1)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-28 (v7.6.1)
 # v7.6.1:
 # 1) REMOVED: Renko Signal Simulation Analytics block (and related helpers / confidence blend) — was slowing the app.
 # 2) Nifty 50 Heatmap: softer, lighter green/red shades (less eye strain) + slightly larger mobile text (still no-wrap).
@@ -2136,17 +2136,16 @@ def get_stock_news(symbol: str, limit: int = 4):
 def get_stock_summary_analytics(symbol: str):
     try:
         t = yf.Ticker(f"{symbol}.NS")
-        # Explicit start/end (IST) is more reliable than period= for latest NSE session.
-        # end is tomorrow so today's/yesterday's bar is not cut off by exclusive end dates.
         ist = pytz.timezone("Asia/Kolkata")
         now_ist = datetime.now(ist)
-        end_d = (now_ist + pd.Timedelta(days=1)).date()
-        start_d = (now_ist - pd.Timedelta(days=25)).date()
+        end_d = (now_ist + pd.Timedelta(days=2)).date()
+        start_d = (now_ist - pd.Timedelta(days=30)).date()
+
         hist = None
         for kwargs in (
             dict(start=start_d.isoformat(), end=end_d.isoformat(), interval="1d", auto_adjust=True),
             dict(period="1mo", interval="1d", auto_adjust=True),
-            dict(period="15d"),
+            dict(period="1mo"),
         ):
             try:
                 h = t.history(**kwargs)
@@ -2157,7 +2156,7 @@ def get_stock_summary_analytics(symbol: str):
                 continue
         if hist is None or hist.empty:
             return None
-        # Keep only rows with a usable close
+
         hist = hist.dropna(subset=["Close"]).copy()
         try:
             hist = hist[np.isfinite(hist["Close"].astype(float))]
@@ -2165,23 +2164,87 @@ def get_stock_summary_analytics(symbol: str):
             pass
         if hist.empty or len(hist) < 5:
             return None
-        # Normalize index to dates (drop tz) so we can reason about "latest session"
+
+        # Normalize index → naive IST calendar dates
         try:
             idx = pd.to_datetime(hist.index)
             if getattr(idx, "tz", None) is not None:
                 idx = idx.tz_convert("Asia/Kolkata").tz_localize(None)
             hist = hist.copy()
             hist.index = idx
-            # Collapse to calendar date (in case of odd intraday residue)
             hist = hist.groupby(hist.index.date).last()
             hist.index = pd.to_datetime(hist.index)
         except Exception:
             pass
         hist = hist.sort_index()
-        # Last 5 trading sessions with valid close
+
+        # ---- Patch stale Yahoo daily history with fast_info latest close ----
+        # Yahoo often lags 1 NSE session. Before open on day D, previous_close is D-1 close.
+        def _last_completed_session_date(now):
+            """Most recent weekday that should already have a full daily bar."""
+            d = now.date()
+            # Before ~18:00 IST, treat "today" as incomplete → use yesterday
+            if now.hour < 18:
+                d = d - pd.Timedelta(days=1)
+            # Roll back weekends
+            while d.weekday() >= 5:  # Sat=5 Sun=6
+                d = d - pd.Timedelta(days=1)
+            return d
+
+        expected_last = _last_completed_session_date(now_ist)
+        hist_last_date = hist.index[-1].date() if hasattr(hist.index[-1], "date") else pd.Timestamp(hist.index[-1]).date()
+
+        if hist_last_date < expected_last:
+            info_prev = info_last = None
+            try:
+                fi = t.fast_info
+                info_last = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
+                info_prev = getattr(fi, "previous_close", None)
+            except Exception:
+                pass
+            try:
+                if info_last is None or info_prev is None:
+                    info = t.info or {}
+                    if info_last is None:
+                        info_last = info.get("currentPrice") or info.get("regularMarketPrice")
+                    if info_prev is None:
+                        info_prev = info.get("previousClose") or info.get("regularMarketPreviousClose")
+            except Exception:
+                pass
+
+            hist_last_close = float(hist["Close"].iloc[-1])
+            patch_close = None
+            # Prefer previous_close when it differs from hist (classic 1-day lag case)
+            for candidate in (info_prev, info_last):
+                try:
+                    c = float(candidate)
+                    if np.isfinite(c) and c > 0 and abs(c - hist_last_close) > 1e-6:
+                        patch_close = c
+                        break
+                except (TypeError, ValueError):
+                    continue
+
+            if patch_close is not None:
+                # Append one synthetic daily bar for the missing session
+                new_idx = pd.Timestamp(expected_last)
+                # Avoid duplicate index
+                if new_idx.date() not in {pd.Timestamp(x).date() for x in hist.index}:
+                    row = {
+                        "Open": patch_close,
+                        "High": patch_close,
+                        "Low": patch_close,
+                        "Close": patch_close,
+                        "Volume": 0.0,
+                    }
+                    # Keep only columns that exist
+                    row = {k: v for k, v in row.items() if k in hist.columns}
+                    hist = pd.concat([hist, pd.DataFrame([row], index=[new_idx])])
+                    hist = hist.sort_index()
+
         last5 = hist.tail(5).copy()
         if len(last5) < 5:
             return None
+
         current = float(last5["Close"].iloc[-1])
         prev_close = float(last5["Close"].iloc[-2]) if len(last5) > 1 else current
         day_high = float(last5["High"].iloc[-1]) if "High" in last5.columns else current
@@ -2189,7 +2252,7 @@ def get_stock_summary_analytics(symbol: str):
         avg_5d = float(last5["Close"].mean())
         high_5d = float(last5["High"].max()) if "High" in last5.columns else current
         low_5d = float(last5["Low"].min()) if "Low" in last5.columns else current
-        last5["TP"] = (last5["High"] + last5["Low"] + last5["Close"]) / 3
+        last5["TP"] = (last5.get("High", last5["Close"]) + last5.get("Low", last5["Close"]) + last5["Close"]) / 3
         vol_sum = float(last5["Volume"].sum()) if "Volume" in last5.columns else 0.0
         vwap_5d = float((last5["TP"] * last5["Volume"]).sum() / vol_sum) if vol_sum > 0 else avg_5d
         change = current - prev_close
@@ -2199,7 +2262,7 @@ def get_stock_summary_analytics(symbol: str):
             else "BEARISH" if current < vwap_5d and current < avg_5d
             else "NEUTRAL"
         )
-        # Exactly 5 daily bars for snapshot UI (green up / red down / grey flat)
+
         bars = []
         closes = [float(x) for x in last5["Close"].tolist()]
         dates = [pd.Timestamp(d).strftime("%d %b") for d in last5.index]
@@ -2229,6 +2292,7 @@ def get_stock_summary_analytics(symbol: str):
                 "pct": round(float(p), 2),
                 "color": color,
             })
+
         return {
             "current": round(current, 2),
             "prev_close": round(prev_close, 2),
