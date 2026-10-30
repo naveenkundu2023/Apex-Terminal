@@ -2136,52 +2136,65 @@ def get_stock_news(symbol: str, limit: int = 4):
 def get_stock_summary_analytics(symbol: str):
     try:
         t = yf.Ticker(f"{symbol}.NS")
-        hist = t.history(period="10d")
-        if hist.empty or len(hist) < 5:
+        # Extra buffer so after dropping NaN/weekend gaps we still have ≥5 trading days
+        hist = t.history(period="15d")
+        if hist is None or hist.empty:
             return None
-        last5 = hist.tail(5)
-        current = float(hist["Close"].iloc[-1])
-        prev_close = float(hist["Close"].iloc[-2]) if len(hist) > 1 else current
-        day_high = float(hist["High"].iloc[-1])
-        day_low = float(hist["Low"].iloc[-1])
+        # Keep only rows with a usable close — this is what caused 4 bars instead of 5
+        hist = hist.dropna(subset=["Close"]).copy()
+        hist = hist[np.isfinite(hist["Close"].astype(float))]
+        if len(hist) < 5:
+            return None
+        last5 = hist.tail(5).copy()
+        current = float(last5["Close"].iloc[-1])
+        prev_close = float(last5["Close"].iloc[-2]) if len(last5) > 1 else current
+        day_high = float(last5["High"].iloc[-1]) if "High" in last5.columns else current
+        day_low = float(last5["Low"].iloc[-1]) if "Low" in last5.columns else current
         avg_5d = float(last5["Close"].mean())
-        high_5d = float(last5["High"].max())
-        low_5d = float(last5["Low"].min())
-        last5 = last5.copy()
+        high_5d = float(last5["High"].max()) if "High" in last5.columns else current
+        low_5d = float(last5["Low"].min()) if "Low" in last5.columns else current
         last5["TP"] = (last5["High"] + last5["Low"] + last5["Close"]) / 3
-        vwap_5d = float((last5["TP"] * last5["Volume"]).sum() / last5["Volume"].sum()) if last5["Volume"].sum() > 0 else avg_5d
+        vol_sum = float(last5["Volume"].sum()) if "Volume" in last5.columns else 0.0
+        vwap_5d = float((last5["TP"] * last5["Volume"]).sum() / vol_sum) if vol_sum > 0 else avg_5d
         change = current - prev_close
-        pct = (change / prev_close) * 100 if prev_close else 0
-        bias = "BULLISH" if current > vwap_5d and current > avg_5d else "BEARISH" if current < vwap_5d and current < avg_5d else "NEUTRAL"
-        # Compact last-5 daily bars for snapshot UI (green up / red down / grey flat)
-        # Skip non-finite closes so NaNs never reach the snapshot bar renderer.
+        pct = (change / prev_close) * 100 if prev_close else 0.0
+        bias = (
+            "BULLISH" if current > vwap_5d and current > avg_5d
+            else "BEARISH" if current < vwap_5d and current < avg_5d
+            else "NEUTRAL"
+        )
+        # Exactly 5 daily bars for snapshot UI (green up / red down / grey flat)
         bars = []
-        closes_raw = last5["Close"].tolist()
+        closes = [float(x) for x in last5["Close"].tolist()]
         dates = [pd.Timestamp(d).strftime("%d %b") for d in last5.index]
-        for i, c in enumerate(closes_raw):
+        # Day before the first of last5 (for first-bar % change)
+        prior_close = None
+        if len(hist) >= 6:
             try:
-                c_f = float(c)
-                if not np.isfinite(c_f):
-                    continue
-                if i > 0:
-                    prev_c = float(closes_raw[i - 1])
-                else:
-                    prev_c = float(hist["Close"].iloc[-6]) if len(hist) >= 6 else c_f
-                if not np.isfinite(prev_c) or prev_c == 0:
-                    prev_c = c_f
-                dlt = c_f - prev_c
-                p = (dlt / prev_c * 100) if prev_c else 0.0
-                if not np.isfinite(p):
-                    p = 0.0
-                color = "green" if p > 0.15 else ("red" if p < -0.15 else "grey")
-                bars.append({
-                    "date": dates[i],
-                    "close": round(c_f, 2),
-                    "pct": round(float(p), 2),
-                    "color": color,
-                })
-            except (TypeError, ValueError, IndexError):
-                continue
+                prior_close = float(hist["Close"].iloc[-6])
+                if not np.isfinite(prior_close) or prior_close == 0:
+                    prior_close = None
+            except Exception:
+                prior_close = None
+        for i, c_f in enumerate(closes):
+            if i > 0:
+                prev_c = closes[i - 1]
+            else:
+                prev_c = prior_close if prior_close is not None else c_f
+            if not np.isfinite(prev_c) or prev_c == 0:
+                prev_c = c_f
+            dlt = c_f - prev_c
+            p = (dlt / prev_c * 100) if prev_c else 0.0
+            if not np.isfinite(p):
+                p = 0.0
+            color = "green" if p > 0.15 else ("red" if p < -0.15 else "grey")
+            bars.append({
+                "date": dates[i],
+                "close": round(c_f, 2),
+                "pct": round(float(p), 2),
+                "color": color,
+            })
+        # Safety: never return fewer than the valid rows we already filtered
         return {
             "current": round(current, 2),
             "prev_close": round(prev_close, 2),
@@ -2195,7 +2208,7 @@ def get_stock_summary_analytics(symbol: str):
             "pct": round(pct, 2),
             "above_vwap": current > vwap_5d,
             "bias": bias,
-            "last5_bars": bars,
+            "last5_bars": bars,  # always len == 5 when we reach here
         }
     except Exception:
         return None
