@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.2)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.2b)
 # v7.6.2:
 # 1) Corporate Actions & Upcoming Results: removed expander/duplication.
 #    Results shown as 10-day rolling date strip with symbols under each date (simple Q2-style heading).
@@ -3434,7 +3434,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.2 — results date-strip · index grid 2-col mobile · snapshot light-green · heatmap softer")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.2b — results date-strip · index grid 2-col mobile · download-btn fix")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3688,7 +3688,7 @@ for name, meta in items:
             f'<div class="{card_cls}">'
             f'<div class="index-title" title="{name}">{display_name}</div>'
             f'<div class="index-price">{price_str}</div>'
-            f'<div class="index-change {color}">{change_str} ({sign}{data["pct"]:.2f}%)</div>'
+            f'<div class="index-change {color}">{change_str} ({sign}{float(data.get("pct", 0)):.2f}%)</div>'
             f'{time_html}'
             f'</div>'
         )
@@ -4114,9 +4114,19 @@ else:
     })
     st.dataframe(styled, use_container_width=True, hide_index=True)
     st.caption("⚡ = Just entered (≤20 min) • Yellow = fresh • Confidence % = live (TF + age + EMA edge)")
-    st.download_button("⬇️ Download signal list (CSV)",
-                       data=signal_df.drop(columns=["Last Brick TS"], errors="ignore").to_csv(index=False).encode("utf-8"),
-                       file_name="intraday_renko_signals.csv", mime="text/csv")
+    # Pre-build CSV bytes + stable key — avoids Streamlit Cloud "not connected to a server" on DownloadButton
+    _csv_df = signal_df.drop(columns=["Last Brick TS", "Just Entered"], errors="ignore").copy()
+    for _c in list(_csv_df.columns):
+        if str(_csv_df[_c].dtype).startswith("datetime"):
+            _csv_df[_c] = _csv_df[_c].astype(str)
+    _csv_bytes = _csv_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="⬇️ Download signal list (CSV)",
+        data=_csv_bytes,
+        file_name="intraday_renko_signals.csv",
+        mime="text/csv",
+        key="dl_renko_signals_csv",
+    )
 
 
 st.markdown("---")
@@ -4362,7 +4372,8 @@ else:
     # --- Upcoming results: 10-day rolling date strip + symbols under each date ---
     if res_df is not None and not res_df.empty:
         from datetime import timedelta as _td
-        _today = datetime.now(ist).date()
+        _ist = pytz.timezone("Asia/Kolkata")
+        _today = datetime.now(_ist).date()
         # Build 10-day window starting today
         day_list = [_today + _td(days=i) for i in range(10)]
         # Group symbols by date
