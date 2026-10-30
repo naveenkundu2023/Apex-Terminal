@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.4)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.7)
 # v7.6.2:
 # 1) Corporate Actions & Upcoming Results: removed expander/duplication.
 #    Results shown as 10-day rolling date strip with symbols under each date (simple Q2-style heading).
@@ -1850,168 +1850,212 @@ def scan_renko_universe(universe_tuple: tuple):
 
 @st.cache_data(ttl=60)
 @st.cache_data(ttl=45, show_spinner=False)
-def get_options_chain(ltp: float, symbol: str):
-    """ATM ±2 option premiums for equity symbol.
-    Uses NSE option-chain (nearest expiry only). Never invents random prices.
-    On NSE failure returns empty DataFrame so UI can show unavailable — no fake numbers.
+def fetch_option_chain_full(symbol: str, ltp: float = 0.0):
+    """Full equity option chain with premiums + OI.
+    Priority: Research360/Trendlyne → Groww.
+    Returns dict:
+      rows: list[{strike, ce, pe, ce_oi, pe_oi}]
+      atm, max_pain, expiry, source, underlying
+    Empty dict on failure.
     """
-    headers = nse_session_headers()
+    from datetime import date, timedelta
     sym = (symbol or "").strip().upper()
-    # NSE equity chain symbol is the same ticker (HDFCBANK, RELIANCE, ...)
-    url = f"https://www.nseindia.com/api/option-chain-equities?symbol={sym}"
+    if not sym:
+        return {}
 
-    def _parse_chain(data, underlying_fallback):
-        records = data.get("records", {}) or {}
-        filtered = data.get("filtered", {}) or {}
-        underlying = float(records.get("underlyingValue") or underlying_fallback or ltp or 0)
-        expiry_dates = records.get("expiryDates") or []
-        nearest_exp = expiry_dates[0] if expiry_dates else None
+    def _last_tuesday(year: int, month: int) -> date:
+        if month == 12:
+            d = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            d = date(year, month + 1, 1) - timedelta(days=1)
+        while d.weekday() != 1:
+            d -= timedelta(days=1)
+        return d
 
-        # Prefer NSE "filtered" block (nearest/selected expiry). Else filter records by nearest expiry.
-        chain_items = filtered.get("data") or []
-        used_filtered = bool(chain_items)
-        if not chain_items:
-            chain_items = records.get("data") or []
+    def _expiry_candidates():
+        ist = pytz.timezone("Asia/Kolkata")
+        today = datetime.now(ist).date()
+        out = []
+        y, m = today.year, today.month
+        for i in range(0, 4):
+            mm = m + i
+            yy = y
+            while mm > 12:
+                mm -= 12
+                yy += 1
+            d = _last_tuesday(yy, mm)
+            if d >= today - timedelta(days=3):
+                out.append(d.isoformat())
+        return out
 
-        strike_map = {}
-        for item in chain_items:
-            if not isinstance(item, dict):
-                continue
-            strike = item.get("strikePrice")
-            if strike is None:
-                continue
-            ce = item.get("CE") or {}
-            pe = item.get("PE") or {}
-            if not used_filtered and nearest_exp:
-                exp = (ce.get("expiryDate") or pe.get("expiryDate") or item.get("expiryDate") or "")
-                if exp and exp != nearest_exp:
-                    continue
-
-            def _px(side):
-                if not side:
-                    return 0.0
-                for k in ("lastPrice", "lastTradedPrice", "ltp"):
-                    v = side.get(k)
-                    if v is not None:
-                        try:
-                            fv = float(v)
-                            if fv >= 0:
-                                return fv
-                        except (TypeError, ValueError):
-                            pass
-                # mid of bid/ask when LTP missing
-                try:
-                    bid = float(side.get("bidprice") or side.get("bidPrice") or 0)
-                    ask = float(side.get("askPrice") or side.get("askprice") or 0)
-                    if bid > 0 and ask > 0:
-                        return (bid + ask) / 2.0
-                    if ask > 0:
-                        return ask
-                    if bid > 0:
-                        return bid
-                except (TypeError, ValueError):
-                    pass
-                return 0.0
-
-            sk = float(strike)
-            strike_map[sk] = {"CE": _px(ce), "PE": _px(pe)}
-
-        if not strike_map:
-            return None, underlying, nearest_exp
-
-        strikes = sorted(strike_map.keys())
-        atm = min(strikes, key=lambda x: abs(x - underlying))
-        atm_idx = strikes.index(atm)
-        selected = strikes[max(0, atm_idx - 2): atm_idx + 3]
-        rows = []
-        for s in selected:
-            rows.append({
-                "Call Price (CE)": round(float(strike_map[s]["CE"]), 2),
-                "Strike Price": s,
-                "Put Price (PE)": round(float(strike_map[s]["PE"]), 2),
-            })
-        return pd.DataFrame(rows), underlying, nearest_exp
-
-    # Try NSE up to 2 times (cookie warm-up often needed)
-    last_err = None
-    for attempt in range(2):
-        session = requests.Session()
-        try:
-            session.get("https://www.nseindia.com", headers=headers, timeout=8)
-            session.get("https://www.nseindia.com/option-chain", headers=headers, timeout=8)
-            r = session.get(url, headers=headers, timeout=10)
-            if r.status_code != 200:
-                last_err = f"NSE status {r.status_code}"
-                continue
-            data = r.json()
-            df, _und, _exp = _parse_chain(data, ltp)
-            if df is not None and not df.empty:
-                return df
-            last_err = "Empty / unparseable chain"
-        except Exception as e:
-            last_err = str(e)
-        finally:
-            try:
-                session.close()
-            except Exception:
-                pass
-
-    # Secondary: yfinance option chain (best-effort; may lag / miss some NSE names)
+    # ---- Research360 ----
     try:
-        t = yf.Ticker(f"{sym}.NS")
-        # yfinance expiries are unix dates as strings
-        exps = list(getattr(t, "options", None) or [])
-        if exps:
-            # nearest expiry
-            chain = t.option_chain(exps[0])
-            calls = getattr(chain, "calls", None)
-            puts = getattr(chain, "puts", None)
-            if calls is not None and puts is not None and not calls.empty:
-                und = float(ltp) if ltp else 0.0
+        r360_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.research360.in/future-and-options/option-chain",
+            "Origin": "https://www.research360.in",
+        }
+        for exp in _expiry_candidates():
+            try:
+                url = (
+                    "https://www.research360.in/api/fno/trendlyne"
+                    f"?endpoint=option/chain&stockCode={sym}&expDate={exp}"
+                )
+                rr = requests.get(url, headers=r360_headers, timeout=10)
+                if rr.status_code != 200:
+                    continue
+                body = ((rr.json().get("result") or {}).get("body") or {})
+                v2 = body.get("tableDataV2") or []
+                if not v2:
+                    continue
+                rows = []
+                for row in v2:
+                    try:
+                        sk = float(row.get("strike") or 0)
+                        if sk <= 0:
+                            continue
+                        c = row.get("c") or {}
+                        p = row.get("p") or {}
+                        rows.append({
+                            "strike": sk,
+                            "ce": float(c.get("current_price") or 0),
+                            "pe": float(p.get("current_price") or 0),
+                            "ce_oi": float(c.get("open_interest") or 0),
+                            "pe_oi": float(p.get("open_interest") or 0),
+                        })
+                    except Exception:
+                        continue
+                if not rows:
+                    continue
+                und = float(ltp) if ltp and ltp > 0 else 0.0
+                sld = body.get("stockLevelData") or {}
                 try:
-                    fi = t.fast_info
-                    und = float(getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None) or und)
+                    und = float(sld.get("stockCurrentPrice") or und or body.get("atTheMoney") or 0)
                 except Exception:
                     pass
-                c_map = {}
-                for _, row in calls.iterrows():
-                    try:
-                        sk = float(row.get("strike"))
-                        px = row.get("lastPrice")
-                        if px is None or (isinstance(px, float) and px != px):
-                            px = 0.0
-                        c_map[sk] = float(px)
-                    except Exception:
-                        continue
-                p_map = {}
-                for _, row in puts.iterrows():
-                    try:
-                        sk = float(row.get("strike"))
-                        px = row.get("lastPrice")
-                        if px is None or (isinstance(px, float) and px != px):
-                            px = 0.0
-                        p_map[sk] = float(px)
-                    except Exception:
-                        continue
-                strikes = sorted(set(c_map.keys()) | set(p_map.keys()))
-                if strikes and und > 0:
-                    atm = min(strikes, key=lambda x: abs(x - und))
-                    atm_idx = strikes.index(atm)
-                    selected = strikes[max(0, atm_idx - 2): atm_idx + 3]
-                    rows = []
-                    for s in selected:
-                        rows.append({
-                            "Call Price (CE)": round(float(c_map.get(s, 0.0)), 2),
-                            "Strike Price": s,
-                            "Put Price (PE)": round(float(p_map.get(s, 0.0)), 2),
-                        })
-                    if rows:
-                        return pd.DataFrame(rows)
+                return {
+                    "rows": sorted(rows, key=lambda x: x["strike"]),
+                    "atm": body.get("atTheMoney"),
+                    "max_pain": body.get("maxPain"),
+                    "expiry": exp,
+                    "source": "Research360",
+                    "underlying": und,
+                }
+            except Exception:
+                continue
     except Exception:
         pass
 
-    # No fake / random prices — return empty so UI shows unavailable
-    return pd.DataFrame()
+    # ---- Groww fallback (premiums; OI may be limited) ----
+    try:
+        g_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Origin": "https://groww.in",
+            "Referer": "https://groww.in/",
+        }
+        search_id = None
+        for qurl in (
+            f"https://groww.in/v1/api/search/v3/query/global/st_query?entity_type=stocks&page=0&query={sym}&size=5&web=true",
+            f"https://groww.in/v1/api/search/v1/entity?page=0&q={sym}&size=5",
+        ):
+            try:
+                sr = requests.get(qurl, headers=g_headers, timeout=8)
+                if sr.status_code != 200:
+                    continue
+                payload = sr.json()
+                content = ((payload.get("data") or {}).get("content") if isinstance(payload, dict) else None) or payload.get("content") or []
+                for item in content:
+                    if not isinstance(item, dict):
+                        continue
+                    nse_code = (item.get("nse_scrip_code") or "").upper()
+                    sid = item.get("search_id") or item.get("id")
+                    if sid and (nse_code == sym or not search_id):
+                        search_id = sid
+                        if nse_code == sym:
+                            break
+                if search_id:
+                    break
+            except Exception:
+                continue
+        if search_id:
+            pr = requests.get(
+                f"https://groww.in/options/{search_id}",
+                headers={**g_headers, "Accept": "text/html"},
+                timeout=12,
+            )
+            if pr.status_code == 200 and pr.text:
+                m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', pr.text, re.S)
+                if m:
+                    nd = json.loads(m.group(1))
+                    data = ((nd.get("props") or {}).get("pageProps") or {}).get("data") or {}
+                    oc = data.get("optionChain") or {}
+                    contracts = oc.get("optionContracts") or []
+                    company = data.get("company") or {}
+                    live = company.get("liveData") or {}
+                    und = float(live.get("ltp") or live.get("close") or ltp or 0)
+                    rows = []
+                    for item in contracts:
+                        try:
+                            raw_sp = float(item.get("strikePrice") or 0)
+                            if raw_sp <= 0:
+                                continue
+                            sp = raw_sp / 100.0 if raw_sp >= 1000 else raw_sp
+                            ce_ld = ((item.get("ce") or {}).get("liveData") or {})
+                            pe_ld = ((item.get("pe") or {}).get("liveData") or {})
+                            rows.append({
+                                "strike": sp,
+                                "ce": float(ce_ld.get("ltp") or ce_ld.get("close") or 0),
+                                "pe": float(pe_ld.get("ltp") or pe_ld.get("close") or 0),
+                                "ce_oi": float(ce_ld.get("oi") or 0),
+                                "pe_oi": float(pe_ld.get("oi") or 0),
+                            })
+                        except Exception:
+                            continue
+                    if rows:
+                        exp = None
+                        try:
+                            exp = (oc.get("aggregatedDetails") or {}).get("currentExpiry")
+                        except Exception:
+                            pass
+                        return {
+                            "rows": sorted(rows, key=lambda x: x["strike"]),
+                            "atm": None,
+                            "max_pain": None,
+                            "expiry": exp,
+                            "source": "Groww",
+                            "underlying": und,
+                        }
+    except Exception:
+        pass
+
+    return {}
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def get_options_chain(ltp: float, symbol: str):
+    """ATM ±6 premium matrix for the side panel table."""
+    full = fetch_option_chain_full(symbol, ltp)
+    rows = full.get("rows") or []
+    if not rows:
+        return pd.DataFrame()
+    und = float(full.get("underlying") or ltp or 0)
+    if und <= 0:
+        und = float(rows[len(rows) // 2]["strike"])
+    strikes = [r["strike"] for r in rows]
+    atm = min(strikes, key=lambda x: abs(x - und))
+    atm_idx = strikes.index(atm)
+    selected = rows[max(0, atm_idx - 6): atm_idx + 7]
+    out = []
+    for r in selected:
+        out.append({
+            "Call Price (CE)": round(float(r.get("ce") or 0), 2),
+            "Strike Price": r["strike"],
+            "Put Price (PE)": round(float(r.get("pe") or 0), 2),
+        })
+    return pd.DataFrame(out)
 
 
 @st.cache_data(ttl=3600)
@@ -3619,7 +3663,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.4 — real option premiums (no random) · CA merge + INFY · results strip · index grid")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.7 — snapshot|options side-by-side · full OI chart · Research360 · CA/INFY")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3661,7 +3705,7 @@ with col3:
             fetch_investing_quote, fetch_live_instrument, fetch_gift_nifty_50,
             fetch_midcap_select, fetch_investing_brent, fetch_tradingeconomics_quote,
             fetch_tradingeconomics_commodity, fetch_stock_data, get_option_sentiment,
-            get_options_chain, get_stock_summary_analytics, get_index_analytics,
+            get_options_chain, fetch_option_chain_full, get_stock_summary_analytics, get_index_analytics,
             get_nifty50_heatmap, get_most_active, get_market_breadth, get_top_movers,
             get_fno_builtup,
         ):
@@ -3672,7 +3716,7 @@ with col3:
         st.session_state.last_options_refresh = time.time()
         st.rerun()
 
-# ========== STOCK SUMMARY BOX ==========
+# ========== STOCK SUMMARY + OPTIONS + OI (v7.6.7 layout) ==========
 st.markdown("---")
 summary = get_stock_summary_analytics(selected)
 news_items = get_stock_news(selected)
@@ -3681,99 +3725,199 @@ stock_pcr = stock_sent.get("pcr")
 stock_mp = stock_sent.get("max_pain")
 stock_pcr_src = stock_sent.get("source") or ""
 
-if summary:
-    # v7.5: light-green snapshot box → dark, high-contrast text colours
-    bias_color = "#1f8a4c" if summary["bias"] == "BULLISH" else "#c0392b" if summary["bias"] == "BEARISH" else "#b7791f"
-    chg_color = "#1f8a4c" if summary['change'] >= 0 else "#c0392b"
-    pcr_html = f"<div><b>PCR (OI):</b> {stock_pcr:.3f}" + (f" <span style='font-size:11px;color:#52615a;'>({stock_pcr_src})</span>" if stock_pcr_src else "") + "</div>" if stock_pcr is not None else "<div><b>PCR (OI):</b> —</div>"
-    mp_html = f"<div><b>Max Pain:</b> ₹{stock_mp:,.0f}</div>" if stock_mp is not None else "<div><b>Max Pain:</b> —</div>"
-    # Compact vertical last-5 bars — left cluster, small footprint
-    bars = summary.get("last5_bars") or []
-    bar_html = ""
-    if bars:
-        # Scale bar height by relative close range within the 5 days.
-        # Guard against NaN / Inf / zero-span (yfinance missing bars → ValueError on int(nan)).
-        closes = []
-        for b in bars:
-            try:
-                c = float(b.get("close"))
-                if np.isfinite(c):
-                    closes.append(c)
-            except (TypeError, ValueError):
-                continue
-        if closes:
-            lo, hi = min(closes), max(closes)
-            span = hi - lo
-            if not np.isfinite(span) or span <= 0:
-                span = 1.0
-        else:
-            lo, span = 0.0, 1.0
-        cells = []
-        for b in bars:
-            bg = "#059669" if b.get("color") == "green" else ("#dc2626" if b.get("color") == "red" else "#64748b")
-            try:
-                c = float(b.get("close", 0))
-                if not np.isfinite(c):
+_spot_for_opt = float(summary["current"]) if summary and summary.get("current") else 0.0
+_chain_full = fetch_option_chain_full(selected, _spot_for_opt)
+_opt_matrix = get_options_chain(_spot_for_opt, selected)
+
+snap_col, opt_col = st.columns(2)
+
+with snap_col:
+    if summary:
+        bias_color = "#1f8a4c" if summary["bias"] == "BULLISH" else "#c0392b" if summary["bias"] == "BEARISH" else "#b7791f"
+        chg_color = "#1f8a4c" if summary["change"] >= 0 else "#c0392b"
+        pcr_html = f"<div><b>PCR (OI):</b> {stock_pcr:.3f}" + (f" <span style='font-size:11px;color:#52615a;'>({stock_pcr_src})</span>" if stock_pcr_src else "") + "</div>" if stock_pcr is not None else "<div><b>PCR (OI):</b> —</div>"
+        mp_html = f"<div><b>Max Pain:</b> ₹{stock_mp:,.0f}</div>" if stock_mp is not None else "<div><b>Max Pain:</b> —</div>"
+        bars = summary.get("last5_bars") or []
+        bar_html = ""
+        if bars:
+            closes = []
+            for b in bars:
+                try:
+                    c = float(b.get("close"))
+                    if np.isfinite(c):
+                        closes.append(c)
+                except (TypeError, ValueError):
+                    continue
+            if closes:
+                lo, hi = min(closes), max(closes)
+                span = hi - lo
+                if not np.isfinite(span) or span <= 0:
+                    span = 1.0
+            else:
+                lo, span = 0.0, 1.0
+            cells = []
+            for b in bars:
+                bg = "#059669" if b.get("color") == "green" else ("#dc2626" if b.get("color") == "red" else "#64748b")
+                try:
+                    c = float(b.get("close", 0))
+                    h = 16 if not np.isfinite(c) else 10 + int(22 * max(0.0, min(1.0, (c - lo) / span)))
+                except (TypeError, ValueError, OverflowError):
                     h = 16
-                else:
-                    h = 10 + int(22 * max(0.0, min(1.0, (c - lo) / span)))
-            except (TypeError, ValueError, OverflowError):
-                h = 16
-            # Readable price under bar (slightly larger for eyes)
-            try:
-                close_val = float(b.get("close", 0))
-                price_txt = f'{close_val:,.0f}' if close_val >= 100 else f'{close_val:.1f}'
-            except (TypeError, ValueError):
-                price_txt = "—"
-            try:
-                pct_val = float(b.get("pct", 0))
-                pct_txt = f"{pct_val:+.1f}%"
-            except (TypeError, ValueError):
-                pct_txt = "—"
-            cells.append(
-                f'<div style="display:inline-block;width:48px;margin-right:4px;text-align:center;vertical-align:bottom;">'
-                f'<div style="height:36px;display:flex;align-items:flex-end;justify-content:center;">'
-                f'<div style="width:14px;height:{h}px;background:{bg};border-radius:2px;"></div></div>'
-                f'<div style="font-size:10px;color:#52615a;line-height:1.15;margin-top:3px;">{b.get("date", "")}</div>'
-                f'<div style="font-size:10px;font-weight:700;color:#26332b;line-height:1.15;">{price_txt}</div>'
-                f'<div style="font-size:10px;font-weight:600;color:#3b4a42;line-height:1.15;">{pct_txt}</div></div>'
+                try:
+                    close_val = float(b.get("close", 0))
+                    price_txt = f"{close_val:,.0f}" if close_val >= 100 else f"{close_val:.1f}"
+                except (TypeError, ValueError):
+                    price_txt = "—"
+                try:
+                    pct_val = float(b.get("pct", 0))
+                    pct_txt = f"{pct_val:+.1f}%"
+                except (TypeError, ValueError):
+                    pct_txt = "—"
+                cells.append(
+                    f'<div style="display:inline-block;width:48px;margin-right:4px;text-align:center;vertical-align:bottom;">'
+                    f'<div style="height:36px;display:flex;align-items:flex-end;justify-content:center;">'
+                    f'<div style="width:14px;height:{h}px;background:{bg};border-radius:2px;"></div></div>'
+                    f'<div style="font-size:10px;color:#52615a;line-height:1.15;margin-top:3px;">{b.get("date", "")}</div>'
+                    f'<div style="font-size:10px;font-weight:700;color:#26332b;line-height:1.15;">{price_txt}</div>'
+                    f'<div style="font-size:10px;font-weight:600;color:#3b4a42;line-height:1.15;">{pct_txt}</div></div>'
+                )
+            bar_html = (
+                '<div style="margin-top:8px;display:flex;align-items:flex-end;gap:2px;">'
+                '<div style="font-size:11px;font-weight:600;color:#52615a;margin-right:6px;align-self:center;">5D</div>'
+                f'{"".join(cells)}</div>'
             )
-        bar_html = (
-            '<div style="margin-top:8px;display:flex;align-items:flex-end;gap:2px;">'
-            '<div style="font-size:11px;font-weight:600;color:#52615a;writing-mode:horizontal-tb;margin-right:6px;align-self:center;">5D</div>'
-            f'{"".join(cells)}</div>'
-        )
-    st.markdown(f"""
-    <div class="analysis-box panel-card snapshot-box" style="margin-top:4px;">
-        <div class="panel-title">📌 {selected} • Instant Snapshot</div>
-        <div style="display:flex; flex-wrap:wrap; gap:14px 18px; font-size:13px; align-items:flex-start;">
-            <div style="flex:1 1 auto; min-width:220px;">
-                <div style="display:flex; flex-wrap:wrap; gap:14px 18px;">
-                    <div><b>LTP:</b> ₹{summary['current']:,.2f} <span style="color:{chg_color}">({summary['change']:+.2f} | {summary['pct']:+.2f}%)</span></div>
-                    <div><b>Day H/L:</b> ₹{summary['day_high']:,.2f} / ₹{summary['day_low']:,.2f}</div>
-                    <div><b>5D Avg:</b> ₹{summary['avg_5d']:,.2f}</div>
-                    <div><b>5D High/Low:</b> ₹{summary['high_5d']:,.2f} / ₹{summary['low_5d']:,.2f}</div>
-                    <div><b>5D VWAP:</b> ₹{summary['vwap_5d']:,.2f} {'✅ Above' if summary['above_vwap'] else '❌ Below'}</div>
-                    <div><b>Bias:</b> <span style="color:{bias_color}; font-weight:700;">{summary['bias']}</span></div>
-                    {pcr_html}
-                    {mp_html}
+        st.markdown(f"""
+        <div class="analysis-box panel-card snapshot-box" style="margin-top:4px;">
+            <div class="panel-title">📌 {selected} • Instant Snapshot</div>
+            <div style="display:flex; flex-wrap:wrap; gap:10px 14px; font-size:13px; align-items:flex-start;">
+                <div style="flex:1 1 auto; min-width:180px;">
+                    <div style="display:flex; flex-wrap:wrap; gap:8px 12px;">
+                        <div><b>LTP:</b> ₹{summary['current']:,.2f} <span style="color:{chg_color}">({summary['change']:+.2f} | {summary['pct']:+.2f}%)</span></div>
+                        <div><b>Day H/L:</b> ₹{summary['day_high']:,.2f} / ₹{summary['day_low']:,.2f}</div>
+                        <div><b>5D Avg:</b> ₹{summary['avg_5d']:,.2f}</div>
+                        <div><b>5D H/L:</b> ₹{summary['high_5d']:,.2f} / ₹{summary['low_5d']:,.2f}</div>
+                        <div><b>5D VWAP:</b> ₹{summary['vwap_5d']:,.2f} {'✅ Above' if summary['above_vwap'] else '❌ Below'}</div>
+                        <div><b>Bias:</b> <span style="color:{bias_color}; font-weight:700;">{summary['bias']}</span></div>
+                        {pcr_html}
+                        {mp_html}
+                    </div>
                 </div>
+                <div style="flex:0 0 auto;">{bar_html}</div>
             </div>
-            <div style="flex:0 0 auto;">{bar_html}</div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+        if news_items:
+            with st.expander(f"📰 Latest News on {selected}", expanded=False):
+                for n in news_items:
+                    if n.get("link"):
+                        st.markdown(f"- [{n['title']}]({n['link']})")
+                    else:
+                        st.markdown(f"- {n['title']}")
+    else:
+        st.info(f"Snapshot for {selected} temporarily unavailable")
 
-    if news_items:
-        with st.expander(f"📰 Latest News on {selected}", expanded=False):
-            for n in news_items:
-                if n["link"]:
-                    st.markdown(f"- [{n['title']}]({n['link']})")
-                else:
-                    st.markdown(f"- {n['title']}")
+with opt_col:
+    st.markdown(
+        f'<div class="panel-title" style="margin-bottom:6px;">⚡ Options · ATM ±6'
+        + (f' · exp {_chain_full.get("expiry")}' if _chain_full.get("expiry") else "")
+        + (f' · {_chain_full.get("source")}' if _chain_full.get("source") else "")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+    if _opt_matrix is None or _opt_matrix.empty:
+        st.info("Option premiums temporarily unavailable.")
+    else:
+        def _hl_atm(row):
+            # middle row ~ ATM in the ±6 window
+            mid = len(_opt_matrix) // 2
+            if row.name == mid:
+                if st.session_state.theme == "dark":
+                    return ["background-color: #312e81; color: #e0e7ff; font-weight: 600"] * len(row)
+                return ["background-color: #e0e7ff; color: #312e81; font-weight: 600"] * len(row)
+            return [""] * len(row)
+        st.dataframe(
+            _opt_matrix.style.format({
+                "Call Price (CE)": "₹{:,.2f}",
+                "Strike Price": "₹{:,.0f}",
+                "Put Price (PE)": "₹{:,.2f}",
+            }).apply(_hl_atm, axis=1),
+            use_container_width=True,
+            hide_index=True,
+            height=min(420, 38 + 28 * max(len(_opt_matrix), 3)),
+        )
+        st.caption(
+            f"Spot ₹{_spot_for_opt:,.2f}"
+            + (f" · Max pain {_chain_full.get('max_pain')}" if _chain_full.get("max_pain") else "")
+            + " · Live premiums (no simulation)"
+        )
+
+# ---- OI Chart (full chain from Research360 / Groww) ----
+_oi_rows = _chain_full.get("rows") or []
+if _oi_rows:
+    st.markdown(
+        f'<div class="section-header">📊 Open Interest by Strike'
+        + (f' · {selected}' if selected else "")
+        + (f' · exp {_chain_full.get("expiry")}' if _chain_full.get("expiry") else "")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+    oi_df = pd.DataFrame(_oi_rows)
+    # Focus chart around ATM ± ~12% of strikes for readability, but include all if few
+    und = float(_chain_full.get("underlying") or _spot_for_opt or 0)
+    if und > 0 and len(oi_df) > 24:
+        band = und * 0.12
+        plot_df = oi_df[(oi_df["strike"] >= und - band) & (oi_df["strike"] <= und + band)].copy()
+        if len(plot_df) < 10:
+            plot_df = oi_df.copy()
+    else:
+        plot_df = oi_df.copy()
+    is_dark = st.session_state.theme == "dark"
+    fig_oi = go.Figure()
+    fig_oi.add_trace(go.Bar(
+        x=plot_df["strike"], y=plot_df["ce_oi"], name="Call OI",
+        marker_color="#34d399", opacity=0.85,
+    ))
+    fig_oi.add_trace(go.Bar(
+        x=plot_df["strike"], y=plot_df["pe_oi"], name="Put OI",
+        marker_color="#f87171", opacity=0.85,
+    ))
+    # ATM / max-pain markers
+    shapes = []
+    annotations = []
+    atm_v = _chain_full.get("atm")
+    mp_v = _chain_full.get("max_pain")
+    if atm_v:
+        shapes.append(dict(type="line", x0=atm_v, x1=atm_v, y0=0, y1=1, yref="paper",
+                           line=dict(color="#fbbf24", width=1.5, dash="dash")))
+        annotations.append(dict(x=atm_v, y=1.02, yref="paper", text="ATM", showarrow=False,
+                                font=dict(size=11, color="#fbbf24")))
+    if mp_v and mp_v != atm_v:
+        shapes.append(dict(type="line", x0=mp_v, x1=mp_v, y0=0, y1=1, yref="paper",
+                           line=dict(color="#a78bfa", width=1.5, dash="dot")))
+        annotations.append(dict(x=mp_v, y=1.02, yref="paper", text="Max Pain", showarrow=False,
+                                font=dict(size=11, color="#a78bfa")))
+    fig_oi.update_layout(
+        barmode="group",
+        height=340,
+        margin=dict(l=10, r=10, t=30, b=10),
+        template="plotly_dark" if is_dark else "plotly_white",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.08, x=1, xanchor="right"),
+        shapes=shapes,
+        annotations=annotations,
+        xaxis_title="Strike",
+        yaxis_title="Open Interest",
+        dragmode=False,
+    )
+    st.plotly_chart(fig_oi, use_container_width=True, config=PLOTLY_CONFIG)
+    st.caption(
+        f"Full chain OI from {_chain_full.get('source') or 'feed'} · "
+        f"{len(oi_df)} strikes · chart window around spot"
+        + (f" · underlying ₹{und:,.2f}" if und else "")
+    )
 else:
-    st.info(f"Snapshot for {selected} temporarily unavailable")
-
+    st.caption("OI chart unavailable for this symbol right now.")
 
 # -------------------------------------------------
 # Market Indices + Global Instruments
@@ -4314,41 +4458,6 @@ else:
     )
 
 
-st.markdown("---")
-
-st.markdown('<div class="section-header">⚡ Options Strike Matrix (ATM ±2)</div>', unsafe_allow_html=True)
-st.caption(
-    f"Spot: **₹{metrics['ltp']:,.2f}** • Source: NSE Option Chain (nearest expiry) → Yahoo fallback • "
-    "Live premiums only (no simulated prices) • Cache ~45s"
-)
-
-options_df = get_options_chain(metrics["ltp"], selected)
-
-if options_df is None or options_df.empty:
-    st.info(
-        "Option premiums temporarily unavailable (NSE often blocks cloud IPs; Yahoo fallback empty). "
-        "Try Fast Refresh during market hours or from a home network — numbers are never simulated."
-    )
-else:
-    def highlight_atm(row):
-        if row.name == 2:
-            if st.session_state.theme == "dark":
-                return ["background-color: #312e81; color: #e0e7ff; font-weight: 600"] * len(row)
-            else:
-                return ["background-color: #e0e7ff; color: #312e81; font-weight: 600"] * len(row)
-        return [""] * len(row)
-
-    styled = options_df.style.format({
-        "Call Price (CE)": "₹{:,.2f}",
-        "Strike Price": "₹{:,.0f}",
-        "Put Price (PE)": "₹{:,.2f}"
-    }).apply(highlight_atm, axis=1)
-    st.dataframe(styled, use_container_width=True, hide_index=True)
-
-# Options chain uses cache TTL — no forced 30s full-page rerun (speed pack)
-
-
-st.markdown("---")
 
 # -------------------------------------------------
 # Gainers / Losers
