@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.14)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.15)
 # v7.6.2:
 # 1) Corporate Actions & Upcoming Results: removed expander/duplication.
 #    Results shown as 10-day rolling date strip with symbols under each date (simple Q2-style heading).
@@ -3683,7 +3683,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.14 — options card = snapshot height · tiny caption above outside")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.15 — options card height matched to snapshot (~158px)")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3754,7 +3754,7 @@ snap_col, opt_col = st.columns(2)
 with snap_col:
     # Spacer matches the tiny options meta line height so both green cards top-align
     st.markdown(
-        "<div style='font-size:10px;line-height:1.2;margin:0 0 4px 0;padding:0;visibility:hidden;'>.</div>",
+        "<div style='font-size:9px;line-height:1.15;height:14px;margin:0 0 2px 0;padding:0;visibility:hidden;'>.</div>",
         unsafe_allow_html=True,
     )
     if summary:
@@ -3846,7 +3846,7 @@ with opt_col:
     _src_lbl = _chain_full.get("source") or ""
     # Tiny meta line ABOVE the options card (outside the box — does not affect card height)
     st.markdown(
-        f"<div style='font-size:10px;line-height:1.2;color:#94a3b8;margin:0 0 4px 2px;padding:0;'>"
+        f"<div style='font-size:9px;line-height:1.15;height:14px;color:#94a3b8;margin:0 0 2px 2px;padding:0;'>"
         f"ATM ±6 · exp {_exp_lbl}"
         + (f" · {_src_lbl}" if _src_lbl else "")
         + (f" · Spot ₹{_spot_for_opt:,.2f}" if _spot_for_opt else "")
@@ -3875,7 +3875,7 @@ with opt_col:
             )
         # Card height matched to Instant Snapshot (title + metrics + 5D bars ≈ 220px)
         _table_html = f"""
-<div style="height:220px;box-sizing:border-box;overflow:hidden;
+<div style="height:158px;box-sizing:border-box;overflow:hidden;
             border:1px solid #d3e9d8;border-radius:12px;background:#eaf6ed;
             font-family:Inter,system-ui,sans-serif;font-size:11px;color:#26332b;
             display:flex;flex-direction:column;">
@@ -3905,7 +3905,7 @@ with opt_col:
 </script>
 """
         # iframe height = card only (caption is outside, above)
-        components.html(_table_html, height=224, scrolling=False)
+        components.html(_table_html, height=162, scrolling=False)
 
 # ---- OI Chart (current-month full chain) ----
 _oi_rows = _chain_full.get("rows") or []
