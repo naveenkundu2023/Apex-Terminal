@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.7)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.8)
 # v7.6.2:
 # 1) Corporate Actions & Upcoming Results: removed expander/duplication.
 #    Results shown as 10-day rolling date strip with symbols under each date (simple Q2-style heading).
@@ -1873,19 +1873,30 @@ def fetch_option_chain_full(symbol: str, ltp: float = 0.0):
         return d
 
     def _expiry_candidates():
+        """Nearest unexpired monthly expiries.
+        NSE equity monthly is typically last Tuesday; exchange calendars can shift
+        by a day (e.g. 23 Nov vs 24 Nov). We probe last-Tue and the 2 prior days,
+        and *never* return a past date (fixes 0.05 premiums from expired Oct).
+        """
         ist = pytz.timezone("Asia/Kolkata")
         today = datetime.now(ist).date()
         out = []
+        seen = set()
         y, m = today.year, today.month
-        for i in range(0, 4):
+        for i in range(0, 5):
             mm = m + i
             yy = y
             while mm > 12:
                 mm -= 12
                 yy += 1
             d = _last_tuesday(yy, mm)
-            if d >= today - timedelta(days=3):
-                out.append(d.isoformat())
+            for delta in (0, -1, -2):  # last Tue, Mon, Sun-window
+                cand = d + timedelta(days=delta)
+                if cand >= today and cand not in seen:
+                    seen.add(cand)
+                    out.append(cand.isoformat())
+        # Prefer sooner expiries first
+        out.sort()
         return out
 
     # ---- Research360 ----
@@ -1935,6 +1946,13 @@ def fetch_option_chain_full(symbol: str, ltp: float = 0.0):
                     und = float(sld.get("stockCurrentPrice") or und or body.get("atTheMoney") or 0)
                 except Exception:
                     pass
+                # Sanity: skip expiry if ATM-band premiums are essentially zero (wrong/expired series)
+                if und > 0:
+                    band = [r for r in rows if abs(r["strike"] - und) <= max(und * 0.03, 50)]
+                    if band:
+                        best = max(max(r.get("ce") or 0, r.get("pe") or 0) for r in band)
+                        if best < 0.5:
+                            continue  # try next (current) month
                 return {
                     "rows": sorted(rows, key=lambda x: x["strike"]),
                     "atm": body.get("atTheMoney"),
@@ -3663,7 +3681,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.7 — snapshot|options side-by-side · full OI chart · Research360 · CA/INFY")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.8 — current-expiry options · compact green panels · OI legend fix")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3817,24 +3835,23 @@ with snap_col:
         st.info(f"Snapshot for {selected} temporarily unavailable")
 
 with opt_col:
-    st.markdown(
-        f'<div class="panel-title" style="margin-bottom:6px;">⚡ Options · ATM ±6'
-        + (f' · exp {_chain_full.get("expiry")}' if _chain_full.get("expiry") else "")
-        + (f' · {_chain_full.get("source")}' if _chain_full.get("source") else "")
-        + "</div>",
-        unsafe_allow_html=True,
-    )
+    _exp_lbl = _chain_full.get("expiry") or "—"
+    _src_lbl = _chain_full.get("source") or ""
+    st.markdown(f"""
+    <div class="analysis-box panel-card snapshot-box" style="margin-top:4px;">
+        <div class="panel-title">⚡ Options · ATM ±6 · exp {_exp_lbl}{(' · ' + _src_lbl) if _src_lbl else ''}</div>
+    """, unsafe_allow_html=True)
     if _opt_matrix is None or _opt_matrix.empty:
         st.info("Option premiums temporarily unavailable.")
+        st.markdown("</div>", unsafe_allow_html=True)
     else:
         def _hl_atm(row):
-            # middle row ~ ATM in the ±6 window
             mid = len(_opt_matrix) // 2
             if row.name == mid:
-                if st.session_state.theme == "dark":
-                    return ["background-color: #312e81; color: #e0e7ff; font-weight: 600"] * len(row)
-                return ["background-color: #e0e7ff; color: #312e81; font-weight: 600"] * len(row)
+                return ["background-color: #c8e6c9; color: #1b5e20; font-weight: 700"] * len(row)
             return [""] * len(row)
+        # Compact height to align with Instant Snapshot card
+        _h = min(280, 36 + 22 * max(len(_opt_matrix), 3))
         st.dataframe(
             _opt_matrix.style.format({
                 "Call Price (CE)": "₹{:,.2f}",
@@ -3843,26 +3860,24 @@ with opt_col:
             }).apply(_hl_atm, axis=1),
             use_container_width=True,
             hide_index=True,
-            height=min(420, 38 + 28 * max(len(_opt_matrix), 3)),
+            height=_h,
         )
         st.caption(
             f"Spot ₹{_spot_for_opt:,.2f}"
             + (f" · Max pain {_chain_full.get('max_pain')}" if _chain_full.get("max_pain") else "")
-            + " · Live premiums (no simulation)"
+            + " · Current expiry only · no simulation"
         )
+        st.markdown("</div>", unsafe_allow_html=True)
 
-# ---- OI Chart (full chain from Research360 / Groww) ----
+# ---- OI Chart (current-month full chain) ----
 _oi_rows = _chain_full.get("rows") or []
 if _oi_rows:
-    st.markdown(
-        f'<div class="section-header">📊 Open Interest by Strike'
-        + (f' · {selected}' if selected else "")
-        + (f' · exp {_chain_full.get("expiry")}' if _chain_full.get("expiry") else "")
-        + "</div>",
-        unsafe_allow_html=True,
-    )
+    _exp_lbl = _chain_full.get("expiry") or "—"
+    st.markdown(f"""
+    <div class="analysis-box panel-card snapshot-box" style="margin-top:8px;">
+        <div class="panel-title">📊 Open Interest by Strike · {selected} · exp {_exp_lbl}</div>
+    """, unsafe_allow_html=True)
     oi_df = pd.DataFrame(_oi_rows)
-    # Focus chart around ATM ± ~12% of strikes for readability, but include all if few
     und = float(_chain_full.get("underlying") or _spot_for_opt or 0)
     if und > 0 and len(oi_df) > 24:
         band = und * 0.12
@@ -3871,51 +3886,55 @@ if _oi_rows:
             plot_df = oi_df.copy()
     else:
         plot_df = oi_df.copy()
-    is_dark = st.session_state.theme == "dark"
+    # Readable colours on light-green panel (both themes)
     fig_oi = go.Figure()
     fig_oi.add_trace(go.Bar(
         x=plot_df["strike"], y=plot_df["ce_oi"], name="Call OI",
-        marker_color="#34d399", opacity=0.85,
+        marker_color="#059669", opacity=0.9,
     ))
     fig_oi.add_trace(go.Bar(
         x=plot_df["strike"], y=plot_df["pe_oi"], name="Put OI",
-        marker_color="#f87171", opacity=0.85,
+        marker_color="#dc2626", opacity=0.9,
     ))
-    # ATM / max-pain markers
-    shapes = []
-    annotations = []
+    shapes, annotations = [], []
     atm_v = _chain_full.get("atm")
     mp_v = _chain_full.get("max_pain")
     if atm_v:
         shapes.append(dict(type="line", x0=atm_v, x1=atm_v, y0=0, y1=1, yref="paper",
-                           line=dict(color="#fbbf24", width=1.5, dash="dash")))
-        annotations.append(dict(x=atm_v, y=1.02, yref="paper", text="ATM", showarrow=False,
-                                font=dict(size=11, color="#fbbf24")))
+                           line=dict(color="#b45309", width=2, dash="dash")))
+        annotations.append(dict(x=atm_v, y=1.05, yref="paper", text="ATM", showarrow=False,
+                                font=dict(size=12, color="#b45309", family="Inter, sans-serif")))
     if mp_v and mp_v != atm_v:
         shapes.append(dict(type="line", x0=mp_v, x1=mp_v, y0=0, y1=1, yref="paper",
-                           line=dict(color="#a78bfa", width=1.5, dash="dot")))
-        annotations.append(dict(x=mp_v, y=1.02, yref="paper", text="Max Pain", showarrow=False,
-                                font=dict(size=11, color="#a78bfa")))
+                           line=dict(color="#6d28d9", width=2, dash="dot")))
+        annotations.append(dict(x=mp_v, y=1.05, yref="paper", text="Max Pain", showarrow=False,
+                                font=dict(size=12, color="#6d28d9", family="Inter, sans-serif")))
     fig_oi.update_layout(
         barmode="group",
-        height=340,
-        margin=dict(l=10, r=10, t=30, b=10),
-        template="plotly_dark" if is_dark else "plotly_white",
+        height=320,
+        margin=dict(l=8, r=8, t=36, b=8),
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        legend=dict(orientation="h", yanchor="bottom", y=1.08, x=1, xanchor="right"),
+        plot_bgcolor="rgba(234,246,237,0.35)",
+        font=dict(color="#26332b", size=12),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.10, x=0, xanchor="left",
+            font=dict(size=13, color="#26332b", family="Inter, sans-serif"),
+            bgcolor="rgba(234,246,237,0.9)", bordercolor="#d3e9d8", borderwidth=1,
+        ),
         shapes=shapes,
         annotations=annotations,
-        xaxis_title="Strike",
-        yaxis_title="Open Interest",
+        xaxis=dict(title="Strike", gridcolor="rgba(38,51,43,0.12)", tickfont=dict(color="#26332b")),
+        yaxis=dict(title="Open Interest", gridcolor="rgba(38,51,43,0.12)", tickfont=dict(color="#26332b")),
         dragmode=False,
     )
     st.plotly_chart(fig_oi, use_container_width=True, config=PLOTLY_CONFIG)
     st.caption(
-        f"Full chain OI from {_chain_full.get('source') or 'feed'} · "
-        f"{len(oi_df)} strikes · chart window around spot"
+        f"Current expiry {_exp_lbl} · {_chain_full.get('source') or 'feed'} · "
+        f"{len(oi_df)} strikes · window around spot"
         + (f" · underlying ₹{und:,.2f}" if und else "")
     )
+    st.markdown("</div>", unsafe_allow_html=True)
 else:
     st.caption("OI chart unavailable for this symbol right now.")
 
