@@ -26,6 +26,7 @@ import pytz
 import requests
 from io import StringIO
 import re
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import xml.etree.ElementTree as ET
 
@@ -2313,203 +2314,267 @@ def get_stock_summary_analytics(symbol: str):
 
 
 # ---------- Upcoming results (next ~10 days) helper ----------
+# Primary source: Moneycontrol Results Calendar (NIFTY 50 index filter id=9)
+# https://www.moneycontrol.com/markets/earnings/results-calendar/?activeDate=YYYY-MM-DD&id=9&name=NIFTY+50
+# Data is embedded in Next.js __NEXT_DATA__ → pageProps.resultCalendarData
 @st.cache_data(ttl=600, show_spinner=False)
 def get_upcoming_results(universe: list, days: int = 10):
-    """Forthcoming Nifty-50 earnings / results over the next `days` calendar days.
+    """Nifty-50 (or universe) earnings over the next `days` calendar days.
 
-    Sources (best-effort):
-      1) NSE corporate actions + financial-results APIs (board meeting / results purpose)
-      2) Moneycontrol earnings calendar HTML
-      3) NSE board-meetings style purpose filter
-
-    Returns a DataFrame with Symbol, Purpose, Date, Source, Type="Result".
+    Primary: Moneycontrol results-calendar with index id=9 (NIFTY 50).
+    Fallback: light NSE board-meeting / corporate-action purpose filter.
     """
     from datetime import timedelta
     ist = pytz.timezone("Asia/Kolkata")
     today = datetime.now(ist).date()
     cutoff = today + timedelta(days=max(1, int(days)))
     uni_set = set(s.upper() for s in universe)
-    out = []
 
-    def _parse_date(raw):
-        if raw is None:
-            return None
-        s = str(raw).strip()
-        if not s or s.lower() in ("nan", "none", "-", "—"):
-            return None
-        s = re.sub(r"<[^>]+>", "", s)
-        s = re.sub(r"\s+", " ", s).strip()
-        # Common Indian formats
-        for fmt in (
-            "%d-%b-%Y", "%d-%B-%Y", "%d %b %Y", "%d %B %Y",
-            "%d-%b-%y", "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d",
-            "%d %b, %Y", "%d %B, %Y", "%b %d, %Y", "%B %d, %Y",
-            "%d-%b-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S",
-        ):
+    # Moneycontrol stockName / short name → NSE symbol (Nifty-50 focused)
+    NAME_TO_SYM = {
+        "RELIANCE INDUSTRIES": "RELIANCE", "RELIANCE": "RELIANCE",
+        "HDFC BANK": "HDFCBANK", "ICICI BANK": "ICICIBANK", "INFOSYS": "INFY",
+        "TATA CONSULTANCY SERVICES": "TCS", "TCS": "TCS",
+        "LARSEN & TOUBRO": "LT", "LARSEN AND TOUBRO": "LT",
+        "ITC": "ITC", "BHARTI AIRTEL": "BHARTIARTL", "STATE BANK OF INDIA": "SBIN",
+        "KOTAK MAHINDRA BANK": "KOTAKBANK", "AXIS BANK": "AXISBANK",
+        "BAJAJ FINANCE": "BAJFINANCE", "BAJAJ FINSERV": "BAJAJFINSV",
+        "HINDUSTAN UNILEVER": "HINDUNILVR", "HCL TECHNOLOGIES": "HCLTECH",
+        "SUN PHARMACEUTICAL INDUSTRIES": "SUNPHARMA", "SUN PHARMA": "SUNPHARMA",
+        "MARUTI SUZUKI INDIA": "MARUTI", "MARUTI SUZUKI": "MARUTI",
+        "TATA MOTORS": "TATAMOTORS", "TATA MOTORS PASSENGER VEHICLES": "TATAMOTORS",
+        "TATA STEEL": "TATASTEEL", "NTPC": "NTPC", "POWER GRID CORPORATION OF INDIA": "POWERGRID",
+        "POWER GRID": "POWERGRID", "TITAN COMPANY": "TITAN", "TITAN": "TITAN",
+        "ASIAN PAINTS": "ASIANPAINT", "ULTRATECH CEMENT": "ULTRACEMCO",
+        "NESTLE INDIA": "NESTLEIND", "TATA CONSUMER PRODUCTS": "TATACONSUM",
+        "TECH MAHINDRA": "TECHM", "WIPRO": "WIPRO", "JSW STEEL": "JSWSTEEL",
+        "HINDALCO INDUSTRIES": "HINDALCO", "HINDALCO": "HINDALCO",
+        "GRASIM INDUSTRIES": "GRASIM", "GRASIM": "GRASIM",
+        "ADANI ENTERPRISES": "ADANIENT", "ADANI PORTS AND SPECIAL ECONOMIC ZONE": "ADANIPORTS",
+        "ADANI PORTS": "ADANIPORTS", "ONGC": "ONGC", "OIL & NATURAL GAS CORPORATION": "ONGC",
+        "COAL INDIA": "COALINDIA", "BAJAJ AUTO": "BAJAJ-AUTO",
+        "HERO MOTOCORP": "HEROMOTOCO", "EICHER MOTORS": "EICHERMOT",
+        "DR REDDY'S LABORATORIES": "DRREDDY", "DR REDDYS LABORATORIES": "DRREDDY",
+        "CIPLA": "CIPLA", "DIVI'S LABORATORIES": "DIVISLAB", "DIVIS LABORATORIES": "DIVISLAB",
+        "APOLLO HOSPITALS ENTERPRISE": "APOLLOHOSP", "APOLLO HOSPITALS": "APOLLOHOSP",
+        "SBI LIFE INSURANCE COMPANY": "SBILIFE", "SBI LIFE": "SBILIFE",
+        "HDFC LIFE INSURANCE COMPANY": "HDFCLIFE", "HDFC LIFE": "HDFCLIFE",
+        "BRITANNIA INDUSTRIES": "BRITANNIA", "BRITANNIA": "BRITANNIA",
+        "INDUSIND BANK": "INDUSINDBK", "BEL": "BEL", "BHARAT ELECTRONICS": "BEL",
+        "TRENT": "TRENT", "ETERNAL": "ETERNAL", "ZOMATO": "ETERNAL",
+        "MAX HEALTHCARE INSTITUTE": "MAXHEALTH", "MAX HEALTHCARE": "MAXHEALTH",
+        "SHRIRAM FINANCE": "SHRIRAMFIN", "HAVELLS INDIA": "HAVELLS",
+        "BPCL": "BPCL", "BHARAT PETROLEUM": "BPCL", "M&M": "M&M",
+        "MAHINDRA & MAHINDRA": "M&M", "MAHINDRA AND MAHINDRA": "M&M",
+    }
+
+    def _resolve_symbol(stock_name: str, sc_id: str = "") -> str:
+        raw = (stock_name or "").strip()
+        if not raw:
+            return ""
+        key = re.sub(r"\s+", " ", raw).upper().strip()
+        if key in NAME_TO_SYM:
+            return NAME_TO_SYM[key]
+        # strip common suffixes
+        key2 = re.sub(r"\s+(LTD|LIMITED|INDIA|INDUSTRIES|COMPANY|CORPORATION)\.?$", "", key).strip()
+        if key2 in NAME_TO_SYM:
+            return NAME_TO_SYM[key2]
+        # direct universe hit
+        compact = re.sub(r"[^A-Z0-9]", "", key)
+        for u in uni_set:
+            if u == compact or u in compact or compact in u:
+                return u
+        # token overlap: prefer longest universe symbol match against name tokens
+        for u in sorted(uni_set, key=len, reverse=True):
+            if u.replace("-", "") in compact:
+                return u
+        return ""
+
+    def _parse_mc_date(date_str: str, active_iso: str = ""):
+        """Parse '7 Nov' / '07 Nov' using active_iso year, or ISO date."""
+        if active_iso:
             try:
-                return datetime.strptime(s[:19], fmt).date()
+                return datetime.strptime(active_iso[:10], "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        s = (date_str or "").strip()
+        if re.match(r"\d{4}-\d{2}-\d{2}", s):
+            try:
+                return datetime.strptime(s[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return None
+        year = today.year
+        for fmt in ("%d %b", "%d %B", "%d-%b", "%d-%B"):
+            try:
+                d = datetime.strptime(s, fmt).date().replace(year=year)
+                # if far in the past relative to today, roll year forward
+                if d < today - timedelta(days=30):
+                    d = d.replace(year=year + 1)
+                return d
             except ValueError:
                 continue
-        # Digits-only fallback YYYYMMDD
-        m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
-        if m:
-            try:
-                return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
-            except ValueError:
-                pass
-        m = re.search(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})", s)
-        if m:
-            try:
-                return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1))).date()
-            except ValueError:
-                pass
         return None
 
-    def _in_window(d):
-        if d is None:
-            return True  # keep undated items; UI will show "—"
-        return today <= d <= cutoff
+    out = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.moneycontrol.com/markets/earnings/results-calendar/",
+    }
 
-    def _add(sym, purpose, date_raw, source):
-        sym = (sym or "").strip().upper()
-        if not sym or (uni_set and sym not in uni_set):
-            return
-        purpose = (purpose or "Results").strip()
-        low = purpose.lower()
-        # Keep only result / board-meeting / earnings style rows
-        if not any(k in low for k in (
-            "result", "financial", "earnings", "quarter", "q1", "q2", "q3", "q4",
-            "annual", "board meeting", "board meet", "audited", "unaudited",
-        )):
-            return
-        d = _parse_date(date_raw)
-        if not _in_window(d):
-            return
-        out.append({
-            "Symbol": sym,
-            "Purpose": purpose[:100],
-            "Date": d.strftime("%d %b %Y") if d else (str(date_raw)[:16] if date_raw else "—"),
-            "SortDate": d or (today + timedelta(days=365)),
-            "Source": source,
-            "Type": "Result",
-        })
+    def _fetch_mc_page(active_date: str):
+        url = (
+            "https://www.moneycontrol.com/markets/earnings/results-calendar/"
+            f"?activeDate={active_date}&id=9&name=NIFTY+50"
+        )
+        try:
+            r = requests.get(url, headers=headers, timeout=12)
+            if r.status_code != 200 or not r.text:
+                return None
+            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
+            if not m:
+                return None
+            payload = json.loads(m.group(1))
+            return payload.get("props", {}).get("pageProps", {}).get("resultCalendarData")
+        except Exception:
+            return None
 
-    headers = nse_session_headers()
-    session = requests.Session()
-    try:
-        session.get("https://www.nseindia.com", headers=headers, timeout=6)
-        session.get("https://www.nseindia.com/companies-listing/corporate-filings-actions", headers=headers, timeout=6)
-        nse_urls = [
-            "https://www.nseindia.com/api/corporates-corporateActions?index=equities",
-            "https://www.nseindia.com/api/corporates-financial-results?index=equities",
-            "https://www.nseindia.com/api/corporate-board-meetings?index=equities",
-            "https://www.nseindia.com/api/corporates-board-meetings?index=equities",
-        ]
-        for url in nse_urls:
+    # Seed page = today (Moneycontrol returns a ~9-day strip of counts)
+    seed = _fetch_mc_page(today.isoformat())
+    dates_to_fetch = []
+    if seed:
+        strip = (seed.get("dateStripData") or {}).get("list") or []
+        for row in strip:
             try:
-                r = session.get(url, headers=headers, timeout=10)
-                if r.status_code != 200:
-                    continue
-                data = r.json()
-                rows = data if isinstance(data, list) else (
-                    data.get("data") or data.get("corporateActions") or data.get("results")
-                    or data.get("boardMeetings") or data.get("list") or []
-                )
-                for item in rows:
-                    if not isinstance(item, dict):
-                        continue
-                    sym = (item.get("symbol") or item.get("Symbol") or item.get("company")
-                           or item.get("sm_name") or "").strip().upper()
-                    purpose = (item.get("purpose") or item.get("subject") or item.get("desc")
-                               or item.get("action") or item.get("period") or item.get("bm_desc")
-                               or item.get("description") or "Results")
-                    date_raw = (item.get("exDate") or item.get("ex_date") or item.get("boardMeetingDate")
-                                or item.get("bm_date") or item.get("date") or item.get("fromDate")
-                                or item.get("toDate") or item.get("meetingDate") or item.get("an_dt")
-                                or item.get("recordDate") or "")
-                    _add(sym, purpose, date_raw, "NSE")
+                # [displayDate, earningCount, isoDate]
+                iso = str(row[2]) if len(row) > 2 else ""
+                cnt = int(row[1]) if str(row[1]).isdigit() or isinstance(row[1], (int, float)) else 0
+                d = _parse_mc_date("", iso) if iso else None
+                if d and today <= d <= cutoff and cnt > 0:
+                    dates_to_fetch.append(iso[:10])
             except Exception:
                 continue
-    except Exception:
-        pass
-    finally:
+        # Always include seed active date list
+        active = seed.get("activeDate") or today.isoformat()
+        if active not in dates_to_fetch:
+            # still parse seed table if within window
+            d0 = _parse_mc_date("", active)
+            if d0 and today <= d0 <= cutoff:
+                dates_to_fetch.insert(0, active[:10])
+    if not dates_to_fetch:
+        # Brute next `days` calendar dates (weekdays only) as fallback schedule
+        for i in range(0, max(1, int(days)) + 1):
+            d = today + timedelta(days=i)
+            if d.weekday() < 5:
+                dates_to_fetch.append(d.isoformat())
+
+    seen = set()
+    pages = {}
+    if seed:
+        pages[str(seed.get("activeDate") or today.isoformat())[:10]] = seed
+    for iso in dates_to_fetch[:14]:
+        if iso in pages:
+            rcd = pages[iso]
+        else:
+            rcd = _fetch_mc_page(iso)
+            if rcd:
+                pages[iso] = rcd
+        if not rcd:
+            continue
+        active_iso = str(rcd.get("activeDate") or iso)[:10]
+        for item in (rcd.get("tableData") or {}).get("list") or []:
+            try:
+                name = item.get("stockName") or item.get("stockShortName") or ""
+                sc_id = item.get("scId") or ""
+                sym = _resolve_symbol(name, sc_id)
+                if not sym:
+                    # keep row with cleaned name token if it looks like a Nifty name
+                    sym = re.sub(r"[^A-Z0-9]", "", name.upper())[:12] or name[:12].upper()
+                if uni_set and sym not in uni_set:
+                    # still show if name resolved poorly but was on NIFTY 50 filtered page
+                    # Prefer keeping Moneycontrol NIFTY-50 rows even if symbol map misses
+                    pass
+                purpose = item.get("resultType") or "Results"
+                time_txt = item.get("time") or ""
+                if time_txt and "not available" not in time_txt.lower():
+                    purpose = f"{purpose} · {time_txt}"
+                d = _parse_mc_date(item.get("date") or "", active_iso)
+                if d is not None and not (today <= d <= cutoff):
+                    continue
+                key = (sym, active_iso, purpose)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({
+                    "Symbol": sym if sym else name,
+                    "Purpose": str(purpose)[:100],
+                    "Date": d.strftime("%d %b %Y") if d else active_iso,
+                    "SortDate": d or (today + timedelta(days=365)),
+                    "Source": "Moneycontrol",
+                    "Type": "Result",
+                    "Company": name,
+                })
+            except Exception:
+                continue
+
+    # ---- Light NSE fallback if MC empty ----
+    if not out:
+        headers_nse = nse_session_headers()
+        session = requests.Session()
         try:
-            session.close()
+            session.get("https://www.nseindia.com", headers=headers_nse, timeout=6)
+            for url in (
+                "https://www.nseindia.com/api/corporates-corporateActions?index=equities",
+                "https://www.nseindia.com/api/corporates-financial-results?index=equities",
+            ):
+                try:
+                    r = session.get(url, headers=headers_nse, timeout=10)
+                    if r.status_code != 200:
+                        continue
+                    data = r.json()
+                    rows = data if isinstance(data, list) else (
+                        data.get("data") or data.get("corporateActions") or data.get("results") or []
+                    )
+                    for item in rows:
+                        if not isinstance(item, dict):
+                            continue
+                        sym = (item.get("symbol") or item.get("Symbol") or "").strip().upper()
+                        if not sym or (uni_set and sym not in uni_set):
+                            continue
+                        purpose = (item.get("purpose") or item.get("subject") or item.get("period") or "Results")
+                        low = purpose.lower()
+                        if not any(k in low for k in ("result", "financial", "earnings", "quarter", "board")):
+                            continue
+                        date_raw = (item.get("exDate") or item.get("boardMeetingDate")
+                                    or item.get("date") or item.get("fromDate") or "")
+                        out.append({
+                            "Symbol": sym,
+                            "Purpose": str(purpose)[:100],
+                            "Date": str(date_raw)[:16] or "—",
+                            "SortDate": today + timedelta(days=365),
+                            "Source": "NSE",
+                            "Type": "Result",
+                            "Company": sym,
+                        })
+                except Exception:
+                    continue
         except Exception:
             pass
-
-    # ---- Moneycontrol earnings / results calendar (HTML) ----
-    mc_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
-    mc_urls = [
-        "https://www.moneycontrol.com/markets/earnings/",
-        "https://www.moneycontrol.com/earnings-calendar/",
-        "https://www.moneycontrol.com/stocks/marketstats/nse_ca_latest.php",
-    ]
-    for mc_url in mc_urls:
-        try:
-            r = requests.get(mc_url, headers=mc_headers, timeout=10)
-            if r.status_code != 200 or not r.text:
-                continue
-            html = r.text
-            rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, flags=re.I | re.S)
-            for row in rows[:120]:
-                cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.I | re.S)
-                cells = [re.sub(r"<[^>]+>", " ", c) for c in cells]
-                cells = [re.sub(r"\s+", " ", c).strip() for c in cells]
-                if len(cells) < 2:
-                    continue
-                blob = " ".join(cells)
-                low = blob.lower()
-                if not any(k in low for k in ("result", "earning", "quarter", "q1", "q2", "q3", "q4", "annual", "board")):
-                    continue
-                # Match Nifty-50 symbol inside the row text
-                matched = None
-                up = blob.upper()
-                for u in uni_set:
-                    if re.search(rf"\b{re.escape(u)}\b", up) or u in up:
-                        matched = u
-                        break
-                if not matched:
-                    # First cell often company/symbol
-                    raw0 = re.sub(r"[^A-Z0-9&]", "", cells[0].upper())[:15]
-                    for u in uni_set:
-                        if raw0 == u or (len(raw0) >= 4 and (raw0.startswith(u[:4]) or u.startswith(raw0[:4]))):
-                            matched = u
-                            break
-                if not matched:
-                    continue
-                purpose = cells[1] if len(cells) > 1 else "Results"
-                # Date: try later cells
-                date_raw = ""
-                for c in cells[2:6]:
-                    if _parse_date(c):
-                        date_raw = c
-                        break
-                if not date_raw:
-                    # Search whole row for a date token
-                    dm = re.search(
-                        r"(\d{1,2}[-/\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/\s]\d{2,4})",
-                        blob, re.I,
-                    )
-                    if dm:
-                        date_raw = dm.group(1)
-                _add(matched, purpose, date_raw, "Moneycontrol")
-        except Exception:
-            continue
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
 
     if not out:
         return pd.DataFrame()
     df = pd.DataFrame(out)
     df = df.drop_duplicates(subset=["Symbol", "Purpose", "Date"])
     df = df.sort_values(["SortDate", "Symbol"]).reset_index(drop=True)
-    # Drop helper col for display
     if "SortDate" in df.columns:
         df = df.drop(columns=["SortDate"])
-    return df.head(30)
+    return df.head(40)
 
 
 # ---------- Aaj Ki Taaza Khabar — pictorial digest (PNG) ----------
@@ -4129,7 +4194,7 @@ st.markdown("---")
 st.markdown('<div class="section-header">📋 Corporate Actions & Upcoming Results — Nifty 50</div>', unsafe_allow_html=True)
 st.caption(
     "Dividends, bonuses, splits, rights + Nifty 50 earnings/results over the next 10 days. "
-    "Sources: NSE corporate filings / board meetings → Moneycontrol earnings calendar (best-effort)."
+    "Results: Moneycontrol NIFTY 50 results-calendar (id=9). Actions: NSE → Moneycontrol fallback."
 )
 
 ca_df = get_corporate_actions(universe)
@@ -4171,16 +4236,19 @@ else:
         for _, row in res_df.iterrows():
             src = row.get("Source") or ""
             src_tag = f' <span style="font-size:11px;opacity:0.75;">({src})</span>' if src else ""
+            co = row.get("Company") or ""
+            sym = row.get("Symbol", "")
+            label = f"{sym}" + (f" ({co})" if co and co.upper() != str(sym).upper() else "")
             res_html += (
                 f'<div style="margin-bottom:6px;">'
-                f'<b>{row.get("Symbol", "")}</b> — {row.get("Purpose", "Results")} '
+                f'<b>{label}</b> — {row.get("Purpose", "Results")} '
                 f'| Date: {row.get("Date", "—")}{src_tag}'
                 f'</div>'
             )
         res_html += "</div>"
         st.markdown(res_html, unsafe_allow_html=True)
         with st.expander("Full upcoming-results table"):
-            show_cols = [c for c in ["Symbol", "Purpose", "Date", "Source", "Type"] if c in res_df.columns]
+            show_cols = [c for c in ["Symbol", "Company", "Purpose", "Date", "Source", "Type"] if c in res_df.columns]
             st.dataframe(res_df[show_cols] if show_cols else res_df, use_container_width=True, hide_index=True)
     else:
         st.caption("No Nifty 50 results found in the next 10 days from available sources.")
