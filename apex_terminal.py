@@ -2136,16 +2136,52 @@ def get_stock_news(symbol: str, limit: int = 4):
 def get_stock_summary_analytics(symbol: str):
     try:
         t = yf.Ticker(f"{symbol}.NS")
-        # Extra buffer so after dropping NaN/weekend gaps we still have ≥5 trading days
-        hist = t.history(period="15d")
+        # Explicit start/end (IST) is more reliable than period= for latest NSE session.
+        # end is tomorrow so today's/yesterday's bar is not cut off by exclusive end dates.
+        ist = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.now(ist)
+        end_d = (now_ist + pd.Timedelta(days=1)).date()
+        start_d = (now_ist - pd.Timedelta(days=25)).date()
+        hist = None
+        for kwargs in (
+            dict(start=start_d.isoformat(), end=end_d.isoformat(), interval="1d", auto_adjust=True),
+            dict(period="1mo", interval="1d", auto_adjust=True),
+            dict(period="15d"),
+        ):
+            try:
+                h = t.history(**kwargs)
+                if h is not None and not h.empty and len(h.dropna(subset=["Close"])) >= 5:
+                    hist = h
+                    break
+            except Exception:
+                continue
         if hist is None or hist.empty:
             return None
-        # Keep only rows with a usable close — this is what caused 4 bars instead of 5
+        # Keep only rows with a usable close
         hist = hist.dropna(subset=["Close"]).copy()
-        hist = hist[np.isfinite(hist["Close"].astype(float))]
-        if len(hist) < 5:
+        try:
+            hist = hist[np.isfinite(hist["Close"].astype(float))]
+        except Exception:
+            pass
+        if hist.empty or len(hist) < 5:
             return None
+        # Normalize index to dates (drop tz) so we can reason about "latest session"
+        try:
+            idx = pd.to_datetime(hist.index)
+            if getattr(idx, "tz", None) is not None:
+                idx = idx.tz_convert("Asia/Kolkata").tz_localize(None)
+            hist = hist.copy()
+            hist.index = idx
+            # Collapse to calendar date (in case of odd intraday residue)
+            hist = hist.groupby(hist.index.date).last()
+            hist.index = pd.to_datetime(hist.index)
+        except Exception:
+            pass
+        hist = hist.sort_index()
+        # Last 5 trading sessions with valid close
         last5 = hist.tail(5).copy()
+        if len(last5) < 5:
+            return None
         current = float(last5["Close"].iloc[-1])
         prev_close = float(last5["Close"].iloc[-2]) if len(last5) > 1 else current
         day_high = float(last5["High"].iloc[-1]) if "High" in last5.columns else current
@@ -2167,7 +2203,6 @@ def get_stock_summary_analytics(symbol: str):
         bars = []
         closes = [float(x) for x in last5["Close"].tolist()]
         dates = [pd.Timestamp(d).strftime("%d %b") for d in last5.index]
-        # Day before the first of last5 (for first-bar % change)
         prior_close = None
         if len(hist) >= 6:
             try:
@@ -2194,7 +2229,6 @@ def get_stock_summary_analytics(symbol: str):
                 "pct": round(float(p), 2),
                 "color": color,
             })
-        # Safety: never return fewer than the valid rows we already filtered
         return {
             "current": round(current, 2),
             "prev_close": round(prev_close, 2),
@@ -2208,7 +2242,7 @@ def get_stock_summary_analytics(symbol: str):
             "pct": round(pct, 2),
             "above_vwap": current > vwap_5d,
             "bias": bias,
-            "last5_bars": bars,  # always len == 5 when we reach here
+            "last5_bars": bars,
         }
     except Exception:
         return None
