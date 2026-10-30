@@ -1,4 +1,4 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.8)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-30 (v7.6.9)
 # v7.6.2:
 # 1) Corporate Actions & Upcoming Results: removed expander/duplication.
 #    Results shown as 10-day rolling date strip with symbols under each date (simple Q2-style heading).
@@ -3681,7 +3681,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.8 — current-expiry options · compact green panels · OI legend fix")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.6.9 — options height=snapshot · OI strike labels high-contrast")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -3850,8 +3850,7 @@ with opt_col:
             if row.name == mid:
                 return ["background-color: #c8e6c9; color: #1b5e20; font-weight: 700"] * len(row)
             return [""] * len(row)
-        # Compact height to align with Instant Snapshot card
-        _h = min(280, 36 + 22 * max(len(_opt_matrix), 3))
+        # Match Instant Snapshot visual height; scroll inside for ATM ±6 rows
         st.dataframe(
             _opt_matrix.style.format({
                 "Call Price (CE)": "₹{:,.2f}",
@@ -3860,7 +3859,7 @@ with opt_col:
             }).apply(_hl_atm, axis=1),
             use_container_width=True,
             hide_index=True,
-            height=_h,
+            height=200,
         )
         st.caption(
             f"Spot ₹{_spot_for_opt:,.2f}"
@@ -3899,33 +3898,52 @@ if _oi_rows:
     shapes, annotations = [], []
     atm_v = _chain_full.get("atm")
     mp_v = _chain_full.get("max_pain")
+    _ann_atm = "#fbbf24" if st.session_state.theme == "dark" else "#b45309"
+    _ann_mp = "#c4b5fd" if st.session_state.theme == "dark" else "#6d28d9"
     if atm_v:
         shapes.append(dict(type="line", x0=atm_v, x1=atm_v, y0=0, y1=1, yref="paper",
-                           line=dict(color="#b45309", width=2, dash="dash")))
+                           line=dict(color=_ann_atm, width=2, dash="dash")))
         annotations.append(dict(x=atm_v, y=1.05, yref="paper", text="ATM", showarrow=False,
-                                font=dict(size=12, color="#b45309", family="Inter, sans-serif")))
+                                font=dict(size=12, color=_ann_atm, family="Inter, sans-serif")))
     if mp_v and mp_v != atm_v:
         shapes.append(dict(type="line", x0=mp_v, x1=mp_v, y0=0, y1=1, yref="paper",
-                           line=dict(color="#6d28d9", width=2, dash="dot")))
+                           line=dict(color=_ann_mp, width=2, dash="dot")))
         annotations.append(dict(x=mp_v, y=1.05, yref="paper", text="Max Pain", showarrow=False,
-                                font=dict(size=12, color="#6d28d9", family="Inter, sans-serif")))
+                                font=dict(size=12, color=_ann_mp, family="Inter, sans-serif")))
+    _dark = st.session_state.theme == "dark"
+    # High-contrast axis labels (white on dark / deep green-gray on light)
+    _tick = "#f8fafc" if _dark else "#1e293b"
+    _grid = "rgba(248,250,252,0.12)" if _dark else "rgba(30,41,59,0.12)"
+    _plot_bg = "rgba(15,23,42,0.35)" if _dark else "rgba(234,246,237,0.55)"
+    _legend_bg = "rgba(15,23,42,0.85)" if _dark else "rgba(234,246,237,0.95)"
+    _legend_fg = "#f8fafc" if _dark else "#1e293b"
     fig_oi.update_layout(
         barmode="group",
         height=320,
-        margin=dict(l=8, r=8, t=36, b=8),
-        template="plotly_white",
+        margin=dict(l=8, r=8, t=40, b=48),
+        template="plotly_dark" if _dark else "plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(234,246,237,0.35)",
-        font=dict(color="#26332b", size=12),
+        plot_bgcolor=_plot_bg,
+        font=dict(color=_tick, size=12),
         legend=dict(
-            orientation="h", yanchor="bottom", y=1.10, x=0, xanchor="left",
-            font=dict(size=13, color="#26332b", family="Inter, sans-serif"),
-            bgcolor="rgba(234,246,237,0.9)", bordercolor="#d3e9d8", borderwidth=1,
+            orientation="h", yanchor="bottom", y=1.12, x=0, xanchor="left",
+            font=dict(size=13, color=_legend_fg, family="Inter, sans-serif"),
+            bgcolor=_legend_bg, bordercolor="rgba(148,163,184,0.35)", borderwidth=1,
         ),
         shapes=shapes,
         annotations=annotations,
-        xaxis=dict(title="Strike", gridcolor="rgba(38,51,43,0.12)", tickfont=dict(color="#26332b")),
-        yaxis=dict(title="Open Interest", gridcolor="rgba(38,51,43,0.12)", tickfont=dict(color="#26332b")),
+        xaxis=dict(
+            title=dict(text="Strike", font=dict(color=_tick, size=12)),
+            tickfont=dict(color=_tick, size=11),
+            gridcolor=_grid,
+            tickangle=-45,
+            automargin=True,
+        ),
+        yaxis=dict(
+            title=dict(text="Open Interest", font=dict(color=_tick, size=12)),
+            tickfont=dict(color=_tick, size=11),
+            gridcolor=_grid,
+        ),
         dragmode=False,
     )
     st.plotly_chart(fig_oi, use_container_width=True, config=PLOTLY_CONFIG)
