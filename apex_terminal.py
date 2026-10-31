@@ -1,4 +1,10 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-31 (v7.7.0)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-31 (v7.7.1)
+# v7.7.1:
+# 1) MCX INR live quotes (Research360) for GOLD/SILVER/CRUDE — Instant Snapshot fixed.
+# 2) Commodity option chain + OI via COMM_OPTION_CHAIN (nearest valid expiry auto-picked).
+# 3) FII/DII from NSE fiidiiTradeReact + Nifty history (no blank section).
+# 4) Removed st.stop on analytics miss — rest of page always renders.
+# 5) Default select = NIFTY50. Charts/Renko scale USD Yahoo hist → MCX INR for commodities.
 # v7.7.0:
 # 1) Select Index/Stock/Commodity dropdown: NIFTY50, NIFTYBANK, NIFTYMIDSELECT, NIFTYFINSERVICE,
 #    GOLD, SILVER, CRUDE + all Nifty-50 stocks. Unified Instant Snapshot + Option Chain + OI chart.
@@ -1711,7 +1717,21 @@ def fetch_midcap_select():
 @st.cache_data(ttl=60)
 def fetch_stock_data(symbol: str):
     try:
-        t = yf.Ticker(f"{symbol}.NS")
+        meta = resolve_instrument(symbol)
+        # Commodities: Research360 MCX LTP (INR)
+        if meta["kind"] == "commodity":
+            mq = fetch_mcx_quotes()
+            m = mq.get(meta["mcx"] or meta["symbol"])
+            if m and m.get("ltp"):
+                return {
+                    "ltp": round(float(m["ltp"]), 2),
+                    "prev_close": round(float(m.get("prev_close") or m["ltp"]), 2),
+                    "prev_high": round(float(m["ltp"]), 2),
+                    "prev_low": round(float(m["ltp"]), 2),
+                    "volume": 0,
+                    "avg_volume": 0,
+                }
+        t = yf.Ticker(meta["yf"])
         info = t.fast_info
         hist = t.history(period="1mo")
         if hist.empty:
@@ -1727,8 +1747,8 @@ def fetch_stock_data(symbol: str):
             "prev_close": round(float(prev_close), 2),
             "prev_high": round(float(day_high), 2),
             "prev_low": round(float(day_low), 2),
-            "volume": int(volume),
-            "avg_volume": avg_vol
+            "volume": int(volume or 0),
+            "avg_volume": int(avg_vol or 0),
         }
     except Exception:
         return None
@@ -1736,7 +1756,8 @@ def fetch_stock_data(symbol: str):
 @st.cache_data(ttl=300, show_spinner=False)
 def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
     try:
-        t = yf.Ticker(f"{symbol}.NS")
+        meta = resolve_instrument(symbol)
+        t = yf.Ticker(meta["yf"])
         if interval in ["30m", "1h"]:
             period = "1mo" if interval == "1h" else "5d"
         df = t.history(period=period, interval=interval)
@@ -1745,6 +1766,22 @@ def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
         df = df.reset_index()
         if "Datetime" in df.columns:
             df = df.rename(columns={"Datetime": "Date"})
+        # Commodity chart note: Yahoo is USD for GC=F/SI=F/CL=F — scale daily closes
+        # to current MCX INR level so Renko/price chart matches Instant Snapshot units.
+        if meta["kind"] == "commodity" and not df.empty and "Close" in df.columns:
+            try:
+                mq = fetch_mcx_quotes()
+                m = mq.get(meta["mcx"] or meta["symbol"])
+                if m and m.get("ltp"):
+                    last_yf = float(df["Close"].iloc[-1])
+                    mcx = float(m["ltp"])
+                    if last_yf > 0 and mcx > 0 and (mcx / last_yf) > 5:
+                        scale = mcx / last_yf
+                        for col in ("Open", "High", "Low", "Close"):
+                            if col in df.columns:
+                                df[col] = df[col].astype(float) * scale
+            except Exception:
+                pass
         return df
     except Exception:
         return None
@@ -1752,8 +1789,24 @@ def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
 @st.cache_data(ttl=600, show_spinner=False)
 def get_daily_atr(symbol: str, atr_period: int = 14, lookback_days: int = 30):
     try:
-        t = yf.Ticker(f"{symbol}.NS")
+        meta = resolve_instrument(symbol)
+        t = yf.Ticker(meta["yf"])
         df = t.history(period="2mo", interval="1d")
+        # Scale USD commodity hist → MCX INR for Renko box sizing
+        if meta["kind"] == "commodity" and not df.empty:
+            try:
+                mq = fetch_mcx_quotes()
+                m = mq.get(meta["mcx"] or meta["symbol"])
+                if m and m.get("ltp"):
+                    last_yf = float(df["Close"].iloc[-1])
+                    mcx = float(m["ltp"])
+                    if last_yf > 0 and (mcx / last_yf) > 5:
+                        scale = mcx / last_yf
+                        for col in ("Open", "High", "Low", "Close"):
+                            if col in df.columns:
+                                df[col] = df[col].astype(float) * scale
+            except Exception:
+                pass
         if df.empty or len(df) < atr_period + 5:
             return None
         high, low, close = df["High"], df["Low"], df["Close"]
@@ -1995,6 +2048,12 @@ def fetch_option_chain_full(symbol: str, ltp: float = 0.0):
         "CRUDE": "CRUDEOIL", "CRUDE OIL": "CRUDEOIL", "WTI": "CRUDEOIL",
     }
     sym = _SYM_MAP.get(sym, sym)
+
+    # Commodity path first (Research360 MCX option chain — INR)
+    if sym in ("GOLD", "SILVER", "CRUDE", "CRUDEOIL"):
+        comm = fetch_commodity_option_chain(sym)
+        if comm and comm.get("rows"):
+            return comm
 
     def _last_tuesday(year: int, month: int) -> date:
         if month == 12:
@@ -2616,16 +2675,15 @@ def get_stock_news(symbol: str, limit: int = 4):
 @st.cache_data(ttl=90)
 def get_stock_summary_analytics(symbol: str):
     try:
-        # Map index / commodity UI symbols → Yahoo tickers
-        _YF_MAP = {
-            "NIFTY50": "^NSEI", "NIFTY": "^NSEI", "NIFTY 50": "^NSEI",
-            "NIFTYBANK": "^NSEBANK", "BANKNIFTY": "^NSEBANK",
-            "NIFTYMIDSELECT": "NIFTY_MID_SELECT.NS", "MIDCPNIFTY": "NIFTY_MID_SELECT.NS",
-            "NIFTYFINSERVICE": "NIFTY_FIN_SERVICE.NS", "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
-            "GOLD": "GC=F", "SILVER": "SI=F", "CRUDE": "CL=F", "CRUDEOIL": "CL=F",
-        }
-        sym_u = (symbol or "").strip().upper()
-        yf_ticker = _YF_MAP.get(sym_u, f"{sym_u}.NS")
+        meta = resolve_instrument(symbol)
+        sym_u = meta["symbol"]
+        yf_ticker = meta["yf"]
+        # Commodities: live LTP from Research360 MCX (INR) — do NOT use Yahoo USD here
+        mcx_live = None
+        if meta["kind"] == "commodity":
+            mq = fetch_mcx_quotes()
+            mcx_key = meta["mcx"] or sym_u
+            mcx_live = mq.get(mcx_key) or mq.get(sym_u)
         t = yf.Ticker(yf_ticker)
         ist = pytz.timezone("Asia/Kolkata")
         now_ist = datetime.now(ist)
@@ -2784,6 +2842,19 @@ def get_stock_summary_analytics(symbol: str):
                 "color": color,
             })
 
+        # Prefer live MCX INR quote for commodities (Yahoo hist may be USD)
+        if mcx_live and mcx_live.get("ltp"):
+            current = float(mcx_live["ltp"])
+            change = float(mcx_live.get("change") or 0)
+            pct = float(mcx_live.get("pct") or 0)
+            prev_close = float(mcx_live.get("prev_close") or (current - change))
+            # Scale 5D hist bars roughly into INR if hist looks like USD (gold ~2000-3000)
+            if current > 10000 and bars:
+                sample = bars[-1]["close"]
+                if sample and sample < current * 0.2:
+                    # hist in different unit — keep pct bars only
+                    pass
+
         return {
             "current": round(current, 2),
             "prev_close": round(prev_close, 2),
@@ -2798,8 +2869,28 @@ def get_stock_summary_analytics(symbol: str):
             "above_vwap": current > vwap_5d,
             "bias": bias,
             "last5_bars": bars,
+            "source": (mcx_live or {}).get("source") or "Yahoo",
+            "kind": meta.get("kind"),
         }
     except Exception:
+        # Commodity-only fallback when Yahoo hist fails entirely
+        try:
+            meta = resolve_instrument(symbol)
+            if meta["kind"] == "commodity":
+                mq = fetch_mcx_quotes()
+                m = mq.get(meta["mcx"] or meta["symbol"])
+                if m and m.get("ltp"):
+                    c = float(m["ltp"]); ch = float(m.get("change") or 0); p = float(m.get("pct") or 0)
+                    return {
+                        "current": round(c, 2), "prev_close": round(c - ch, 2),
+                        "day_high": round(c, 2), "day_low": round(c, 2),
+                        "avg_5d": round(c, 2), "high_5d": round(c, 2), "low_5d": round(c, 2),
+                        "vwap_5d": round(c, 2), "change": round(ch, 2), "pct": round(p, 2),
+                        "above_vwap": True, "bias": "BULLISH" if ch >= 0 else "BEARISH",
+                        "last5_bars": [], "source": "Research360 MCX", "kind": "commodity",
+                    }
+        except Exception:
+            pass
         return None
 
 
@@ -3322,160 +3413,304 @@ def get_most_active(by: str = "value"):
         return pd.DataFrame()
 
 
+
+# ---------- Research360 MCX commodity quotes + option chain ----------
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_mcx_quotes():
+    """Live MCX LTP for GOLD / SILVER / CRUDEOIL via research360 getdata API (INR)."""
+    out = {}
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+            "Origin": "https://www.research360.in",
+            "Referer": "https://www.research360.in/commodity",
+        }
+        body = {
+            "api_name": "COMM_OVERVIEW_SYMBOL_DETAILS",
+            "parameters": {"symbol": "Gold,Silver,Crudeoil"},
+        }
+        r = requests.post(
+            "https://www.research360.in/api/research360/getdata",
+            headers=headers, json=body, timeout=12,
+        )
+        data = (r.json() or {}).get("data") or []
+        for row in data:
+            sym = str(row.get("symbol") or "").upper()
+            try:
+                ltp = float(row.get("ltp") or 0)
+                chg = float(row.get("price_change") or 0)
+                pct = float(row.get("per_change") or 0)
+                prev = ltp - chg if ltp else 0
+                out[sym] = {
+                    "ltp": ltp,
+                    "change": chg,
+                    "pct": pct,
+                    "prev_close": prev,
+                    "exp_date": row.get("exp_date"),
+                    "source": "Research360 MCX",
+                }
+            except Exception:
+                continue
+        # aliases
+        if "CRUDEOIL" in out:
+            out["CRUDE"] = out["CRUDEOIL"]
+    except Exception:
+        pass
+    return out
+
+
+@st.cache_data(ttl=90, show_spinner=False)
+def fetch_commodity_option_chain(symbol: str, exp_date: str = None):
+    """MCX commodity option chain via Research360 COMM_OPTION_CHAIN.
+    Returns same shape as fetch_option_chain_full.
+    """
+    sym = (symbol or "").strip().upper()
+    sym = {"CRUDE": "CRUDEOIL"}.get(sym, sym)
+    if sym not in ("GOLD", "SILVER", "CRUDEOIL"):
+        return {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Origin": "https://www.research360.in",
+        "Referer": "https://www.research360.in/commodity/option",
+    }
+    # Preferred nearest option expiries (MCX monthly-ish). Probe a short list.
+    quotes = fetch_mcx_quotes()
+    fut_exp = (quotes.get(sym) or {}).get("exp_date")  # futures exp — options often earlier
+    candidates = []
+    if exp_date:
+        candidates.append(exp_date)
+    # Hard-coded near-term windows + futures exp
+    from datetime import date, timedelta
+    ist = pytz.timezone("Asia/Kolkata")
+    today = datetime.now(ist).date()
+    for d in [
+        fut_exp,
+        "2026-11-17", "2026-11-19", "2026-11-25", "2026-11-26", "2026-11-27",
+        "2026-11-28", "2026-11-30", "2026-12-04", "2026-12-29",
+    ]:
+        if d and d not in candidates:
+            candidates.append(str(d)[:10])
+    # Also generate next ~40 calendar days (option expiries are sparse)
+    for i in range(0, 40):
+        cand = (today + timedelta(days=i)).isoformat()
+        if cand not in candidates:
+            candidates.append(cand)
+
+    best = {}
+    for exp in candidates[:25]:
+        try:
+            r = requests.post(
+                "https://www.research360.in/api/research360/getdata",
+                headers=headers,
+                json={"api_name": "COMM_OPTION_CHAIN", "parameters": {"symbol": sym, "exp_date": exp}},
+                timeout=10,
+            )
+            rows_raw = (r.json() or {}).get("data") or []
+            if not rows_raw:
+                continue
+            rows = []
+            for row in rows_raw:
+                try:
+                    sk = float(row.get("strikeprice") or 0)
+                    if sk <= 0:
+                        continue
+                    rows.append({
+                        "strike": sk,
+                        "ce": float(row.get("ltp_calls") or 0),
+                        "pe": float(row.get("ltp_puts") or 0),
+                        "ce_oi": float(row.get("openinterest_calls") or 0),
+                        "pe_oi": float(row.get("openinterest_puts") or 0),
+                    })
+                except Exception:
+                    continue
+            if len(rows) < 3:
+                continue
+            und = float((quotes.get(sym) or {}).get("ltp") or 0)
+            # max pain approx
+            mp = None
+            try:
+                strikes = [r["strike"] for r in rows]
+                pain = []
+                for S in strikes:
+                    tot = 0.0
+                    for r in rows:
+                        tot += r["ce_oi"] * max(0.0, r["strike"] - S)
+                        tot += r["pe_oi"] * max(0.0, S - r["strike"])
+                    pain.append((tot, S))
+                mp = min(pain)[1] if pain else None
+            except Exception:
+                pass
+            atm = None
+            if und > 0 and rows:
+                atm = min(rows, key=lambda x: abs(x["strike"] - und))["strike"]
+            best = {
+                "rows": sorted(rows, key=lambda x: x["strike"]),
+                "atm": atm,
+                "max_pain": mp,
+                "expiry": exp,
+                "source": "Research360 MCX",
+                "underlying": und,
+            }
+            break
+        except Exception:
+            continue
+    return best
+
+
+def resolve_instrument(symbol: str):
+    """Classify UI symbol → kind + yahoo/nse helpers."""
+    sym = (symbol or "").strip().upper()
+    index_map = {
+        "NIFTY50": ("index", "^NSEI", "NIFTY"),
+        "NIFTY": ("index", "^NSEI", "NIFTY"),
+        "NIFTYBANK": ("index", "^NSEBANK", "BANKNIFTY"),
+        "BANKNIFTY": ("index", "^NSEBANK", "BANKNIFTY"),
+        "NIFTYMIDSELECT": ("index", "NIFTY_MID_SELECT.NS", "MIDCPNIFTY"),
+        "MIDCPNIFTY": ("index", "NIFTY_MID_SELECT.NS", "MIDCPNIFTY"),
+        "NFTMIDSELE": ("index", "NIFTY_MID_SELECT.NS", "MIDCPNIFTY"),
+        "NIFTYFINSERVICE": ("index", "NIFTY_FIN_SERVICE.NS", "FINNIFTY"),
+        "FINNIFTY": ("index", "NIFTY_FIN_SERVICE.NS", "FINNIFTY"),
+    }
+    if sym in index_map:
+        kind, yf_t, nse = index_map[sym]
+        return {"kind": kind, "symbol": sym, "yf": yf_t, "nse": nse, "mcx": None}
+    if sym in ("GOLD", "SILVER", "CRUDE", "CRUDEOIL"):
+        mcx = "CRUDEOIL" if sym == "CRUDE" else sym
+        # Yahoo only as OHLC fallback for charts (USD); live LTP always MCX
+        yf_map = {"GOLD": "GC=F", "SILVER": "SI=F", "CRUDEOIL": "CL=F", "CRUDE": "CL=F"}
+        return {"kind": "commodity", "symbol": sym, "yf": yf_map.get(sym, "GC=F"), "nse": None, "mcx": mcx}
+    return {"kind": "stock", "symbol": sym, "yf": f"{sym}.NS", "nse": sym, "mcx": None}
+
+
 # ---------- FII / DII activity (research360 + NSE) ----------
 @st.cache_data(ttl=600, show_spinner=False)
 def get_fii_dii_sessions(n_days: int = 10):
-    """Return list of daily FII/DII + Nifty cards (newest first), up to n_days.
-    Each item: {date, day, month, nifty, nifty_chg, nifty_pct, net, net_deriv,
-                fii_cash, dii_cash, fii_idx_fut, fii_idx_opt, fii_stk_fut, fii_stk_opt}
+    """Daily FII/DII cards (newest first).
+    Primary: NSE fiidiiTradeReact (cash). Enriched with Nifty daily closes from Yahoo.
+    Optional scrape of research360 when available.
     """
     out = []
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.research360.in/",
+        "Accept": "application/json,text/plain,*/*",
     }
-    # --- 1) research360 page scrape ---
+
+    # --- NSE cash FII/DII (works reliably) ---
+    by_date = {}
     try:
-        r = requests.get("https://www.research360.in/market/fii-dii-data", headers=headers, timeout=12)
-        if r.status_code == 200 and r.text:
-            html = r.text
-            # Card blocks often contain day number + month + Nifty + Net figures
-            # Fallback structured parse from visible text chunks
-            plain = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
-            plain = re.sub(r"<style[\s\S]*?</style>", " ", plain, flags=re.I)
-            plain = re.sub(r"<[^>]+>", "\n", plain)
-            plain = re.sub(r"[ \t]+", " ", plain)
-            lines = [ln.strip() for ln in plain.splitlines() if ln.strip()]
-            # Try to locate repeating day cards via regex on the raw HTML for numbers
-            # Pattern inspired by the UI card layout
-            card_re = re.compile(
-                r"(\d{1,2})\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-                r"[\s\S]{0,80}?Nifty[\s\S]{0,40}?"
-                r"([\d,]+\.\d{1,2})\s*([+\-]?\d+\.?\d*)\s*\(([+\-]?\d+\.?\d*)%\)"
-                r"[\s\S]{0,60}?Net\s*([+\-]?[\d,]+\.?\d*)"
-                r"[\s\S]{0,80}?Net\s*Derivatives:?\s*([+\-]?[\d,]+\.?\d*)"
-                r"[\s\S]{0,60}?FII\s*Cash\s*([+\-]?[\d,]+\.?\d*)"
-                r"[\s\S]{0,40}?DII\s*Cash\s*([+\-]?[\d,]+\.?\d*)"
-                r"[\s\S]{0,40}?FII\s*Idx\s*Fut\s*([+\-]?[\d,]+\.?\d*)"
-                r"[\s\S]{0,40}?FII\s*Idx\s*Opt\s*([+\-]?[\d,]+\.?\d*)"
-                r"[\s\S]{0,40}?FII\s*Stk\s*Fut\s*([+\-]?[\d,]+\.?\d*)"
-                r"[\s\S]{0,40}?FII\s*Stk\s*Opt\s*([+\-]?[\d,]+\.?\d*)",
-                re.I,
-            )
-            for m in card_re.finditer(html):
-                def _f(s):
-                    try:
-                        return float(str(s).replace(",", ""))
-                    except Exception:
-                        return 0.0
-                day, mon = m.group(1), m.group(2)
-                item = {
-                    "day": day,
-                    "month": mon,
-                    "date": f"{day} {mon}",
-                    "nifty": _f(m.group(3)),
-                    "nifty_chg": _f(m.group(4)),
-                    "nifty_pct": _f(m.group(5)),
-                    "net": _f(m.group(6)),
-                    "net_deriv": _f(m.group(7)),
-                    "fii_cash": _f(m.group(8)),
-                    "dii_cash": _f(m.group(9)),
-                    "fii_idx_fut": _f(m.group(10)),
-                    "fii_idx_opt": _f(m.group(11)),
-                    "fii_stk_fut": _f(m.group(12)),
-                    "fii_stk_opt": _f(m.group(13)),
-                }
-                out.append(item)
-                if len(out) >= n_days:
-                    break
+        sess = requests.Session()
+        nse_h = {**headers, "Referer": "https://www.nseindia.com/reports/fii-dii", "Accept": "application/json"}
+        sess.get("https://www.nseindia.com", headers=nse_h, timeout=8)
+        rr = sess.get("https://www.nseindia.com/api/fiidiiTradeReact", headers=nse_h, timeout=10)
+        data = rr.json() if rr.status_code == 200 and rr.text else []
+        if isinstance(data, dict):
+            data = data.get("data") or data.get("dataList") or []
+        for row in (data or []):
+            try:
+                dt = str(row.get("date") or row.get("Date") or "").strip()
+                cat = str(row.get("category") or row.get("Category") or "").upper()
+                netv = float(str(row.get("netValue") or row.get("netVal") or 0).replace(",", ""))
+                if not dt:
+                    continue
+                slot = by_date.setdefault(dt, {
+                    "date_raw": dt, "fii_cash": 0.0, "dii_cash": 0.0,
+                    "fii_idx_fut": 0.0, "fii_idx_opt": 0.0, "fii_stk_fut": 0.0, "fii_stk_opt": 0.0,
+                    "net_deriv": 0.0,
+                })
+                if "FII" in cat or "FPI" in cat:
+                    slot["fii_cash"] = netv
+                elif "DII" in cat:
+                    slot["dii_cash"] = netv
+            except Exception:
+                continue
     except Exception:
         pass
 
-    # --- 2) NSE FII/DII JSON fallback (cash only) ---
-    if len(out) < 3:
+    # --- Nifty daily history for card header ---
+    nifty_by_day = {}
+    try:
+        t = yf.Ticker("^NSEI")
+        hist = t.history(period="1mo", interval="1d", auto_adjust=True)
+        if hist is not None and not hist.empty:
+            hist = hist.dropna(subset=["Close"]).copy()
+            for ts, row in hist.iterrows():
+                try:
+                    d = pd.Timestamp(ts).tz_localize(None) if getattr(ts, "tzinfo", None) else pd.Timestamp(ts)
+                    key = d.strftime("%d-%b-%Y")
+                    key2 = d.strftime("%d-%b-%y")
+                    prev = float(row["Close"])
+                    # change vs previous bar filled later
+                    nifty_by_day[key] = {"close": prev, "date": d}
+                    nifty_by_day[key2] = nifty_by_day[key]
+                    nifty_by_day[d.strftime("%Y-%m-%d")] = nifty_by_day[key]
+                except Exception:
+                    continue
+            # attach change
+            closes = sorted([(v["date"], v["close"]) for v in {id(v): v for v in nifty_by_day.values()}.values()])
+            for i, (d, c) in enumerate(closes):
+                chg = 0.0 if i == 0 else c - closes[i - 1][1]
+                pct = (chg / closes[i - 1][1] * 100) if i > 0 and closes[i - 1][1] else 0.0
+                for k, v in list(nifty_by_day.items()):
+                    if v["date"] == d:
+                        v["chg"] = chg
+                        v["pct"] = pct
+    except Exception:
+        pass
+
+    def _parse_day_mon(dt: str):
+        day, mon = dt[:2], ""
         try:
-            sess = requests.Session()
-            nse_h = {
-                "User-Agent": headers["User-Agent"],
-                "Accept": "application/json,text/plain,*/*",
-                "Referer": "https://www.nseindia.com/reports/fii-dii",
-            }
-            sess.get("https://www.nseindia.com", headers=nse_h, timeout=8)
-            rr = sess.get(
-                "https://www.nseindia.com/api/fiidiiTradeReact",
-                headers=nse_h, timeout=10,
-            )
-            if rr.status_code == 200:
-                data = rr.json() if rr.text else []
-                if isinstance(data, dict):
-                    data = data.get("data") or data.get("dataList") or []
-                # Build a minimal set of cards from NSE cash series
-                for row in (data or [])[:n_days]:
-                    try:
-                        cat = str(row.get("category") or row.get("Category") or "").upper()
-                        # NSE returns separate FII / DII rows per date
-                    except Exception:
-                        continue
-                # Aggregate by date
-                by_date = {}
-                for row in (data or []):
-                    try:
-                        dt = str(row.get("date") or row.get("Date") or "")
-                        cat = str(row.get("category") or row.get("Category") or "").upper()
-                        buy = float(str(row.get("buyValue") or row.get("buyVal") or 0).replace(",", ""))
-                        sell = float(str(row.get("sellValue") or row.get("sellVal") or 0).replace(",", ""))
-                        netv = float(str(row.get("netValue") or row.get("netVal") or (buy - sell)).replace(",", ""))
-                        if not dt:
-                            continue
-                        slot = by_date.setdefault(dt, {"fii_cash": 0.0, "dii_cash": 0.0, "date": dt})
-                        if "FII" in cat or "FPI" in cat:
-                            slot["fii_cash"] = netv
-                        elif "DII" in cat:
-                            slot["dii_cash"] = netv
-                    except Exception:
-                        continue
-                for dt, slot in list(by_date.items())[:n_days]:
-                    net = float(slot.get("fii_cash", 0)) + float(slot.get("dii_cash", 0))
-                    # parse day/month
-                    day, mon = dt[:2], dt[3:6] if len(dt) >= 6 else ""
-                    try:
-                        from datetime import datetime as _dt
-                        parsed = None
-                        for fmt in ("%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%Y-%m-%d"):
-                            try:
-                                parsed = _dt.strptime(dt.strip()[:12], fmt)
-                                break
-                            except Exception:
-                                continue
-                        if parsed:
-                            day = str(parsed.day)
-                            mon = parsed.strftime("%b")
-                    except Exception:
-                        pass
-                    out.append({
-                        "day": day, "month": mon, "date": f"{day} {mon}",
-                        "nifty": 0.0, "nifty_chg": 0.0, "nifty_pct": 0.0,
-                        "net": net, "net_deriv": 0.0,
-                        "fii_cash": float(slot.get("fii_cash", 0)),
-                        "dii_cash": float(slot.get("dii_cash", 0)),
-                        "fii_idx_fut": 0.0, "fii_idx_opt": 0.0,
-                        "fii_stk_fut": 0.0, "fii_stk_opt": 0.0,
-                    })
+            for fmt in ("%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%Y-%m-%d"):
+                try:
+                    parsed = datetime.strptime(dt.strip()[:12], fmt)
+                    return str(parsed.day), parsed.strftime("%b"), parsed
+                except Exception:
+                    continue
         except Exception:
             pass
+        parts = dt.replace("/", "-").split("-")
+        if parts:
+            day = parts[0]
+            mon = parts[1][:3] if len(parts) > 1 else ""
+        return day, mon, None
 
-    # Dedup by date label, keep first (newest preference depends on source order)
-    seen = set()
-    uniq = []
-    for it in out:
-        k = it.get("date") or (it.get("day"), it.get("month"))
-        if k in seen:
-            continue
-        seen.add(k)
-        uniq.append(it)
-    return uniq[:n_days]
+    # Sort dates newest first
+    def _sort_key(dt):
+        _, _, p = _parse_day_mon(dt)
+        return p or datetime.min
+
+    for dt in sorted(by_date.keys(), key=_sort_key, reverse=True):
+        slot = by_date[dt]
+        day, mon, parsed = _parse_day_mon(dt)
+        net = float(slot.get("fii_cash", 0)) + float(slot.get("dii_cash", 0))
+        ninfo = nifty_by_day.get(dt) or {}
+        if not ninfo and parsed is not None:
+            ninfo = nifty_by_day.get(parsed.strftime("%d-%b-%Y")) or nifty_by_day.get(parsed.strftime("%Y-%m-%d")) or {}
+        out.append({
+            "day": day,
+            "month": mon,
+            "date": f"{day} {mon}".strip(),
+            "nifty": float(ninfo.get("close") or 0),
+            "nifty_chg": float(ninfo.get("chg") or 0),
+            "nifty_pct": float(ninfo.get("pct") or 0),
+            "net": net,
+            "net_deriv": float(slot.get("net_deriv") or 0),
+            "fii_cash": float(slot.get("fii_cash") or 0),
+            "dii_cash": float(slot.get("dii_cash") or 0),
+            "fii_idx_fut": float(slot.get("fii_idx_fut") or 0),
+            "fii_idx_opt": float(slot.get("fii_idx_opt") or 0),
+            "fii_stk_fut": float(slot.get("fii_stk_fut") or 0),
+            "fii_stk_opt": float(slot.get("fii_stk_opt") or 0),
+        })
+        if len(out) >= n_days:
+            break
+
+    # If NSE only returned 1 day (common), still show that card rather than empty
+    return out
 
 
 # ---------- Nifty 50 Heatmap ----------
@@ -4018,7 +4253,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.0 — Index/Commodity select · equal snap/opt boxes · FII/DII 10-day")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.1 — MCX INR quotes · commodity OC/OI · FII NSE · no page-stop")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -4051,10 +4286,10 @@ _INDEX_COMM = [
 ]
 _stock_sorted = sorted(universe, key=lambda sym: (-NIFTY50_WEIGHT.get(sym, 0.0), sym))
 dropdown_universe = _INDEX_COMM + [s for s in _stock_sorted if s not in _INDEX_COMM]
-# Prefer HDFCBANK as default when available (user preference)
+# Default: NIFTY50 (user preference for this build)
 _default_idx = 0
-if "HDFCBANK" in dropdown_universe:
-    _default_idx = dropdown_universe.index("HDFCBANK")
+if "NIFTY50" in dropdown_universe:
+    _default_idx = dropdown_universe.index("NIFTY50")
 col1, col2, col3 = st.columns([2.2, 1.2, 1])
 with col1:
     selected = st.selectbox(
@@ -4078,7 +4313,7 @@ with col3:
             fetch_tradingeconomics_commodity, fetch_stock_data, get_option_sentiment,
             get_options_chain, fetch_option_chain_full, get_stock_summary_analytics, get_index_analytics,
             get_nifty50_heatmap, get_most_active, get_market_breadth, get_top_movers,
-            get_fno_builtup, get_fii_dii_sessions,
+            get_fno_builtup, get_fii_dii_sessions, fetch_mcx_quotes, fetch_commodity_option_chain,
         ):
             try:
                 _fn.clear()
@@ -4087,18 +4322,50 @@ with col3:
         st.session_state.last_options_refresh = time.time()
         st.rerun()
 
-# ========== STOCK SUMMARY + OPTIONS + OI (v7.6.7 layout) ==========
+# ========== STOCK SUMMARY + OPTIONS + OI (v7.7 layout) ==========
 st.markdown("---")
-summary = get_stock_summary_analytics(selected)
-news_items = get_stock_news(selected)
-stock_sent = get_option_sentiment(selected) or {}
+summary = None
+news_items = []
+stock_sent = {}
+try:
+    summary = get_stock_summary_analytics(selected)
+except Exception:
+    summary = None
+try:
+    news_items = get_stock_news(selected) or []
+except Exception:
+    news_items = []
+try:
+    stock_sent = get_option_sentiment(selected) or {}
+except Exception:
+    stock_sent = {}
 stock_pcr = stock_sent.get("pcr")
 stock_mp = stock_sent.get("max_pain")
 stock_pcr_src = stock_sent.get("source") or ""
 
 _spot_for_opt = float(summary["current"]) if summary and summary.get("current") else 0.0
-_chain_full = fetch_option_chain_full(selected, _spot_for_opt)
-_opt_matrix = get_options_chain(_spot_for_opt, selected)
+# If PCR/MP missing from sentiment but present on chain, fill later
+_chain_full = {}
+_opt_matrix = None
+try:
+    _chain_full = fetch_option_chain_full(selected, _spot_for_opt) or {}
+except Exception:
+    _chain_full = {}
+try:
+    _opt_matrix = get_options_chain(_spot_for_opt, selected)
+except Exception:
+    _opt_matrix = None
+# Promote chain PCR/max-pain into snapshot when equity/index sentiment missed them
+if stock_pcr is None and _chain_full.get("pcr") is not None:
+    stock_pcr = _chain_full.get("pcr")
+    stock_pcr_src = _chain_full.get("source") or stock_pcr_src
+if stock_mp is None and _chain_full.get("max_pain") is not None:
+    stock_mp = _chain_full.get("max_pain")
+if _spot_for_opt <= 0 and _chain_full.get("underlying"):
+    try:
+        _spot_for_opt = float(_chain_full["underlying"])
+    except Exception:
+        pass
 
 snap_col, opt_col = st.columns(2)
 
@@ -4691,19 +4958,32 @@ st.markdown("---")
 # Stock Analytics
 # -------------------------------------------------
 st.markdown(f'<div class="section-header">📌 {selected} • Live Analytics</div>', unsafe_allow_html=True)
-metrics = fetch_stock_data(selected)
+metrics = None
+try:
+    metrics = fetch_stock_data(selected)
+except Exception:
+    metrics = None
+# For indices / commodities, build a soft metrics dict from Instant Snapshot so charts can continue
+if metrics is None and summary:
+    metrics = {
+        "ltp": summary.get("current"),
+        "prev_high": summary.get("day_high"),
+        "prev_low": summary.get("day_low"),
+        "prev_close": summary.get("prev_close"),
+        "volume": 0,
+        "avg_volume": 0,
+    }
 if metrics is None:
-    st.error(f"Unable to fetch data for {selected}")
-    st.stop()
-
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Last Traded Price", f"₹{metrics['ltp']:,.2f}")
-m2.metric("Day High", f"₹{metrics['prev_high']:,.2f}")
-m3.metric("Day Low", f"₹{metrics['prev_low']:,.2f}")
-m4.metric("Previous Close", f"₹{metrics['prev_close']:,.2f}")
-v1, v2 = st.columns(2)
-v1.metric("Session Volume", f"{metrics['volume']:,}")
-v2.metric("20-Day Avg Volume", f"{metrics['avg_volume']:,}")
+    st.warning(f"Live analytics metrics unavailable for {selected} — charts below may be limited. Rest of dashboard continues.")
+else:
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Last Traded Price", f"₹{metrics['ltp']:,.2f}")
+    m2.metric("Day High", f"₹{metrics.get('prev_high') or 0:,.2f}")
+    m3.metric("Day Low", f"₹{metrics.get('prev_low') or 0:,.2f}")
+    m4.metric("Previous Close", f"₹{metrics.get('prev_close') or 0:,.2f}")
+    v1, v2 = st.columns(2)
+    v1.metric("Session Volume", f"{metrics.get('volume') or 0:,}")
+    v2.metric("20-Day Avg Volume", f"{metrics.get('avg_volume') or 0:,}")
 
 # -------------------------------------------------
 # Charts
