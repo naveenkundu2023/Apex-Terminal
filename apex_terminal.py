@@ -1,4 +1,8 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-31 (v7.7.1)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-31 (v7.7.2)
+# v7.7.2:
+# 1) NIFTYMIDSELECT snapshot + charts via fetch_midcap_select (MC/Investing/TV) + Midcap100 OHLC fallback.
+# 2) FII/DII: 10-day rolling from niftytrader series; compact 5/3/2 grid; colour band + readable body.
+# 3) Commodity 5D bars still use Yahoo path for shape (INR LTP in snapshot is authoritative).
 # v7.7.1:
 # 1) MCX INR live quotes (Research360) for GOLD/SILVER/CRUDE — Instant Snapshot fixed.
 # 2) Commodity option chain + OI via COMM_OPTION_CHAIN (nearest valid expiry auto-picked).
@@ -407,39 +411,52 @@ def apply_theme(theme: str):
                 padding: 0 !important;
                 overflow: hidden;
             }
-            /* FII/DII session cards */
+            /* FII/DII session cards — compact like heatmap: 5 / 3 / 2 */
             .fii-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-                gap: 10px; width: 100%;
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+                gap: 8px; width: 100%;
+            }
+            @media (max-width: 1100px) {
+                .fii-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            }
+            @media (max-width: 600px) {
+                .fii-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
             }
             .fii-card {
-                border-radius: 10px; padding: 10px 12px; font-size: 12px;
-                border: 1px solid rgba(0,0,0,0.06);
-                min-height: 148px;
+                border-radius: 10px; padding: 0; overflow: hidden;
+                border: 1px solid rgba(148,163,184,0.35);
+                background: #f8fafc;
+                min-height: 0;
+                color: #0f172a;
             }
-            .fii-card.up { background: #e6f4ea; border-color: #c6e2ce; }
-            .fii-card.down { background: #fce8e8; border-color: #f0c8c8; }
+            .fii-card .fii-band {
+                height: 6px; width: 100%;
+            }
+            .fii-card.up .fii-band { background: linear-gradient(90deg, #16a34a, #4ade80); }
+            .fii-card.down .fii-band { background: linear-gradient(90deg, #dc2626, #f87171); }
+            .fii-card .fii-body { padding: 8px 10px 10px 10px; }
             .fii-card .fii-date {
-                font-size: 18px; font-weight: 800; line-height: 1;
+                font-size: 16px; font-weight: 800; line-height: 1.05;
+                color: #0f172a;
             }
-            .fii-card.up .fii-date { color: #1e6b3a; }
-            .fii-card.down .fii-date { color: #9b2c2c; }
             .fii-card .fii-month {
-                font-size: 11px; font-weight: 600; opacity: 0.85; margin-bottom: 4px;
+                font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 4px;
             }
             .fii-card .fii-nifty {
-                font-size: 13px; font-weight: 700; margin-bottom: 6px;
+                font-size: 11px; font-weight: 600; color: #1e293b; margin-bottom: 4px;
+                line-height: 1.25;
             }
             .fii-card .fii-row {
-                display: flex; justify-content: space-between; gap: 6px;
-                padding: 1px 0; font-size: 11px;
+                display: flex; justify-content: space-between; gap: 4px;
+                padding: 1px 0; font-size: 11px; color: #334155;
             }
+            .fii-card .fii-row span:first-child { color: #64748b; }
             .fii-card .fii-net {
-                font-size: 15px; font-weight: 800; margin: 4px 0 2px 0;
+                font-size: 13px; font-weight: 800; margin: 3px 0 2px 0;
             }
-            .fii-pos { color: #0f7a3a; font-weight: 700; }
-            .fii-neg { color: #b91c1c; font-weight: 700; }
+            .fii-pos { color: #15803d !important; font-weight: 700; }
+            .fii-neg { color: #b91c1c !important; font-weight: 700; }
 
             @media (max-width: 600px) {
                 .res-date-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
@@ -732,39 +749,52 @@ def apply_theme(theme: str):
                 padding: 0 !important;
                 overflow: hidden;
             }
-            /* FII/DII session cards */
+            /* FII/DII session cards — compact like heatmap: 5 / 3 / 2 */
             .fii-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-                gap: 10px; width: 100%;
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+                gap: 8px; width: 100%;
+            }
+            @media (max-width: 1100px) {
+                .fii-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            }
+            @media (max-width: 600px) {
+                .fii-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
             }
             .fii-card {
-                border-radius: 10px; padding: 10px 12px; font-size: 12px;
-                border: 1px solid rgba(0,0,0,0.06);
-                min-height: 148px;
+                border-radius: 10px; padding: 0; overflow: hidden;
+                border: 1px solid rgba(148,163,184,0.35);
+                background: #f8fafc;
+                min-height: 0;
+                color: #0f172a;
             }
-            .fii-card.up { background: #e6f4ea; border-color: #c6e2ce; }
-            .fii-card.down { background: #fce8e8; border-color: #f0c8c8; }
+            .fii-card .fii-band {
+                height: 6px; width: 100%;
+            }
+            .fii-card.up .fii-band { background: linear-gradient(90deg, #16a34a, #4ade80); }
+            .fii-card.down .fii-band { background: linear-gradient(90deg, #dc2626, #f87171); }
+            .fii-card .fii-body { padding: 8px 10px 10px 10px; }
             .fii-card .fii-date {
-                font-size: 18px; font-weight: 800; line-height: 1;
+                font-size: 16px; font-weight: 800; line-height: 1.05;
+                color: #0f172a;
             }
-            .fii-card.up .fii-date { color: #1e6b3a; }
-            .fii-card.down .fii-date { color: #9b2c2c; }
             .fii-card .fii-month {
-                font-size: 11px; font-weight: 600; opacity: 0.85; margin-bottom: 4px;
+                font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 4px;
             }
             .fii-card .fii-nifty {
-                font-size: 13px; font-weight: 700; margin-bottom: 6px;
+                font-size: 11px; font-weight: 600; color: #1e293b; margin-bottom: 4px;
+                line-height: 1.25;
             }
             .fii-card .fii-row {
-                display: flex; justify-content: space-between; gap: 6px;
-                padding: 1px 0; font-size: 11px;
+                display: flex; justify-content: space-between; gap: 4px;
+                padding: 1px 0; font-size: 11px; color: #334155;
             }
+            .fii-card .fii-row span:first-child { color: #64748b; }
             .fii-card .fii-net {
-                font-size: 15px; font-weight: 800; margin: 4px 0 2px 0;
+                font-size: 13px; font-weight: 800; margin: 3px 0 2px 0;
             }
-            .fii-pos { color: #0f7a3a; font-weight: 700; }
-            .fii-neg { color: #b91c1c; font-weight: 700; }
+            .fii-pos { color: #15803d !important; font-weight: 700; }
+            .fii-neg { color: #b91c1c !important; font-weight: 700; }
 
             @media (max-width: 600px) {
                 .res-date-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
@@ -1731,6 +1761,19 @@ def fetch_stock_data(symbol: str):
                     "volume": 0,
                     "avg_volume": 0,
                 }
+        # Nifty Mid Select live quote
+        if meta["kind"] == "midselect":
+            mid = fetch_midcap_select()
+            if mid and mid.get("price"):
+                c = float(mid["price"]); ch = float(mid.get("change") or 0)
+                return {
+                    "ltp": round(c, 2),
+                    "prev_close": round(c - ch, 2),
+                    "prev_high": round(c, 2),
+                    "prev_low": round(c, 2),
+                    "volume": 0,
+                    "avg_volume": 0,
+                }
         t = yf.Ticker(meta["yf"])
         info = t.fast_info
         hist = t.history(period="1mo")
@@ -2680,10 +2723,16 @@ def get_stock_summary_analytics(symbol: str):
         yf_ticker = meta["yf"]
         # Commodities: live LTP from Research360 MCX (INR) — do NOT use Yahoo USD here
         mcx_live = None
+        mid_live = None
         if meta["kind"] == "commodity":
             mq = fetch_mcx_quotes()
             mcx_key = meta["mcx"] or sym_u
             mcx_live = mq.get(mcx_key) or mq.get(sym_u)
+        elif meta["kind"] == "midselect":
+            try:
+                mid_live = fetch_midcap_select()
+            except Exception:
+                mid_live = None
         t = yf.Ticker(yf_ticker)
         ist = pytz.timezone("Asia/Kolkata")
         now_ist = datetime.now(ist)
@@ -2848,12 +2897,14 @@ def get_stock_summary_analytics(symbol: str):
             change = float(mcx_live.get("change") or 0)
             pct = float(mcx_live.get("pct") or 0)
             prev_close = float(mcx_live.get("prev_close") or (current - change))
-            # Scale 5D hist bars roughly into INR if hist looks like USD (gold ~2000-3000)
-            if current > 10000 and bars:
-                sample = bars[-1]["close"]
-                if sample and sample < current * 0.2:
-                    # hist in different unit — keep pct bars only
-                    pass
+        # Nifty Mid Select live from Moneycontrol / Investing / TV
+        if mid_live and mid_live.get("price"):
+            current = float(mid_live["price"])
+            change = float(mid_live.get("change") or 0)
+            pct = float(mid_live.get("pct") or 0)
+            prev_close = current - change
+            day_high = max(day_high, current)
+            day_low = min(day_low, current) if day_low else current
 
         return {
             "current": round(current, 2),
@@ -2873,7 +2924,7 @@ def get_stock_summary_analytics(symbol: str):
             "kind": meta.get("kind"),
         }
     except Exception:
-        # Commodity-only fallback when Yahoo hist fails entirely
+        # Fallbacks when Yahoo hist fails entirely
         try:
             meta = resolve_instrument(symbol)
             if meta["kind"] == "commodity":
@@ -2888,6 +2939,18 @@ def get_stock_summary_analytics(symbol: str):
                         "vwap_5d": round(c, 2), "change": round(ch, 2), "pct": round(p, 2),
                         "above_vwap": True, "bias": "BULLISH" if ch >= 0 else "BEARISH",
                         "last5_bars": [], "source": "Research360 MCX", "kind": "commodity",
+                    }
+            if meta["kind"] == "midselect":
+                mid = fetch_midcap_select()
+                if mid and mid.get("price"):
+                    c = float(mid["price"]); ch = float(mid.get("change") or 0); p = float(mid.get("pct") or 0)
+                    return {
+                        "current": round(c, 2), "prev_close": round(c - ch, 2),
+                        "day_high": round(c, 2), "day_low": round(c, 2),
+                        "avg_5d": round(c, 2), "high_5d": round(c, 2), "low_5d": round(c, 2),
+                        "vwap_5d": round(c, 2), "change": round(ch, 2), "pct": round(p, 2),
+                        "above_vwap": True, "bias": "BULLISH" if ch >= 0 else "BEARISH",
+                        "last5_bars": [], "source": mid.get("source") or "Mid Select", "kind": "midselect",
                     }
         except Exception:
             pass
@@ -3569,9 +3632,10 @@ def resolve_instrument(symbol: str):
         "NIFTY": ("index", "^NSEI", "NIFTY"),
         "NIFTYBANK": ("index", "^NSEBANK", "BANKNIFTY"),
         "BANKNIFTY": ("index", "^NSEBANK", "BANKNIFTY"),
-        "NIFTYMIDSELECT": ("index", "NIFTY_MID_SELECT.NS", "MIDCPNIFTY"),
-        "MIDCPNIFTY": ("index", "NIFTY_MID_SELECT.NS", "MIDCPNIFTY"),
-        "NFTMIDSELE": ("index", "NIFTY_MID_SELECT.NS", "MIDCPNIFTY"),
+        "NIFTYMIDSELECT": ("midselect", "NIFTYMIDCAP100.NS", "MIDCPNIFTY"),
+        "MIDCPNIFTY": ("midselect", "NIFTYMIDCAP100.NS", "MIDCPNIFTY"),
+        "NFTMIDSELE": ("midselect", "NIFTYMIDCAP100.NS", "MIDCPNIFTY"),
+        "NIFTYMIDCAPSELECT": ("midselect", "NIFTYMIDCAP100.NS", "MIDCPNIFTY"),
         "NIFTYFINSERVICE": ("index", "NIFTY_FIN_SERVICE.NS", "FINNIFTY"),
         "FINNIFTY": ("index", "NIFTY_FIN_SERVICE.NS", "FINNIFTY"),
     }
@@ -3589,128 +3653,106 @@ def resolve_instrument(symbol: str):
 # ---------- FII / DII activity (research360 + NSE) ----------
 @st.cache_data(ttl=600, show_spinner=False)
 def get_fii_dii_sessions(n_days: int = 10):
-    """Daily FII/DII cards (newest first).
-    Primary: NSE fiidiiTradeReact (cash). Enriched with Nifty daily closes from Yahoo.
-    Optional scrape of research360 when available.
+    """Last n_days FII/DII cash activity (newest first).
+    Primary: niftytrader.in __NEXT_DATA__ series (multi-day).
+    Fallback: NSE fiidiiTradeReact (often 1 day only).
     """
     out = []
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "application/json,text/plain,*/*",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
+    # --- 1) NiftyTrader multi-day series ---
+    try:
+        r = requests.get("https://www.niftytrader.in/fii-dii-data", headers=headers, timeout=15)
+        if r.status_code == 200 and r.text:
+            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
+            if m:
+                series = (((json.loads(m.group(1)).get("props") or {}).get("pageProps") or {}).get("series")) or []
+                # newest last in series → reverse
+                for row in reversed(series):
+                    try:
+                        created = str(row.get("created_at") or "")[:10]
+                        parsed = datetime.strptime(created, "%Y-%m-%d")
+                        fii = float(row.get("fii_net_value") or 0)
+                        dii = float(row.get("dii_net_value") or 0)
+                        net = fii + dii
+                        nifty = float(row.get("last_trade_price") or 0)
+                        nchg = float(row.get("change_value") or 0)
+                        npct = float(row.get("change_per") or 0)
+                        out.append({
+                            "day": str(parsed.day),
+                            "month": parsed.strftime("%b"),
+                            "date": parsed.strftime("%d %b"),
+                            "nifty": nifty,
+                            "nifty_chg": nchg,
+                            "nifty_pct": npct,
+                            "net": net,
+                            "net_deriv": 0.0,
+                            "fii_cash": fii,
+                            "dii_cash": dii,
+                            "fii_idx_fut": 0.0,
+                            "fii_idx_opt": 0.0,
+                            "fii_stk_fut": 0.0,
+                            "fii_stk_opt": 0.0,
+                        })
+                        if len(out) >= n_days:
+                            break
+                    except Exception:
+                        continue
+    except Exception:
+        pass
 
-    # --- NSE cash FII/DII (works reliably) ---
-    by_date = {}
+    if len(out) >= 3:
+        return out[:n_days]
+
+    # --- 2) NSE single/latest day fallback ---
     try:
         sess = requests.Session()
-        nse_h = {**headers, "Referer": "https://www.nseindia.com/reports/fii-dii", "Accept": "application/json"}
+        nse_h = {
+            **headers,
+            "Referer": "https://www.nseindia.com/reports/fii-dii",
+            "Accept": "application/json",
+        }
         sess.get("https://www.nseindia.com", headers=nse_h, timeout=8)
         rr = sess.get("https://www.nseindia.com/api/fiidiiTradeReact", headers=nse_h, timeout=10)
         data = rr.json() if rr.status_code == 200 and rr.text else []
         if isinstance(data, dict):
-            data = data.get("data") or data.get("dataList") or []
+            data = data.get("data") or []
+        by_date = {}
         for row in (data or []):
             try:
-                dt = str(row.get("date") or row.get("Date") or "").strip()
-                cat = str(row.get("category") or row.get("Category") or "").upper()
-                netv = float(str(row.get("netValue") or row.get("netVal") or 0).replace(",", ""))
-                if not dt:
-                    continue
-                slot = by_date.setdefault(dt, {
-                    "date_raw": dt, "fii_cash": 0.0, "dii_cash": 0.0,
-                    "fii_idx_fut": 0.0, "fii_idx_opt": 0.0, "fii_stk_fut": 0.0, "fii_stk_opt": 0.0,
-                    "net_deriv": 0.0,
-                })
+                dt = str(row.get("date") or "").strip()
+                cat = str(row.get("category") or "").upper()
+                netv = float(str(row.get("netValue") or 0).replace(",", ""))
+                slot = by_date.setdefault(dt, {"fii_cash": 0.0, "dii_cash": 0.0})
                 if "FII" in cat or "FPI" in cat:
                     slot["fii_cash"] = netv
                 elif "DII" in cat:
                     slot["dii_cash"] = netv
             except Exception:
                 continue
+        for dt, slot in by_date.items():
+            day, mon = dt[:2], ""
+            try:
+                parsed = datetime.strptime(dt, "%d-%b-%Y")
+                day, mon = str(parsed.day), parsed.strftime("%b")
+            except Exception:
+                parts = dt.replace("/", "-").split("-")
+                if parts:
+                    day = parts[0]
+                    mon = parts[1][:3] if len(parts) > 1 else ""
+            net = float(slot["fii_cash"]) + float(slot["dii_cash"])
+            out.append({
+                "day": day, "month": mon, "date": f"{day} {mon}".strip(),
+                "nifty": 0.0, "nifty_chg": 0.0, "nifty_pct": 0.0,
+                "net": net, "net_deriv": 0.0,
+                "fii_cash": float(slot["fii_cash"]), "dii_cash": float(slot["dii_cash"]),
+                "fii_idx_fut": 0.0, "fii_idx_opt": 0.0, "fii_stk_fut": 0.0, "fii_stk_opt": 0.0,
+            })
     except Exception:
         pass
-
-    # --- Nifty daily history for card header ---
-    nifty_by_day = {}
-    try:
-        t = yf.Ticker("^NSEI")
-        hist = t.history(period="1mo", interval="1d", auto_adjust=True)
-        if hist is not None and not hist.empty:
-            hist = hist.dropna(subset=["Close"]).copy()
-            for ts, row in hist.iterrows():
-                try:
-                    d = pd.Timestamp(ts).tz_localize(None) if getattr(ts, "tzinfo", None) else pd.Timestamp(ts)
-                    key = d.strftime("%d-%b-%Y")
-                    key2 = d.strftime("%d-%b-%y")
-                    prev = float(row["Close"])
-                    # change vs previous bar filled later
-                    nifty_by_day[key] = {"close": prev, "date": d}
-                    nifty_by_day[key2] = nifty_by_day[key]
-                    nifty_by_day[d.strftime("%Y-%m-%d")] = nifty_by_day[key]
-                except Exception:
-                    continue
-            # attach change
-            closes = sorted([(v["date"], v["close"]) for v in {id(v): v for v in nifty_by_day.values()}.values()])
-            for i, (d, c) in enumerate(closes):
-                chg = 0.0 if i == 0 else c - closes[i - 1][1]
-                pct = (chg / closes[i - 1][1] * 100) if i > 0 and closes[i - 1][1] else 0.0
-                for k, v in list(nifty_by_day.items()):
-                    if v["date"] == d:
-                        v["chg"] = chg
-                        v["pct"] = pct
-    except Exception:
-        pass
-
-    def _parse_day_mon(dt: str):
-        day, mon = dt[:2], ""
-        try:
-            for fmt in ("%d-%b-%Y", "%d-%b-%y", "%d %b %Y", "%Y-%m-%d"):
-                try:
-                    parsed = datetime.strptime(dt.strip()[:12], fmt)
-                    return str(parsed.day), parsed.strftime("%b"), parsed
-                except Exception:
-                    continue
-        except Exception:
-            pass
-        parts = dt.replace("/", "-").split("-")
-        if parts:
-            day = parts[0]
-            mon = parts[1][:3] if len(parts) > 1 else ""
-        return day, mon, None
-
-    # Sort dates newest first
-    def _sort_key(dt):
-        _, _, p = _parse_day_mon(dt)
-        return p or datetime.min
-
-    for dt in sorted(by_date.keys(), key=_sort_key, reverse=True):
-        slot = by_date[dt]
-        day, mon, parsed = _parse_day_mon(dt)
-        net = float(slot.get("fii_cash", 0)) + float(slot.get("dii_cash", 0))
-        ninfo = nifty_by_day.get(dt) or {}
-        if not ninfo and parsed is not None:
-            ninfo = nifty_by_day.get(parsed.strftime("%d-%b-%Y")) or nifty_by_day.get(parsed.strftime("%Y-%m-%d")) or {}
-        out.append({
-            "day": day,
-            "month": mon,
-            "date": f"{day} {mon}".strip(),
-            "nifty": float(ninfo.get("close") or 0),
-            "nifty_chg": float(ninfo.get("chg") or 0),
-            "nifty_pct": float(ninfo.get("pct") or 0),
-            "net": net,
-            "net_deriv": float(slot.get("net_deriv") or 0),
-            "fii_cash": float(slot.get("fii_cash") or 0),
-            "dii_cash": float(slot.get("dii_cash") or 0),
-            "fii_idx_fut": float(slot.get("fii_idx_fut") or 0),
-            "fii_idx_opt": float(slot.get("fii_idx_opt") or 0),
-            "fii_stk_fut": float(slot.get("fii_stk_fut") or 0),
-            "fii_stk_opt": float(slot.get("fii_stk_opt") or 0),
-        })
-        if len(out) >= n_days:
-            break
-
-    # If NSE only returned 1 day (common), still show that card rather than empty
-    return out
+    return out[:n_days]
 
 
 # ---------- Nifty 50 Heatmap ----------
@@ -4253,7 +4295,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.1 — MCX INR quotes · commodity OC/OI · FII NSE · no page-stop")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.2 — MidSelect fix · FII 10-day compact · MCX snapshot")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -5292,8 +5334,8 @@ st.markdown("---")
 # -------------------------------------------------
 st.markdown('<div class="section-header">🏦 FII / DII Activity — Last 10 Sessions</div>', unsafe_allow_html=True)
 st.caption(
-    "Daily institutional flow (₹ Cr). Green card = overall Net buy, Red = Net sell. "
-    "Source: research360.in/market/fii-dii-data (primary) · NSE fiidiiTradeReact (cash fallback)."
+    "Daily institutional cash flow (₹ Cr). Top colour band: green = Net buy, red = Net sell. "
+    "Source: niftytrader.in series (rolling 10 sessions) · NSE fallback."
 )
 _fii_rows = get_fii_dii_sessions(10)
 if not _fii_rows:
@@ -5320,23 +5362,33 @@ else:
         if it.get("nifty"):
             sign = "+" if nchg >= 0 else ""
             nifty_s = (
-                f'<div class="fii-nifty">Nifty {it["nifty"]:,.2f} '
+                f'<div class="fii-nifty">Nifty {it["nifty"]:,.2f}<br>'
                 f'<span class="{_cls(nchg)}">{sign}{nchg:.2f} ({sign}{npct:.2f}%)</span></div>'
+            )
+        # Cash-focused compact body (derivative legs often 0 from cash-only feed)
+        body_rows = (
+            f'<div class="fii-net {_cls(net)}">Net {_fmt_cr(net)}</div>'
+            f'<div class="fii-row"><span>FII Cash</span><span class="{_cls(it.get("fii_cash"))}">{_fmt_cr(it.get("fii_cash"))}</span></div>'
+            f'<div class="fii-row"><span>DII Cash</span><span class="{_cls(it.get("dii_cash"))}">{_fmt_cr(it.get("dii_cash"))}</span></div>'
+        )
+        # Show derivative rows only when any non-zero value exists
+        deriv_vals = [it.get("net_deriv"), it.get("fii_idx_fut"), it.get("fii_idx_opt"),
+                      it.get("fii_stk_fut"), it.get("fii_stk_opt")]
+        if any(abs(float(v or 0)) > 0.01 for v in deriv_vals):
+            body_rows += (
+                f'<div class="fii-row"><span>Net Deriv</span><span class="{_cls(it.get("net_deriv"))}">{_fmt_cr(it.get("net_deriv"))}</span></div>'
+                f'<div class="fii-row"><span>Idx Fut</span><span class="{_cls(it.get("fii_idx_fut"))}">{_fmt_cr(it.get("fii_idx_fut"))}</span></div>'
+                f'<div class="fii-row"><span>Idx Opt</span><span class="{_cls(it.get("fii_idx_opt"))}">{_fmt_cr(it.get("fii_idx_opt"))}</span></div>'
             )
         cards_html.append(
             f'<div class="fii-card {tone}">'
+            f'<div class="fii-band"></div>'
+            f'<div class="fii-body">'
             f'<div class="fii-date">{it.get("day","")}</div>'
             f'<div class="fii-month">{it.get("month","")}</div>'
             f'{nifty_s}'
-            f'<div class="fii-net {_cls(net)}">Net {_fmt_cr(net)}</div>'
-            f'<div class="fii-row"><span>Net Derivatives</span><span class="{_cls(it.get("net_deriv"))}">{_fmt_cr(it.get("net_deriv"))}</span></div>'
-            f'<div class="fii-row"><span>FII Cash</span><span class="{_cls(it.get("fii_cash"))}">{_fmt_cr(it.get("fii_cash"))}</span></div>'
-            f'<div class="fii-row"><span>DII Cash</span><span class="{_cls(it.get("dii_cash"))}">{_fmt_cr(it.get("dii_cash"))}</span></div>'
-            f'<div class="fii-row"><span>FII Idx Fut</span><span class="{_cls(it.get("fii_idx_fut"))}">{_fmt_cr(it.get("fii_idx_fut"))}</span></div>'
-            f'<div class="fii-row"><span>FII Idx Opt</span><span class="{_cls(it.get("fii_idx_opt"))}">{_fmt_cr(it.get("fii_idx_opt"))}</span></div>'
-            f'<div class="fii-row"><span>FII Stk Fut</span><span class="{_cls(it.get("fii_stk_fut"))}">{_fmt_cr(it.get("fii_stk_fut"))}</span></div>'
-            f'<div class="fii-row"><span>FII Stk Opt</span><span class="{_cls(it.get("fii_stk_opt"))}">{_fmt_cr(it.get("fii_stk_opt"))}</span></div>'
-            f'</div>'
+            f'{body_rows}'
+            f'</div></div>'
         )
     cards_html.append("</div>")
     st.markdown("".join(cards_html), unsafe_allow_html=True)
