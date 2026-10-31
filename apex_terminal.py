@@ -1,4 +1,8 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-31 (v7.7.2)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-31 (v7.7.3)
+# v7.7.3:
+# 1) NIFTYMIDSELECT Instant Snapshot via Moneycontrol JSON API (ind_id=128).
+# 2) Mid Select candle + Renko from Moneycontrol techCharts history (mc;nmidcaps).
+# 3) Fixed MC HTML URL (nifty-midcap-select-128.html).
 # v7.7.2:
 # 1) NIFTYMIDSELECT snapshot + charts via fetch_midcap_select (MC/Investing/TV) + Midcap100 OHLC fallback.
 # 2) FII/DII: 10-day rolling from niftytrader series; compact 5/3/2 grid; colour band + readable body.
@@ -1606,6 +1610,65 @@ def fetch_gift_nifty_50():
 
 
 @st.cache_data(ttl=45, show_spinner=False)
+
+@st.cache_data(ttl=90, show_spinner=False)
+def get_midselect_ohlc(interval: str = "1d", period: str = "3mo"):
+    """Nifty Mid Select OHLC from Moneycontrol techCharts (symbol mc;nmidcaps).
+    Returns DataFrame with Date, Open, High, Low, Close, Volume — same shape as get_ohlc_data.
+    """
+    try:
+        import time as _time
+        now = int(_time.time())
+        period = (period or "3mo").lower()
+        days = {"5d": 7, "1mo": 35, "3mo": 100, "6mo": 200, "1y": 400}.get(period, 100)
+        start = now - days * 86400
+        # Map UI interval → MC resolution
+        res_map = {"1d": "1D", "1h": "60", "30m": "30", "15m": "15"}
+        resolution = res_map.get(interval, "1D")
+        if resolution != "1D":
+            # intraday: shorter window
+            start = now - 10 * 86400
+            countback = 400
+        else:
+            countback = max(days, 60)
+        url = (
+            "https://priceapi.moneycontrol.com/techCharts/indianMarket/index/history"
+            f"?symbol=mc%3Bnmidcaps&resolution={resolution}&from={start}&to={now}"
+            f"&countback={countback}&currencyCode=INR"
+        )
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.moneycontrol.com/indian-indices/nifty-midcap-select-128.html",
+            "Accept": "application/json",
+        }
+        r = requests.get(url, headers=headers, timeout=12)
+        data = r.json() if r.status_code == 200 else {}
+        if data.get("s") != "ok":
+            return None
+        ts = data.get("t") or []
+        if not ts:
+            return None
+        rows = []
+        for i in range(len(ts)):
+            try:
+                rows.append({
+                    "Date": pd.to_datetime(int(ts[i]), unit="s"),
+                    "Open": float(data["o"][i]),
+                    "High": float(data["h"][i]),
+                    "Low": float(data["l"][i]),
+                    "Close": float(data["c"][i]),
+                    "Volume": float((data.get("v") or [0] * len(ts))[i] or 0),
+                })
+            except Exception:
+                continue
+        if not rows:
+            return None
+        df = pd.DataFrame(rows)
+        return df
+    except Exception:
+        return None
+
+
 def fetch_midcap_select():
     """Nifty Mid Select from Moneycontrol + Investing.com; prefer the quote with the newest parseable timestamp."""
     ist = pytz.timezone("Asia/Kolkata")
@@ -1664,10 +1727,35 @@ def fetch_midcap_select():
         except (TypeError, ValueError):
             pass
 
-    # 1) Moneycontrol — https://www.moneycontrol.com/indian-indices/nifty-mid-select-128.html
+    # 0) Moneycontrol JSON API (most reliable for live LTP)
+    try:
+        jr = requests.get(
+            "https://appfeeds.moneycontrol.com/jsonapi/market/indices&ind_id=128",
+            headers={**headers, "Referer": "https://www.moneycontrol.com/", "Accept": "application/json"},
+            timeout=10,
+        )
+        if jr.status_code == 200 and jr.text:
+            j = jr.json() or {}
+            ind = j.get("indices") or {}
+            def _f(x):
+                try:
+                    return float(str(x).replace(",", ""))
+                except Exception:
+                    return None
+            price = _f(ind.get("lastprice"))
+            change = _f(ind.get("change")) or 0.0
+            pct = _f(ind.get("percentchange")) or 0.0
+            if price and 5000 < price < 30000:
+                ts = parse_ts(str(ind.get("lastupdated") or ""))
+                add_cand(price, change, pct, "Moneycontrol Nifty Mid Select", ts)
+                # also stash OHLC of the day for summary consumers via session is not needed
+    except Exception:
+        pass
+
+    # 1) Moneycontrol HTML page fallback — correct URL is nifty-midcap-select-128.html
     try:
         r = requests.get(
-            "https://www.moneycontrol.com/indian-indices/nifty-mid-select-128.html",
+            "https://www.moneycontrol.com/indian-indices/nifty-midcap-select-128.html",
             headers={**headers, "Referer": "https://www.moneycontrol.com/"},
             timeout=8,
         )
@@ -1800,6 +1888,11 @@ def fetch_stock_data(symbol: str):
 def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
     try:
         meta = resolve_instrument(symbol)
+        # Nifty Mid Select: Moneycontrol techCharts (true Mid Select history)
+        if meta["kind"] == "midselect":
+            mid_df = get_midselect_ohlc(interval=interval, period=period)
+            if mid_df is not None and not mid_df.empty:
+                return mid_df
         t = yf.Ticker(meta["yf"])
         if interval in ["30m", "1h"]:
             period = "1mo" if interval == "1h" else "5d"
@@ -1833,8 +1926,14 @@ def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
 def get_daily_atr(symbol: str, atr_period: int = 14, lookback_days: int = 30):
     try:
         meta = resolve_instrument(symbol)
-        t = yf.Ticker(meta["yf"])
-        df = t.history(period="2mo", interval="1d")
+        df = None
+        if meta["kind"] == "midselect":
+            mid_df = get_midselect_ohlc(interval="1d", period="3mo")
+            if mid_df is not None and not mid_df.empty:
+                df = mid_df.set_index("Date")
+        if df is None or (hasattr(df, "empty") and df.empty):
+            t = yf.Ticker(meta["yf"])
+            df = t.history(period="2mo", interval="1d")
         # Scale USD commodity hist → MCX INR for Renko box sizing
         if meta["kind"] == "commodity" and not df.empty:
             try:
@@ -2740,19 +2839,31 @@ def get_stock_summary_analytics(symbol: str):
         start_d = (now_ist - pd.Timedelta(days=30)).date()
 
         hist = None
-        for kwargs in (
-            dict(start=start_d.isoformat(), end=end_d.isoformat(), interval="1d", auto_adjust=True),
-            dict(period="1mo", interval="1d", auto_adjust=True),
-            dict(period="1mo"),
-        ):
+        # Mid Select: prefer Moneycontrol daily history (true index levels)
+        if meta.get("kind") == "midselect":
             try:
-                h = t.history(**kwargs)
-                if h is not None and not h.empty and len(h.dropna(subset=["Close"])) >= 5:
-                    hist = h
-                    break
+                mid_df = get_midselect_ohlc(interval="1d", period="1mo")
+                if mid_df is not None and not mid_df.empty and len(mid_df) >= 5:
+                    hist = mid_df.set_index("Date")[["Open", "High", "Low", "Close", "Volume"]].copy()
             except Exception:
-                continue
+                hist = None
+        if hist is None:
+            for kwargs in (
+                dict(start=start_d.isoformat(), end=end_d.isoformat(), interval="1d", auto_adjust=True),
+                dict(period="1mo", interval="1d", auto_adjust=True),
+                dict(period="1mo"),
+            ):
+                try:
+                    h = t.history(**kwargs)
+                    if h is not None and not h.empty and len(h.dropna(subset=["Close"])) >= 5:
+                        hist = h
+                        break
+                except Exception:
+                    continue
         if hist is None or hist.empty:
+            # last-chance: midselect live-only summary already handled in except below
+            if meta.get("kind") == "midselect" and mid_live and mid_live.get("price"):
+                raise RuntimeError("midselect_live_only")
             return None
 
         hist = hist.dropna(subset=["Close"]).copy()
@@ -4295,7 +4406,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.2 — MidSelect fix · FII 10-day compact · MCX snapshot")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.3 — MidSelect MC JSON + OHLC charts · FII 10-day")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -4355,7 +4466,7 @@ with col3:
             fetch_tradingeconomics_commodity, fetch_stock_data, get_option_sentiment,
             get_options_chain, fetch_option_chain_full, get_stock_summary_analytics, get_index_analytics,
             get_nifty50_heatmap, get_most_active, get_market_breadth, get_top_movers,
-            get_fno_builtup, get_fii_dii_sessions, fetch_mcx_quotes, fetch_commodity_option_chain,
+            get_fno_builtup, get_fii_dii_sessions, fetch_mcx_quotes, fetch_commodity_option_chain, get_midselect_ohlc, fetch_midcap_select,
         ):
             try:
                 _fn.clear()
