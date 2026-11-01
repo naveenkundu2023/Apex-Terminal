@@ -252,6 +252,62 @@ def apply_theme(theme: str):
                 letter-spacing: 0.2px; margin-bottom: 6px; text-transform: uppercase;
             }
 
+            .movers-grid {
+                display: grid;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+                gap: 8px;
+                width: 100%;
+                margin-bottom: 8px;
+            }
+            @media (max-width: 900px) {
+                .movers-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+            }
+            @media (max-width: 520px) {
+                .movers-grid { grid-template-columns: 1fr; }
+            }
+            .movers-panel {
+                background: rgba(30,41,59,0.75);
+                border: 1px solid rgba(148,163,184,0.28);
+                border-radius: 10px;
+                padding: 6px 6px 4px 6px;
+                overflow: hidden;
+            }
+            .movers-panel .movers-h {
+                font-size: 10px !important;
+                font-weight: 700;
+                letter-spacing: 0.3px;
+                text-transform: uppercase;
+                margin: 0 0 4px 2px;
+                color: #c7d2fe;
+            }
+            .movers-tbl {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 10px;
+                line-height: 1.15;
+            }
+            .movers-tbl th {
+                font-size: 9px;
+                font-weight: 600;
+                color: #94a3b8;
+                text-align: right;
+                padding: 1px 3px 3px 3px;
+                border-bottom: 1px solid rgba(148,163,184,0.25);
+            }
+            .movers-tbl th:first-child { text-align: left; }
+            .movers-tbl td {
+                padding: 2px 3px;
+                text-align: right;
+                color: #e2e8f0;
+                white-space: nowrap;
+            }
+            .movers-tbl td.m-sym { text-align: left; font-weight: 600; color: #f1f5f9; }
+            .movers-tbl td.m-pos { color: #34d399; font-weight: 600; }
+            .movers-tbl td.m-neg { color: #f87171; font-weight: 600; }
+            .movers-tbl td.m-muted { color: #94a3b8; font-size: 9px; }
+            .movers-tbl tr:nth-child(even) td { background: rgba(148,163,184,0.06); }
+
+
             /* === v7.4 Dashboard polish === */
             .dash-topbar {
                 display: flex; align-items: center; justify-content: space-between;
@@ -632,6 +688,63 @@ def apply_theme(theme: str):
                 font-size: 12px; font-weight: 700; color: #4338ca;
                 letter-spacing: 0.2px; margin-bottom: 6px; text-transform: uppercase;
             }
+
+            .movers-grid {
+                display: grid;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+                gap: 8px;
+                width: 100%;
+                margin-bottom: 8px;
+            }
+            @media (max-width: 900px) {
+                .movers-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+            }
+            @media (max-width: 520px) {
+                .movers-grid { grid-template-columns: 1fr; }
+            }
+            .movers-panel {
+                background: #ffffff;
+                border: 1px solid #c7d2fe;
+                border-radius: 10px;
+                padding: 6px 6px 4px 6px;
+                overflow: hidden;
+                box-shadow: 0 1px 4px rgba(99,102,241,0.06);
+            }
+            .movers-panel .movers-h {
+                font-size: 10px !important;
+                font-weight: 700;
+                letter-spacing: 0.3px;
+                text-transform: uppercase;
+                margin: 0 0 4px 2px;
+                color: #4338ca;
+            }
+            .movers-tbl {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 10px;
+                line-height: 1.15;
+            }
+            .movers-tbl th {
+                font-size: 9px;
+                font-weight: 600;
+                color: #64748b;
+                text-align: right;
+                padding: 1px 3px 3px 3px;
+                border-bottom: 1px solid #e2e8f0;
+            }
+            .movers-tbl th:first-child { text-align: left; }
+            .movers-tbl td {
+                padding: 2px 3px;
+                text-align: right;
+                color: #0f172a;
+                white-space: nowrap;
+            }
+            .movers-tbl td.m-sym { text-align: left; font-weight: 600; color: #0f172a; }
+            .movers-tbl td.m-pos { color: #059669; font-weight: 600; }
+            .movers-tbl td.m-neg { color: #dc2626; font-weight: 600; }
+            .movers-tbl td.m-muted { color: #64748b; font-size: 9px; }
+            .movers-tbl tr:nth-child(even) td { background: #f8fafc; }
+
 
             /* === v7.4 Dashboard polish (light) === */
             .dash-topbar {
@@ -5531,63 +5644,131 @@ else:
 # Gainers / Losers
 # -------------------------------------------------
 st.markdown('<div class="section-header">Top Gainers, Losers & Most Active</div>', unsafe_allow_html=True)
-st.caption("Gainers / Losers from Nifty 50 · Most Active from NSE (Yahoo fallback). Desktop: 4 panels in one row.")
+st.caption("Nifty 50 gainers/losers · NSE most-active (Yahoo fallback). Top 10 each — compact, no scroll.")
 
 gainers, losers = get_top_movers(universe)
 ma_val = get_most_active("value")
 ma_vol = get_most_active("volume")
 
-# Single row of 4 compact panels (desktop). On narrow screens Streamlit keeps columns but tables stay usable.
-gcol, lcol, mac1, mac2 = st.columns(4)
-with gcol:
-    st.markdown('<div class="movers-h">Top Gainers</div>', unsafe_allow_html=True)
-    if gainers is not None and not gainers.empty:
-        _g = gainers.copy()
-        if len(_g) > 8:
-            _g = _g.head(8)
-        st.dataframe(
-            _g.style.format({"LTP": "₹{:,.1f}", "Change": "{:+.1f}", "% Chg": "{:+.1f}%"}),
-            use_container_width=True, hide_index=True, height=280,
+def _movers_table(title, rows_html, tone=""):
+    """Ultra-compact HTML table — all 10 rows visible without internal scroll."""
+    return (
+        f'<div class="movers-panel {tone}">'
+        f'<div class="movers-h">{title}</div>'
+        f'<table class="movers-tbl"><thead><tr>{rows_html}</table>'
+        f'</div>'
+    )
+
+def _fmt_pct(v):
+    try:
+        return f"{float(v):+.1f}"
+    except Exception:
+        return "—"
+
+def _fmt_px(v):
+    try:
+        return f"{float(v):,.1f}"
+    except Exception:
+        return "—"
+
+def _fmt_vol(v):
+    try:
+        v = float(v)
+        if v >= 1e7:
+            return f"{v/1e7:.1f}Cr"
+        if v >= 1e5:
+            return f"{v/1e5:.1f}L"
+        return f"{v:,.0f}"
+    except Exception:
+        return "—"
+
+def _fmt_val_lakh(v):
+    try:
+        v = float(v)
+        if abs(v) >= 1000:
+            return f"{v/100:.1f}Cr"
+        return f"{v:.0f}L"
+    except Exception:
+        return "—"
+
+# Build 4 compact HTML panels (top 10, fixed density — no Streamlit scrollbars)
+panels = []
+
+# Gainers
+gh = '<th>Sym</th><th>LTP</th><th>%</th></tr></thead><tbody>'
+if gainers is not None and not gainers.empty:
+    for _, r in gainers.head(10).iterrows():
+        sym = str(r.get("Symbol") or r.get("Stock") or "")
+        gh += (
+            f'<tr><td class="m-sym">{sym}</td>'
+            f'<td>{_fmt_px(r.get("LTP"))}</td>'
+            f'<td class="m-pos">{_fmt_pct(r.get("% Chg"))}</td></tr>'
         )
-    else:
-        st.caption("Loading…")
-with lcol:
-    st.markdown('<div class="movers-h">Top Losers</div>', unsafe_allow_html=True)
-    if losers is not None and not losers.empty:
-        _l = losers.copy()
-        if len(_l) > 8:
-            _l = _l.head(8)
-        st.dataframe(
-            _l.style.format({"LTP": "₹{:,.1f}", "Change": "{:+.1f}", "% Chg": "{:+.1f}%"}),
-            use_container_width=True, hide_index=True, height=280,
+else:
+    gh += '<tr><td colspan="3">—</td></tr>'
+gh += "</tbody>"
+panels.append(_movers_table("Top Gainers", gh, "up"))
+
+# Losers
+lh = '<th>Sym</th><th>LTP</th><th>%</th></tr></thead><tbody>'
+if losers is not None and not losers.empty:
+    for _, r in losers.head(10).iterrows():
+        sym = str(r.get("Symbol") or r.get("Stock") or "")
+        lh += (
+            f'<tr><td class="m-sym">{sym}</td>'
+            f'<td>{_fmt_px(r.get("LTP"))}</td>'
+            f'<td class="m-neg">{_fmt_pct(r.get("% Chg"))}</td></tr>'
         )
-    else:
-        st.caption("Loading…")
-with mac1:
-    st.markdown('<div class="movers-h">Active · Value</div>', unsafe_allow_html=True)
-    if not ma_val.empty:
-        _v = ma_val.head(8).copy()
-        # Drop bulky cols if present to fit narrow panel
-        drop_cols = [c for c in ("Volume",) if c in _v.columns]
-        _show = _v.drop(columns=drop_cols, errors="ignore")
-        fmt = {"LTP": "₹{:,.1f}", "% Chg": "{:+.1f}%"}
-        if "Value (₹ Lakh)" in _show.columns:
-            fmt["Value (₹ Lakh)"] = "{:,.0f}"
-        st.dataframe(_show.style.format(fmt), use_container_width=True, hide_index=True, height=280)
-    else:
-        st.caption("Unavailable")
-with mac2:
-    st.markdown('<div class="movers-h">Active · Volume</div>', unsafe_allow_html=True)
-    if not ma_vol.empty:
-        _o = ma_vol.head(8).copy()
-        drop_cols = [c for c in ("Value (₹ Lakh)",) if c in _o.columns]
-        _show = _o.drop(columns=drop_cols, errors="ignore")
-        fmt = {"LTP": "₹{:,.1f}", "% Chg": "{:+.1f}%"}
-        if "Volume" in _show.columns:
-            fmt["Volume"] = "{:,.0f}"
-        st.dataframe(_show.style.format(fmt), use_container_width=True, hide_index=True, height=280)
-    else:
-        st.caption("Unavailable")
+else:
+    lh += '<tr><td colspan="3">—</td></tr>'
+lh += "</tbody>"
+panels.append(_movers_table("Top Losers", lh, "down"))
+
+# Active Value
+vh = '<th>Sym</th><th>LTP</th><th>%</th><th>Val</th></tr></thead><tbody>'
+if ma_val is not None and not ma_val.empty:
+    for _, r in ma_val.head(10).iterrows():
+        sym = str(r.get("Symbol") or r.get("Stock") or "")
+        val = r.get("Value (₹ Lakh)", r.get("Value", ""))
+        try:
+            _pc = "m-pos" if float(r.get("% Chg") or 0) >= 0 else "m-neg"
+        except Exception:
+            _pc = "m-muted"
+        vh += (
+            f'<tr><td class="m-sym">{sym}</td>'
+            f'<td>{_fmt_px(r.get("LTP"))}</td>'
+            f'<td class="{_pc}">{_fmt_pct(r.get("% Chg"))}</td>'
+            f'<td class="m-muted">{_fmt_val_lakh(val)}</td></tr>'
+        )
+else:
+    vh += '<tr><td colspan="4">—</td></tr>'
+vh += "</tbody>"
+panels.append(_movers_table("Active · Value", vh))
+
+# Active Volume
+oh = '<th>Sym</th><th>LTP</th><th>%</th><th>Vol</th></tr></thead><tbody>'
+if ma_vol is not None and not ma_vol.empty:
+    for _, r in ma_vol.head(10).iterrows():
+        sym = str(r.get("Symbol") or r.get("Stock") or "")
+        try:
+            _pc = "m-pos" if float(r.get("% Chg") or 0) >= 0 else "m-neg"
+        except Exception:
+            _pc = "m-muted"
+        oh += (
+            f'<tr><td class="m-sym">{sym}</td>'
+            f'<td>{_fmt_px(r.get("LTP"))}</td>'
+            f'<td class="{_pc}">{_fmt_pct(r.get("% Chg"))}</td>'
+            f'<td class="m-muted">{_fmt_vol(r.get("Volume"))}</td></tr>'
+        )
+else:
+    oh += '<tr><td colspan="4">—</td></tr>'
+oh += "</tbody>"
+panels.append(_movers_table("Active · Volume", oh))
+
+st.markdown(
+    '<div class="movers-grid">' + "".join(panels) + "</div>",
+    unsafe_allow_html=True,
+)
 
 st.markdown("---")
 
