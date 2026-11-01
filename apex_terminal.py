@@ -1,4 +1,13 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-10-31 (v7.7.3)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-11-01 (v7.7.4)
+# v7.7.4 (institutional polish + FII/DII + OI + heatmap + news + macro + built-up):
+# 1) OI chart: ATM / Max Pain labels no longer overlap (legend + opposite anchors).
+# 2) Nifty 50 Heatmap: 10 equal cells per row on desktop (tablet/mobile unchanged).
+# 3) FII/DII: thicker colour band (3x), always show Idx Fut/Opt + Stk Fut/Opt legs;
+#    band colour from cash net; clearer caption; multi-source attempt (NiftyTrader/NSE/MC).
+# 4) Top news expanded to Top 10 + broader sources (Bloomberg, CNBC Asia, FE, Zee, etc.).
+# 5) Built-up: institutional summary strip + conviction names + regime read.
+# 6) Global Macro rewritten as Key Drivers / Risk Radar / India Implication (no quote dump).
+# 7) Light institutional CSS (cleaner headers, denser FII cards, reduced emoji noise).
 # v7.7.3:
 # 1) NIFTYMIDSELECT Instant Snapshot via Moneycontrol JSON API (ind_id=128).
 # 2) Mid Select candle + Renko from Moneycontrol techCharts history (mc;nmidcaps).
@@ -314,14 +323,14 @@ def apply_theme(theme: str):
 
             /* === v7.6: Heatmap — equal-size responsive grid (5 cols desktop / 4 tablet / 3 mobile) === */
             .heat-grid {
-                display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
-                gap: 6px; width: 100%;
+                display: grid; grid-template-columns: repeat(10, minmax(0, 1fr));
+                gap: 5px; width: 100%;
             }
             .heat-grid .heat-cell {
-                width: auto !important; margin: 0 !important; padding: 8px 2px !important;
-                min-height: 74px; display: flex; flex-direction: column;
-                align-items: center; justify-content: center; gap: 2px;
-                box-sizing: border-box; overflow: hidden; line-height: 1.2;
+                width: auto !important; margin: 0 !important; padding: 6px 1px !important;
+                min-height: 68px; display: flex; flex-direction: column;
+                align-items: center; justify-content: center; gap: 1px;
+                box-sizing: border-box; overflow: hidden; line-height: 1.15;
             }
             .heat-grid .hc-sym {
                 font-size: clamp(11px, 2.9vw, 13px); font-weight: 700;
@@ -435,7 +444,7 @@ def apply_theme(theme: str):
                 color: #0f172a;
             }
             .fii-card .fii-band {
-                height: 6px; width: 100%;
+                height: 18px; width: 100%;
             }
             .fii-card.up .fii-band { background: linear-gradient(90deg, #16a34a, #4ade80); }
             .fii-card.down .fii-band { background: linear-gradient(90deg, #dc2626, #f87171); }
@@ -651,14 +660,14 @@ def apply_theme(theme: str):
 
             /* === v7.6: Heatmap — equal-size responsive grid (5 cols desktop / 4 tablet / 3 mobile) === */
             .heat-grid {
-                display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
-                gap: 6px; width: 100%;
+                display: grid; grid-template-columns: repeat(10, minmax(0, 1fr));
+                gap: 5px; width: 100%;
             }
             .heat-grid .heat-cell {
-                width: auto !important; margin: 0 !important; padding: 8px 2px !important;
-                min-height: 74px; display: flex; flex-direction: column;
-                align-items: center; justify-content: center; gap: 2px;
-                box-sizing: border-box; overflow: hidden; line-height: 1.2;
+                width: auto !important; margin: 0 !important; padding: 6px 1px !important;
+                min-height: 68px; display: flex; flex-direction: column;
+                align-items: center; justify-content: center; gap: 1px;
+                box-sizing: border-box; overflow: hidden; line-height: 1.15;
             }
             .heat-grid .hc-sym {
                 font-size: clamp(11px, 2.9vw, 13px); font-weight: 700;
@@ -773,7 +782,7 @@ def apply_theme(theme: str):
                 color: #0f172a;
             }
             .fii-card .fii-band {
-                height: 6px; width: 100%;
+                height: 18px; width: 100%;
             }
             .fii-card.up .fii-band { background: linear-gradient(90deg, #16a34a, #4ade80); }
             .fii-card.down .fii-band { background: linear-gradient(90deg, #dc2626, #f87171); }
@@ -4076,14 +4085,18 @@ def get_corporate_actions(universe: list):
 # ---------- Top 5 market-moving business news (30-min cache) ----------
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_top_business_news():
-    """Top India + global market-moving headlines. Prefers ET / Moneycontrol / FT / Bloomberg / TE context via Google News RSS."""
+    """Top India + global market-moving headlines (Top 10).
+    Sources prioritised via Google News RSS: ET, Moneycontrol, Bloomberg, CNBC Asia,
+    Financial Express, Zee Business, Dalal Street, Smartinvestor, Mint, BS, Reuters, FT.
+    """
     items = []
     queries = [
         "(India+OR+Nifty+OR+Sensex+OR+RBI+OR+FII+OR+Budget+OR+GST)+when:1d",
         "(Federal+Reserve+OR+US+inflation+OR+Treasury+OR+crude+oil+OR+geopolitics)+when:1d",
-        "(site:economictimes.indiatimes.com+OR+site:moneycontrol.com)+(market+OR+nifty+OR+stocks)+when:1d",
+        "(site:economictimes.indiatimes.com+OR+site:moneycontrol.com+OR+site:financialexpress.com)+(market+OR+nifty+OR+stocks)+when:1d",
         "(China+OR+Japan+OR+Hong+Kong+OR+Asia+markets+OR+trade+deal)+when:1d",
-        "(Bloomberg+OR+Financial+Times+OR+Trading+Economics)+(India+OR+Asia+OR+Fed+OR+oil)+when:1d",
+        "(Bloomberg+OR+CNBC+OR+%22Financial+Times%22+OR+Reuters)+(India+OR+Asia+OR+Fed+OR+oil)+when:1d",
+        "(site:zeebiz.com+OR+site:dsij.in+OR+site:smartinvestor.in+OR+site:livemint.com+OR+site:business-standard.com)+(nifty+OR+market+OR+FII)+when:1d",
     ]
     headers = {"User-Agent": "Mozilla/5.0"}
     seen = set()
@@ -4104,12 +4117,13 @@ def get_top_business_news():
                 for kw in ["fed", "rate", "oil", "crude", "treasury", "china", "india", "nifty",
                            "sensex", "trade", "war", "sanction", "inflation", "gdp", "stimulus",
                            "yen", "dollar", "bitcoin", "gold", "geopolit", "deal", "rbi", "fii",
-                           "budget", "gst", "sebi", "ipo", "earnings", "rupee", "bond"]:
+                           "budget", "gst", "sebi", "ipo", "earnings", "rupee", "bond", "fomc"]:
                     if kw in low:
                         score += 1
-                # Boost known India-relevant outlets in title suffix
                 for src in ["economic times", "moneycontrol", "bloomberg", "financial times",
-                            "reuters", "trading economics", "mint", "business standard"]:
+                            "reuters", "trading economics", "mint", "business standard",
+                            "cnbc", "financial express", "zee business", "zeebiz",
+                            "dalal street", "smartinvestor", "livemint"]:
                     if src in low:
                         score += 2
                 if score >= 1:
@@ -4118,7 +4132,7 @@ def get_top_business_news():
         except Exception:
             continue
     items.sort(key=lambda x: -x["score"])
-    return items[:6]
+    return items[:10]
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_china_asia_context():
@@ -4710,6 +4724,12 @@ if _oi_rows:
     mp_v = _chain_full.get("max_pain")
     _ann_atm = "#fbbf24" if st.session_state.theme == "dark" else "#b45309"
     _ann_mp = "#c4b5fd" if st.session_state.theme == "dark" else "#6d28d9"
+    # Determine chart mid for opposite-side anchoring (avoids desktop/mobile overlap)
+    try:
+        _strikes = plot_df["strike"].astype(float)
+        _mid_x = float((_strikes.min() + _strikes.max()) / 2.0) if len(_strikes) else 0
+    except Exception:
+        _mid_x = float(atm_v or 0)
     if atm_v:
         try:
             _atm_txt = f"ATM {int(round(float(atm_v)))}"
@@ -4717,20 +4737,27 @@ if _oi_rows:
             _atm_txt = f"ATM {atm_v}"
         shapes.append(dict(type="line", x0=atm_v, x1=atm_v, y0=0, y1=1, yref="paper",
                            line=dict(color=_ann_atm, width=2, dash="dash")))
+        # Anchor left of line if ATM is on right half; right of line if on left half
+        _ax = "left" if float(atm_v) >= _mid_x else "right"
         annotations.append(dict(
-            x=atm_v, y=1.06, yref="paper", text=_atm_txt, showarrow=False,
-            font=dict(size=12, color=_ann_atm, family="Inter, sans-serif"),
+            x=atm_v, y=1.08, yref="paper", text=_atm_txt, showarrow=False,
+            xanchor=_ax, font=dict(size=11, color=_ann_atm, family="Inter, sans-serif"),
         ))
-    if mp_v and mp_v != atm_v:
+    if mp_v and (not atm_v or abs(float(mp_v) - float(atm_v)) > 1):
         try:
             _mp_txt = f"Max Pain {int(round(float(mp_v)))}"
         except Exception:
             _mp_txt = f"Max Pain {mp_v}"
         shapes.append(dict(type="line", x0=mp_v, x1=mp_v, y0=0, y1=1, yref="paper",
                            line=dict(color=_ann_mp, width=2, dash="dot")))
+        # Prefer opposite side from ATM when both present
+        if atm_v:
+            _mx = "right" if float(atm_v) >= _mid_x else "left"
+        else:
+            _mx = "left" if float(mp_v) >= _mid_x else "right"
         annotations.append(dict(
-            x=mp_v, y=1.06, yref="paper", text=_mp_txt, showarrow=False,
-            font=dict(size=12, color=_ann_mp, family="Inter, sans-serif"),
+            x=mp_v, y=1.02, yref="paper", text=_mp_txt, showarrow=False,
+            xanchor=_mx, font=dict(size=11, color=_ann_mp, family="Inter, sans-serif"),
         ))
     _dark = st.session_state.theme == "dark"
     # High-contrast axis labels (white on dark / deep green-gray on light)
@@ -4894,7 +4921,7 @@ st.markdown("".join(_cards_html), unsafe_allow_html=True)
 st.markdown("---")
 
 # ========== Global Opening Commentary & Analytics ==========
-st.markdown('<div class="section-header">🌍 Global Opening Commentary & Index Analytics</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">Global Opening Commentary & Index Analytics</div>', unsafe_allow_html=True)
 
 nifty_an = get_index_analytics("^NSEI")
 bank_an = get_index_analytics("^NSEBANK")
@@ -4934,7 +4961,7 @@ with col_b:
     else:
         st.info("Bank Nifty analytics loading...")
 
-st.markdown("#### 🌏 Global Macro Dashboard — US, China & Asia")
+st.markdown("#### Global Macro Dashboard — US, China & Asia")
 
 macro_specs = [
     ("US Tech 100 Fut", "US_TECH_FUT", ("CME_MINI:NQ1!", "CME:NQ1!", "NASDAQ:NDX"), "US_TECH_FUT", "^NDX"),
@@ -4960,42 +4987,35 @@ with ThreadPoolExecutor(max_workers=8) as _mpool:
     for _label, _q in _mpool.map(_fetch_macro, macro_specs):
         macro_quotes[_label] = _q
 
-st.markdown(
-    '<div style="font-size:0.92rem; font-weight:600; margin-bottom:0.25rem;">Macro pointers</div>',
-    unsafe_allow_html=True,
-)
-macro_lines = []
-for label in ["US Tech 100 Fut", "US 30 Fut", "US 10Y yield", "DXY", "WTI crude"]:
-    q = macro_quotes.get(label)
-    if q:
-        macro_lines.append(f"**{label}:** {q['price']:,.2f} ({q['change']:+.2f}, {q['pct']:+.2f}%).")
-
-# Sharper China & Asia analysis (business-only + deep take)
+# --- Institutional-style Global Macro blocks ---
 china_asia = get_china_asia_context()
-macro_lines.append("**China & Asia (key business drivers):**")
-for p in china_asia[:6]:
-    macro_lines.append(f"• {p}")
 deep = get_china_asia_deep_take(china_asia)
-macro_lines.append("**Deep take on current scenario:**")
-for d in deep:
-    macro_lines.append(f"→ {d}")
 
-if macro_lines:
-    for line in macro_lines:
-        # Keep the existing content and order, but slightly reduce font size in this section.
-        rendered_line = line.replace("**", "")
-        if rendered_line.startswith("China & Asia") or rendered_line.startswith("Deep take"):
-            st.markdown(
-                f'<div style="font-size:0.92rem; font-weight:600; margin-top:0.35rem;">{rendered_line}</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f'<div style="font-size:0.92rem; line-height:1.35; margin-bottom:0.15rem;">{rendered_line}</div>',
-                unsafe_allow_html=True,
-            )
+# Key Drivers (quantified)
+drivers = []
+for label, key in [("US Tech 100 Fut", "US Tech 100 Fut"), ("US 30 Fut", "US 30 Fut"),
+                   ("US 10Y yield", "US 10Y yield"), ("DXY", "DXY"), ("WTI crude", "WTI crude")]:
+    q = macro_quotes.get(key)
+    if q:
+        direction = "higher" if q["pct"] > 0 else "lower"
+        drivers.append(f"{label} {q['price']:,.2f} ({q['pct']:+.2f}%) — {direction} overnight.")
+
+st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
+st.markdown("**Key Drivers Today**")
+if drivers:
+    for d in drivers:
+        st.markdown(f'<div style="font-size:0.9rem; line-height:1.4; margin-bottom:2px;">• {d}</div>', unsafe_allow_html=True)
 else:
-    st.info("Global macro quotes are temporarily unavailable.")
+    st.markdown('<div style="font-size:0.9rem;">Macro quotes temporarily unavailable.</div>', unsafe_allow_html=True)
+
+st.markdown("**Risk Radar (China & Asia)**")
+for p in china_asia[:4]:
+    st.markdown(f'<div style="font-size:0.9rem; line-height:1.35; margin-bottom:2px;">• {p}</div>', unsafe_allow_html=True)
+
+st.markdown("**India Open Implication**")
+for d in deep[:3]:
+    st.markdown(f'<div style="font-size:0.9rem; line-height:1.35; margin-bottom:2px;">→ {d}</div>', unsafe_allow_html=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
 # Rule-based global bias
 score = 0
@@ -5041,7 +5061,7 @@ st.caption("Transparent rule-based indicator only — not financial advice. Conf
 st.markdown("---")
 
 # ========== Market Breadth + PCR / Max Pain / IV ==========
-st.markdown('<div class="section-header">📊 Market Breadth, PCR, Max Pain & IV</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">Market Breadth, PCR, Max Pain & IV</div>', unsafe_allow_html=True)
 
 bullish_cnt, bearish_cnt = get_market_breadth(universe)
 nifty_sent = get_option_sentiment("NIFTY") or {}
@@ -5260,7 +5280,7 @@ st.markdown("---")
 # -------------------------------------------------
 # Intraday Renko Signal Scanner
 # -------------------------------------------------
-st.markdown('<div class="section-header">🎯 Intraday Renko Signals • BUY/Bullish (15m→30m→1H) then SELL/Bearish (15m→30m→1H)</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">Intraday Renko Signals · BUY/Bullish then SELL/Bearish (15m → 30m → 1H)</div>', unsafe_allow_html=True)
 st.caption("Only stocks with the latest two Renko bricks in the same direction are listed. BUY/SELL requires close above/below 20 EMA. ⚡ = Just entered (≤ 20 min). Order: all BUY then BULLISH by TF 15m→30m→1H (newest age on top), then all SELL then BEARISH same. Box size: Daily ATR ÷ 6 (1H) ÷ 2 (30M) ÷ 2 (15M).")
 
 scan_col1, scan_col2 = st.columns([1, 4])
@@ -5334,7 +5354,7 @@ else:
 # -------------------------------------------------
 # Gainers / Losers
 # -------------------------------------------------
-st.markdown('<div class="section-header">🏆 Top Gainers & Losers</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">Top Gainers & Losers</div>', unsafe_allow_html=True)
 gainers, losers = get_top_movers(universe)
 gcol, lcol = st.columns(2)
 with gcol:
@@ -5357,7 +5377,7 @@ st.markdown("---")
 # -------------------------------------------------
 # Most Active — Value & Volume (NSE, all stocks)
 # -------------------------------------------------
-st.markdown('<div class="section-header">🔥 Most Active Stocks (NSE — All Equities)</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">Most Active Stocks (NSE — All Equities)</div>', unsafe_allow_html=True)
 st.caption("Top 10 by traded value and by volume. Source: NSE live-analysis → Yahoo Nifty-50 fallback when NSE blocks (403).")
 
 ma_val = get_most_active("value")
@@ -5388,7 +5408,7 @@ st.markdown("---")
 # -------------------------------------------------
 # Nifty 50 Heatmap
 # -------------------------------------------------
-st.markdown('<div class="section-header">🗺️ Nifty 50 Heatmap</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">Nifty 50 Heatmap</div>', unsafe_allow_html=True)
 st.caption("Colour intensity = day % change. Green = up, Red = down.")
 
 heat_df = get_nifty50_heatmap(universe)
@@ -5443,10 +5463,11 @@ st.markdown("---")
 # -------------------------------------------------
 # FII / DII Activity (last 10 sessions) — v7.7
 # -------------------------------------------------
-st.markdown('<div class="section-header">🏦 FII / DII Activity — Last 10 Sessions</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">FII / DII Activity — Last 10 Sessions</div>', unsafe_allow_html=True)
 st.caption(
-    "Daily institutional cash flow (₹ Cr). Top colour band: green = Net buy, red = Net sell. "
-    "Source: niftytrader.in series (rolling 10 sessions) · NSE fallback."
+    "Daily institutional flow (₹ Cr). Thick colour band = Cash Net (FII+DII). "
+    "All four FII F&O legs are always shown (0 when source is cash-only). "
+    "Sources: NiftyTrader series · NSE fiidiiTradeReact · Moneycontrol F&O pages when parseable."
 )
 _fii_rows = get_fii_dii_sessions(10)
 if not _fii_rows:
@@ -5465,6 +5486,7 @@ else:
             return ""
     cards_html = ['<div class="fii-grid">']
     for it in _fii_rows:
+        # Colour band = cash institutional net (FII+DII cash). Documented in caption.
         net = float(it.get("net") or 0)
         tone = "up" if net >= 0 else "down"
         nchg = float(it.get("nifty_chg") or 0)
@@ -5476,21 +5498,19 @@ else:
                 f'<div class="fii-nifty">Nifty {it["nifty"]:,.2f}<br>'
                 f'<span class="{_cls(nchg)}">{sign}{nchg:.2f} ({sign}{npct:.2f}%)</span></div>'
             )
-        # Cash-focused compact body (derivative legs often 0 from cash-only feed)
+        # Always surface cash + all four FII F&O legs (0 / — when source has cash-only)
+        nd = float(it.get("net_deriv") or 0)
         body_rows = (
-            f'<div class="fii-net {_cls(net)}">Net {_fmt_cr(net)}</div>'
+            f'<div class="fii-net {_cls(net)}">Cash Net {_fmt_cr(net)}</div>'
             f'<div class="fii-row"><span>FII Cash</span><span class="{_cls(it.get("fii_cash"))}">{_fmt_cr(it.get("fii_cash"))}</span></div>'
             f'<div class="fii-row"><span>DII Cash</span><span class="{_cls(it.get("dii_cash"))}">{_fmt_cr(it.get("dii_cash"))}</span></div>'
+            f'<div class="fii-row" style="margin-top:3px;border-top:1px solid rgba(148,163,184,0.25);padding-top:3px;">'
+            f'<span>Net Deriv</span><span class="{_cls(nd)}">{_fmt_cr(nd)}</span></div>'
+            f'<div class="fii-row"><span>FII Idx Fut</span><span class="{_cls(it.get("fii_idx_fut"))}">{_fmt_cr(it.get("fii_idx_fut"))}</span></div>'
+            f'<div class="fii-row"><span>FII Idx Opt</span><span class="{_cls(it.get("fii_idx_opt"))}">{_fmt_cr(it.get("fii_idx_opt"))}</span></div>'
+            f'<div class="fii-row"><span>FII Stk Fut</span><span class="{_cls(it.get("fii_stk_fut"))}">{_fmt_cr(it.get("fii_stk_fut"))}</span></div>'
+            f'<div class="fii-row"><span>FII Stk Opt</span><span class="{_cls(it.get("fii_stk_opt"))}">{_fmt_cr(it.get("fii_stk_opt"))}</span></div>'
         )
-        # Show derivative rows only when any non-zero value exists
-        deriv_vals = [it.get("net_deriv"), it.get("fii_idx_fut"), it.get("fii_idx_opt"),
-                      it.get("fii_stk_fut"), it.get("fii_stk_opt")]
-        if any(abs(float(v or 0)) > 0.01 for v in deriv_vals):
-            body_rows += (
-                f'<div class="fii-row"><span>Net Deriv</span><span class="{_cls(it.get("net_deriv"))}">{_fmt_cr(it.get("net_deriv"))}</span></div>'
-                f'<div class="fii-row"><span>Idx Fut</span><span class="{_cls(it.get("fii_idx_fut"))}">{_fmt_cr(it.get("fii_idx_fut"))}</span></div>'
-                f'<div class="fii-row"><span>Idx Opt</span><span class="{_cls(it.get("fii_idx_opt"))}">{_fmt_cr(it.get("fii_idx_opt"))}</span></div>'
-            )
         cards_html.append(
             f'<div class="fii-card {tone}">'
             f'<div class="fii-band"></div>'
@@ -5503,13 +5523,18 @@ else:
         )
     cards_html.append("</div>")
     st.markdown("".join(cards_html), unsafe_allow_html=True)
+    st.caption(
+        "Colour band = Cash Net (FII Cash + DII Cash). Green = institutional cash buy day, red = sell day. "
+        "F&O legs shown when the feed provides them (NiftyTrader cash series; Moneycontrol / NSE for cash; "
+        "derivatives filled when available from secondary sources). Values in ₹ Cr."
+    )
 
 st.markdown("---")
 
 # -------------------------------------------------
 # Built-up Cycle · Most Active F&O Stocks (Quantsapp-style)
 # -------------------------------------------------
-st.markdown('<div class="section-header">🧱 Built-up Cycle · Most Active F&O Stocks</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">Built-up Cycle · Most Active F&O Stocks</div>', unsafe_allow_html=True)
 st.caption("Colour legend: 🟢 Long build-up · 🔴 Short build-up · 🔵 Short covering · 🟡 Long unwinding. "
            "Today = price% + volume-vs-avg proxy for OI%. Prior days use daily price/volume direction. "
            "Inspired by Quantsapp Built-up cycle. Refreshes with the main Refresh button.")
@@ -5556,18 +5581,36 @@ else:
     '''
     st.markdown(table, unsafe_allow_html=True)
 
-    # Deep independent assessment below the colour grid
+    # Deep independent assessment — institutional summary strip + conviction list
     bu_lines, bu_tone = assess_builtup_deep(bu_df)
-    st.markdown("#### 🧠 Built-up deep assessment & recommendation")
-    st.caption("Independent read of the grid: multi-day streaks + price% + volume/OI proxy — not colour cells alone.")
+    st.markdown("#### Built-up institutional read")
+    st.caption("Multi-day streaks × price% × volume/OI proxy. Regime summary first, then highest-conviction names.")
     assess_html = '<div class="analysis-box">'
-    assess_html += f'<div style="margin-bottom:8px;">{bu_tone}</div>'
+    assess_html += f'<div style="margin-bottom:10px;font-size:14px;font-weight:700;">{bu_tone}</div>'
+    # Quick counts from the dataframe for a regime strip
+    try:
+        today_codes = bu_df["Today"].value_counts().to_dict() if "Today" in bu_df.columns else {}
+        lb_c = int(today_codes.get("LB", 0))
+        sb_c = int(today_codes.get("SB", 0))
+        sc_c = int(today_codes.get("SC", 0))
+        lu_c = int(today_codes.get("LU", 0))
+        regime = (
+            f'<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;font-size:12px;">'
+            f'<span style="background:#059669;color:#fff;padding:3px 8px;border-radius:6px;">LB {lb_c}</span>'
+            f'<span style="background:#dc2626;color:#fff;padding:3px 8px;border-radius:6px;">SB {sb_c}</span>'
+            f'<span style="background:#2563eb;color:#fff;padding:3px 8px;border-radius:6px;">SC {sc_c}</span>'
+            f'<span style="background:#a3a30a;color:#fff;padding:3px 8px;border-radius:6px;">LU {lu_c}</span>'
+            f'</div>'
+        )
+        assess_html += regime
+    except Exception:
+        pass
     for line in bu_lines:
-        assess_html += f'<div style="margin-bottom:6px;">{line}</div>'
+        assess_html += f'<div style="margin-bottom:6px;font-size:13px;">{line}</div>'
     assess_html += (
-        '<div style="margin-top:8px;font-size:12px;color:#94a3b8;">'
-        'Use multi-day LB with rising price for long bias; multi-day SB with falling price for short bias. '
-        'SC after a decline can squeeze; LU after a rally often marks distribution. Not advice — confirm with price action.'
+        '<div style="margin-top:10px;font-size:12px;color:#94a3b8;">'
+        'Regime rule of thumb: multi-day LB + rising price → long bias on high-beta; multi-day SB + falling price → short bias. '
+        'SC after decline = squeeze risk; LU after rally = distribution. Confirm with price action and OI. Not financial advice.'
         '</div></div>'
     )
     st.markdown(assess_html, unsafe_allow_html=True)
@@ -5577,7 +5620,7 @@ st.markdown("---")
 # -------------------------------------------------
 # Corporate Actions + Upcoming Results (Nifty 50)  — v7.6.2 display
 # -------------------------------------------------
-st.markdown('<div class="section-header">📋 Corporate Actions & Upcoming Results — Nifty 50</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">Corporate Actions & Upcoming Results — Nifty 50</div>', unsafe_allow_html=True)
 st.caption(
     "Dividends, bonuses, splits, rights + Nifty 50 earnings/results over the next 10 days. "
     "Results: Moneycontrol NIFTY 50 results-calendar (id=9). Actions: NSE → Moneycontrol fallback."
@@ -5691,8 +5734,8 @@ st.markdown("---")
 # -------------------------------------------------
 # Top 5 Business News (30-min refresh)
 # -------------------------------------------------
-st.markdown('<div class="section-header">📰 Top 6 Market-Moving Business News</div>', unsafe_allow_html=True)
-st.caption("India-first + global headlines (ET / Moneycontrol / Bloomberg / FT / Trading Economics context via Google News). Auto-refreshes every 30 minutes.")
+st.markdown('<div class="section-header">Top 10 Market-Moving Business News</div>', unsafe_allow_html=True)
+st.caption("India-first + global headlines — ET, Moneycontrol, Bloomberg, CNBC Asia, Financial Express, Zee Business, Dalal Street, Smartinvestor, Mint, BS, Reuters, FT. Auto-refreshes every 30 minutes.")
 
 biz_news = get_top_business_news()
 
@@ -5701,7 +5744,7 @@ if not biz_news:
     st.info("News feed temporarily unavailable.")
 else:
     news_html = '<div class="news-box">'
-    for i, n in enumerate(biz_news[:6], 1):
+    for i, n in enumerate(biz_news[:10], 1):
         if n.get("link"):
             news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> <a href="{n["link"]}" target="_blank">{n["title"]}</a></div>'
         else:
