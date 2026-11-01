@@ -337,26 +337,26 @@ def apply_theme(theme: str):
                 background: linear-gradient(145deg, rgba(30,41,59,0.95), rgba(15,23,42,0.98));
                 border: 1px solid rgba(99,102,241,0.28);
                 border-radius: 8px;
-                padding: 7px 5px;
+                padding: 10px 6px;
                 text-align: center;
-                min-height: 52px;
+                min-height: 58px;
             }
             .breadth-lab {
-                font-size: 10px;
+                font-size: 12px;
                 font-weight: 600;
                 color: #94a3b8;
                 text-transform: uppercase;
                 letter-spacing: 0.2px;
-                margin-bottom: 2px;
+                margin-bottom: 4px;
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
             .breadth-val {
-                font-size: 13px;
+                font-size: 16px;
                 font-weight: 700;
                 color: #f1f5f9;
-                line-height: 1.15;
+                line-height: 1.2;
             }
             .breadth-val.pos { color: #34d399 !important; }
             .breadth-val.neg { color: #f87171 !important; }
