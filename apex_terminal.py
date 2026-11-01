@@ -229,14 +229,28 @@ def apply_theme(theme: str):
             .bu-sc { background: #2563eb; }   /* Short covering */
             .bu-lu { background: #a3a30a; }   /* Long unwinding */
             .bu-na { background: #475569; }   /* N/A */
-            .news-box, .ca-box {
+            .news-box {
                 background: linear-gradient(145deg, rgba(30,41,59,0.95), rgba(15,23,42,0.98));
                 border: 1px solid rgba(148,163,184,0.35);
                 border-radius: 10px; padding: 12px 16px; margin-bottom: 8px;
                 color: #f1f5f9 !important;
             }
-            .news-box a, .ca-box a { color: #a5b4fc !important; }
-            .news-box, .news-box * , .ca-box, .ca-box * { color: #e2e8f0 !important; }
+            .news-box a { color: #a5b4fc !important; }
+            .news-box, .news-box * { color: #e2e8f0 !important; }
+            /* Corporate actions / Results — same soft green as Instant Snapshot */
+            .ca-box {
+                background: #eaf6ed !important;
+                border: 1px solid #d3e9d8 !important;
+                border-radius: 10px; padding: 12px 16px; margin-bottom: 8px;
+                box-shadow: none !important;
+                color: #26332b !important;
+            }
+            .ca-box, .ca-box * { color: #26332b !important; }
+            .ca-box a { color: #166534 !important; }
+            .movers-h {
+                font-size: 12px; font-weight: 700; color: #c7d2fe;
+                letter-spacing: 0.2px; margin-bottom: 6px; text-transform: uppercase;
+            }
 
             /* === v7.4 Dashboard polish === */
             .dash-topbar {
@@ -386,19 +400,19 @@ def apply_theme(theme: str):
                 width: 100%;
             }
             .res-day {
-                background: rgba(30,41,59,0.75);
-                border: 1px solid rgba(99,102,241,0.28);
+                background: #f0faf3;
+                border: 1px solid #cfe8d6;
                 border-radius: 8px;
                 padding: 6px 4px;
                 text-align: center;
                 min-height: 64px;
             }
             .res-day .rd-date {
-                font-size: 11px; font-weight: 700; color: #c7d2fe;
+                font-size: 11px; font-weight: 700; color: #166534;
                 margin-bottom: 4px; white-space: nowrap;
             }
             .res-day .rd-syms {
-                font-size: 10px; font-weight: 600; color: #e2e8f0;
+                font-size: 10px; font-weight: 600; color: #26332b;
                 line-height: 1.25; word-break: break-word;
             }
             .res-day.empty .rd-syms { color: #64748b; font-weight: 500; }
@@ -585,12 +599,26 @@ def apply_theme(theme: str):
             .bu-sc { background: #2563eb; }
             .bu-lu { background: #a3a30a; }
             .bu-na { background: #94a3b8; }
-            .news-box, .ca-box {
+            .news-box {
                 background: #ffffff; border: 1px solid #c7d2fe;
                 border-radius: 10px; padding: 12px 16px; margin-bottom: 8px;
                 color: #0f172a !important; box-shadow: 0 2px 8px rgba(99,102,241,0.08);
             }
-            .news-box a, .ca-box a { color: #4f46e5 !important; }
+            .news-box a { color: #4f46e5 !important; }
+            /* Corporate actions / Results — same soft green as Instant Snapshot */
+            .ca-box {
+                background: #eaf6ed !important;
+                border: 1px solid #d3e9d8 !important;
+                border-radius: 10px; padding: 12px 16px; margin-bottom: 8px;
+                box-shadow: none !important;
+                color: #26332b !important;
+            }
+            .ca-box, .ca-box * { color: #26332b !important; }
+            .ca-box a { color: #166534 !important; }
+            .movers-h {
+                font-size: 12px; font-weight: 700; color: #4338ca;
+                letter-spacing: 0.2px; margin-bottom: 6px; text-transform: uppercase;
+            }
 
             /* === v7.4 Dashboard polish (light) === */
             .dash-topbar {
@@ -723,20 +751,20 @@ def apply_theme(theme: str):
                 width: 100%;
             }
             .res-day {
-                background: #ffffff;
-                border: 1px solid #c7d2fe;
+                background: #f0faf3;
+                border: 1px solid #cfe8d6;
                 border-radius: 8px;
                 padding: 6px 4px;
                 text-align: center;
                 min-height: 64px;
-                box-shadow: 0 1px 4px rgba(99,102,241,0.06);
+                box-shadow: none;
             }
             .res-day .rd-date {
-                font-size: 11px; font-weight: 700; color: #4338ca;
+                font-size: 11px; font-weight: 700; color: #166534;
                 margin-bottom: 4px; white-space: nowrap;
             }
             .res-day .rd-syms {
-                font-size: 10px; font-weight: 600; color: #0f172a;
+                font-size: 10px; font-weight: 600; color: #26332b;
                 line-height: 1.25; word-break: break-word;
             }
             .res-day.empty .rd-syms { color: #94a3b8; font-weight: 500; }
@@ -5360,7 +5388,7 @@ else:
     else:  # 15 Minutes
         box_size = base / 24.0
         box_label = f"Daily ATR / 24 ≈ ₹{box_size:.2f}"
-    st.caption(f"Renko Box Size: **{box_label}**  |  Timeframe: **{timeframe}**")
+    st.caption(f"Box size: **{box_label}**  ·  Timeframe: **{timeframe}**  ·  EMA 20 / EMA 50 on bricks")
     renko_df = generate_renko(candle_df, box_size)
     if renko_df.empty:
         st.info("Not enough price movement to generate Renko bricks.")
@@ -5376,13 +5404,23 @@ else:
         ))
         fig_r.add_trace(go.Scatter(x=renko_df["Brick"], y=renko_df["EMA20"], mode="lines", name="EMA 20", line=dict(color="#fbbf24", width=1.5)))
         fig_r.add_trace(go.Scatter(x=renko_df["Brick"], y=renko_df["EMA50"], mode="lines", name="EMA 50", line=dict(color="#60a5fa", width=1.8)))
-        fig_r.update_layout(height=420, title=dict(text=f"{selected} Renko • {timeframe}  |  Box ≈ ₹{box_size:.2f}", font=dict(color=axis_color, size=16)),
-                            xaxis_title=dict(text="Brick #", font=dict(color=axis_color)),
-                            yaxis_title=dict(text="Price (₹)", font=dict(color=axis_color)),
-                            xaxis_rangeslider_visible=False, template="plotly_dark" if is_dark else "plotly_white",
-                            margin=dict(l=20, r=20, t=50, b=20),
-                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=axis_color)),
-                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=axis_color), dragmode=False)
+        # Title without Box size (box size stays in caption above) — avoids overlap with EMA legend on mobile/tablet
+        fig_r.update_layout(
+            height=420,
+            title=dict(text=f"{selected} Renko • {timeframe}", font=dict(color=axis_color, size=14)),
+            xaxis_title=dict(text="Brick #", font=dict(color=axis_color)),
+            yaxis_title=dict(text="Price (₹)", font=dict(color=axis_color)),
+            xaxis_rangeslider_visible=False,
+            template="plotly_dark" if is_dark else "plotly_white",
+            margin=dict(l=16, r=16, t=40, b=56),
+            # Legend below plot so EMA 20 / EMA 50 never collide with title or box-size text on narrow screens
+            legend=dict(
+                orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5,
+                font=dict(color=axis_color, size=11),
+            ),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color=axis_color), dragmode=False,
+        )
         fig_r.update_xaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
         fig_r.update_yaxes(tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True)
         st.plotly_chart(fig_r, use_container_width=True, config=PLOTLY_CONFIG)
@@ -5466,54 +5504,64 @@ else:
 # -------------------------------------------------
 # Gainers / Losers
 # -------------------------------------------------
-st.markdown('<div class="section-header">Top Gainers & Losers</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">Top Gainers, Losers & Most Active</div>', unsafe_allow_html=True)
+st.caption("Gainers / Losers from Nifty 50 · Most Active from NSE (Yahoo fallback). Desktop: 4 panels in one row.")
+
 gainers, losers = get_top_movers(universe)
-gcol, lcol = st.columns(2)
-with gcol:
-    st.markdown("##### 🟢 Top Gainers")
-    if gainers is not None and not gainers.empty:
-        st.dataframe(gainers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
-                     use_container_width=True, hide_index=True)
-    else:
-        st.info("Loading...")
-with lcol:
-    st.markdown("##### 🔴 Top Losers")
-    if losers is not None and not losers.empty:
-        st.dataframe(losers.style.format({"LTP": "₹{:,.2f}", "Change": "{:+.2f}", "% Chg": "{:+.2f}%"}),
-                     use_container_width=True, hide_index=True)
-    else:
-        st.info("Loading...")
-
-st.markdown("---")
-
-# -------------------------------------------------
-# Most Active — Value & Volume (NSE, all stocks)
-# -------------------------------------------------
-st.markdown('<div class="section-header">Most Active Stocks (NSE — All Equities)</div>', unsafe_allow_html=True)
-st.caption("Top 10 by traded value and by volume. Source: NSE live-analysis → Yahoo Nifty-50 fallback when NSE blocks (403).")
-
 ma_val = get_most_active("value")
 ma_vol = get_most_active("volume")
 
-mac1, mac2 = st.columns(2)
+# Single row of 4 compact panels (desktop). On narrow screens Streamlit keeps columns but tables stay usable.
+gcol, lcol, mac1, mac2 = st.columns(4)
+with gcol:
+    st.markdown('<div class="movers-h">Top Gainers</div>', unsafe_allow_html=True)
+    if gainers is not None and not gainers.empty:
+        _g = gainers.copy()
+        if len(_g) > 8:
+            _g = _g.head(8)
+        st.dataframe(
+            _g.style.format({"LTP": "₹{:,.1f}", "Change": "{:+.1f}", "% Chg": "{:+.1f}%"}),
+            use_container_width=True, hide_index=True, height=280,
+        )
+    else:
+        st.caption("Loading…")
+with lcol:
+    st.markdown('<div class="movers-h">Top Losers</div>', unsafe_allow_html=True)
+    if losers is not None and not losers.empty:
+        _l = losers.copy()
+        if len(_l) > 8:
+            _l = _l.head(8)
+        st.dataframe(
+            _l.style.format({"LTP": "₹{:,.1f}", "Change": "{:+.1f}", "% Chg": "{:+.1f}%"}),
+            use_container_width=True, hide_index=True, height=280,
+        )
+    else:
+        st.caption("Loading…")
 with mac1:
-    st.markdown("##### 💰 Most Active by Value")
+    st.markdown('<div class="movers-h">Active · Value</div>', unsafe_allow_html=True)
     if not ma_val.empty:
-        st.dataframe(
-            ma_val.style.format({"LTP": "₹{:,.2f}", "% Chg": "{:+.2f}%", "Volume": "{:,.0f}", "Value (₹ Lakh)": "{:,.2f}"}),
-            use_container_width=True, hide_index=True
-        )
+        _v = ma_val.head(8).copy()
+        # Drop bulky cols if present to fit narrow panel
+        drop_cols = [c for c in ("Volume",) if c in _v.columns]
+        _show = _v.drop(columns=drop_cols, errors="ignore")
+        fmt = {"LTP": "₹{:,.1f}", "% Chg": "{:+.1f}%"}
+        if "Value (₹ Lakh)" in _show.columns:
+            fmt["Value (₹ Lakh)"] = "{:,.0f}"
+        st.dataframe(_show.style.format(fmt), use_container_width=True, hide_index=True, height=280)
     else:
-        st.info("Most-active value list temporarily unavailable (NSE 403 / throttle). Yahoo fallback also empty — try Fast Refresh after market open.")
+        st.caption("Unavailable")
 with mac2:
-    st.markdown("##### 📦 Most Active by Volume")
+    st.markdown('<div class="movers-h">Active · Volume</div>', unsafe_allow_html=True)
     if not ma_vol.empty:
-        st.dataframe(
-            ma_vol.style.format({"LTP": "₹{:,.2f}", "% Chg": "{:+.2f}%", "Volume": "{:,.0f}", "Value (₹ Lakh)": "{:,.2f}"}),
-            use_container_width=True, hide_index=True
-        )
+        _o = ma_vol.head(8).copy()
+        drop_cols = [c for c in ("Value (₹ Lakh)",) if c in _o.columns]
+        _show = _o.drop(columns=drop_cols, errors="ignore")
+        fmt = {"LTP": "₹{:,.1f}", "% Chg": "{:+.1f}%"}
+        if "Volume" in _show.columns:
+            fmt["Volume"] = "{:,.0f}"
+        st.dataframe(_show.style.format(fmt), use_container_width=True, hide_index=True, height=280)
     else:
-        st.info("Most-active volume list temporarily unavailable (NSE 403 / throttle). Yahoo fallback also empty — try Fast Refresh after market open.")
+        st.caption("Unavailable")
 
 st.markdown("---")
 
