@@ -417,6 +417,19 @@ def apply_theme(theme: str):
             }
             .res-day.empty .rd-syms { color: #64748b; font-weight: 500; }
 
+            .res-day.res-today {
+                background: #bbf7d0 !important;
+                border: 1px solid #4ade80 !important;
+            }
+            .res-day.res-near {
+                background: #e0f2fe !important;
+                border: 1px solid #bae6fd !important;
+            }
+            .res-day.res-later {
+                background: #f1f5f9 !important;
+                border: 1px solid #e2e8f0 !important;
+            }
+
             /* === v7.7: Equal-height Instant Snapshot + Options matrix cards === */
             .snap-opt-row {
                 display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch;
@@ -768,6 +781,19 @@ def apply_theme(theme: str):
                 line-height: 1.25; word-break: break-word;
             }
             .res-day.empty .rd-syms { color: #94a3b8; font-weight: 500; }
+
+            .res-day.res-today {
+                background: #bbf7d0 !important;
+                border: 1px solid #4ade80 !important;
+            }
+            .res-day.res-near {
+                background: #e0f2fe !important;
+                border: 1px solid #bae6fd !important;
+            }
+            .res-day.res-later {
+                background: #f1f5f9 !important;
+                border: 1px solid #e2e8f0 !important;
+            }
 
             /* === v7.7: Equal-height Instant Snapshot + Options matrix cards === */
             .snap-opt-row {
@@ -5865,7 +5891,7 @@ else:
             heading = "📊 Upcoming Results — next 10 days"
 
         cells = []
-        for d in day_list:
+        for i, d in enumerate(day_list):
             syms = by_date.get(d) or []
             label = d.strftime("%d %b")  # e.g. 30 Oct
             if syms:
@@ -5874,10 +5900,35 @@ else:
             else:
                 sym_txt = "—"
                 empty_cls = " empty"
+            # Today = stronger green (heatmap-like); later days = softer distinct tints
+            if d == _today:
+                day_cls = " res-today"
+                # inline fallback so it always shows even if CSS cache lags
+                style = (
+                    'background:#bbf7d0;border:1px solid #4ade80;'
+                    'box-shadow:0 0 0 1px rgba(22,163,74,0.25);'
+                )
+                date_style = "color:#14532d;"
+                sym_style = "color:#166534;"
+            elif i <= 2:
+                day_cls = " res-near"
+                style = "background:#e0f2fe;border:1px solid #bae6fd;"
+                date_style = "color:#075985;"
+                sym_style = "color:#0c4a6e;"
+            else:
+                day_cls = " res-later"
+                style = "background:#f1f5f9;border:1px solid #e2e8f0;"
+                date_style = "color:#475569;"
+                sym_style = "color:#334155;"
+            if empty_cls:
+                # keep empty days muted regardless of bucket
+                style = "background:#f8fafc;border:1px solid #e2e8f0;"
+                date_style = "color:#94a3b8;"
+                sym_style = "color:#94a3b8;"
             cells.append(
-                f'<div class="res-day{empty_cls}">'
-                f'<div class="rd-date">{label}</div>'
-                f'<div class="rd-syms">{sym_txt}</div>'
+                f'<div class="res-day{empty_cls}{day_cls}" style="{style}">'
+                f'<div class="rd-date" style="{date_style}">{label}</div>'
+                f'<div class="rd-syms" style="{sym_style}">{sym_txt}</div>'
                 f'</div>'
             )
         res_html = (
