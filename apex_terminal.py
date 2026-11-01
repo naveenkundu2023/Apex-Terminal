@@ -1,13 +1,15 @@
 # APEX MARKET TERMINAL — UPDATED BUILD 2026-11-01 (v7.7.4)
 # v7.7.4 (institutional polish + FII/DII + OI + heatmap + news + macro + built-up):
-# 1) OI chart: ATM / Max Pain labels no longer overlap (legend + opposite anchors).
+# 1) OI chart: ATM / Max Pain labels no longer overlap (opposite anchors); stronger bar
+#    colours + light-green plot bg for mobile/tablet visibility; wider bar groups.
 # 2) Nifty 50 Heatmap: 10 equal cells per row on desktop (tablet/mobile unchanged).
-# 3) FII/DII: thicker colour band (3x), always show Idx Fut/Opt + Stk Fut/Opt legs;
-#    band colour from cash net; clearer caption; multi-source attempt (NiftyTrader/NSE/MC).
+# 3) FII/DII: Moneycontrol primary (cash + Idx/Stk Fut/Opt in Rs Cr) — full data matching
+#    the reference cards; thicker band (3x); compact card height; 4h cache (EOD once/day).
 # 4) Top news expanded to Top 10 + broader sources (Bloomberg, CNBC Asia, FE, Zee, etc.).
 # 5) Built-up: institutional summary strip + conviction names + regime read.
 # 6) Global Macro rewritten as Key Drivers / Risk Radar / India Implication (no quote dump).
-# 7) Light institutional CSS (cleaner headers, denser FII cards, reduced emoji noise).
+# 7) Price chart volume bars stronger colours + Vol MA20 line.
+# 8) Light institutional CSS (cleaner headers, denser FII cards, reduced emoji noise).
 # v7.7.3:
 # 1) NIFTYMIDSELECT Instant Snapshot via Moneycontrol JSON API (ind_id=128).
 # 2) Mid Select candle + Renko from Moneycontrol techCharts history (mc;nmidcaps).
@@ -448,25 +450,25 @@ def apply_theme(theme: str):
             }
             .fii-card.up .fii-band { background: linear-gradient(90deg, #16a34a, #4ade80); }
             .fii-card.down .fii-band { background: linear-gradient(90deg, #dc2626, #f87171); }
-            .fii-card .fii-body { padding: 8px 10px 10px 10px; }
+            .fii-card .fii-body { padding: 5px 8px 6px 8px; }
             .fii-card .fii-date {
-                font-size: 16px; font-weight: 800; line-height: 1.05;
+                font-size: 14px; font-weight: 800; line-height: 1.0;
                 color: #0f172a;
             }
             .fii-card .fii-month {
-                font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 4px;
+                font-size: 10px; font-weight: 600; color: #475569; margin-bottom: 2px;
             }
             .fii-card .fii-nifty {
-                font-size: 11px; font-weight: 600; color: #1e293b; margin-bottom: 4px;
-                line-height: 1.25;
+                font-size: 10px; font-weight: 600; color: #1e293b; margin-bottom: 2px;
+                line-height: 1.2;
             }
             .fii-card .fii-row {
                 display: flex; justify-content: space-between; gap: 4px;
-                padding: 1px 0; font-size: 11px; color: #334155;
+                padding: 0; font-size: 10px; color: #334155; line-height: 1.25;
             }
             .fii-card .fii-row span:first-child { color: #64748b; }
             .fii-card .fii-net {
-                font-size: 13px; font-weight: 800; margin: 3px 0 2px 0;
+                font-size: 12px; font-weight: 800; margin: 2px 0 1px 0;
             }
             .fii-pos { color: #15803d !important; font-weight: 700; }
             .fii-neg { color: #b91c1c !important; font-weight: 700; }
@@ -786,25 +788,25 @@ def apply_theme(theme: str):
             }
             .fii-card.up .fii-band { background: linear-gradient(90deg, #16a34a, #4ade80); }
             .fii-card.down .fii-band { background: linear-gradient(90deg, #dc2626, #f87171); }
-            .fii-card .fii-body { padding: 8px 10px 10px 10px; }
+            .fii-card .fii-body { padding: 5px 8px 6px 8px; }
             .fii-card .fii-date {
-                font-size: 16px; font-weight: 800; line-height: 1.05;
+                font-size: 14px; font-weight: 800; line-height: 1.0;
                 color: #0f172a;
             }
             .fii-card .fii-month {
-                font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 4px;
+                font-size: 10px; font-weight: 600; color: #475569; margin-bottom: 2px;
             }
             .fii-card .fii-nifty {
-                font-size: 11px; font-weight: 600; color: #1e293b; margin-bottom: 4px;
-                line-height: 1.25;
+                font-size: 10px; font-weight: 600; color: #1e293b; margin-bottom: 2px;
+                line-height: 1.2;
             }
             .fii-card .fii-row {
                 display: flex; justify-content: space-between; gap: 4px;
-                padding: 1px 0; font-size: 11px; color: #334155;
+                padding: 0; font-size: 10px; color: #334155; line-height: 1.25;
             }
             .fii-card .fii-row span:first-child { color: #64748b; }
             .fii-card .fii-net {
-                font-size: 13px; font-weight: 800; margin: 3px 0 2px 0;
+                font-size: 12px; font-weight: 800; margin: 2px 0 1px 0;
             }
             .fii-pos { color: #15803d !important; font-weight: 700; }
             .fii-neg { color: #b91c1c !important; font-weight: 700; }
@@ -3771,35 +3773,63 @@ def resolve_instrument(symbol: str):
 
 
 # ---------- FII / DII activity (research360 + NSE) ----------
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=14400, show_spinner=False)
 def get_fii_dii_sessions(n_days: int = 10):
-    """Last n_days FII/DII cash activity (newest first).
-    Primary: niftytrader.in __NEXT_DATA__ series (multi-day).
-    Fallback: NSE fiidiiTradeReact (often 1 day only).
+    """Last n_days FII/DII cash + F&O activity (newest first).
+    Primary: Moneycontrol markets/fii-dii-data (cash + Idx/Stk Fut/Opt in Rs Cr).
+    Fallback: NiftyTrader cash series, then NSE fiidiiTradeReact (cash only).
+    EOD data published evening — long cache is intentional (once per session open).
     """
     out = []
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-    # --- 1) NiftyTrader multi-day series ---
+
+    def _num(v):
+        try:
+            s = str(v).replace(",", "").replace("—", "").strip()
+            if s in ("", "-", "None", "nan"):
+                return 0.0
+            return float(s)
+        except Exception:
+            return 0.0
+
+    # --- 1) Moneycontrol (full cash + F&O legs) ---
     try:
-        r = requests.get("https://www.niftytrader.in/fii-dii-data", headers=headers, timeout=15)
-        if r.status_code == 200 and r.text:
-            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
-            if m:
-                series = (((json.loads(m.group(1)).get("props") or {}).get("pageProps") or {}).get("series")) or []
-                # newest last in series → reverse
-                for row in reversed(series):
+        r = requests.get("https://www.moneycontrol.com/markets/fii-dii-data/", headers=headers, timeout=15)
+        if r.status_code == 200 and r.text and "FiiDiiData" in r.text and "fiiCM" in r.text:
+            data = None
+            for block in re.findall(r"<script[^>]*>(.*?)</script>", r.text, re.S):
+                if "FiiDiiData" in block and "fiiCM" in block:
+                    block = block.strip()
                     try:
-                        created = str(row.get("created_at") or "")[:10]
+                        data = json.loads(block)
+                        break
+                    except Exception:
+                        i = block.find('{"props"')
+                        if i >= 0:
+                            try:
+                                data = json.loads(block[i:])
+                                break
+                            except Exception:
+                                pass
+            if data:
+                rows = (((data.get("props") or {}).get("pageProps") or {}).get("FiiDiiData") or {}).get("fiiDiiData") or []
+                for row in rows:
+                    try:
+                        created = str(row.get("date") or "")[:10]
                         parsed = datetime.strptime(created, "%Y-%m-%d")
-                        fii = float(row.get("fii_net_value") or 0)
-                        dii = float(row.get("dii_net_value") or 0)
-                        net = fii + dii
-                        nifty = float(row.get("last_trade_price") or 0)
-                        nchg = float(row.get("change_value") or 0)
-                        npct = float(row.get("change_per") or 0)
+                        fii = _num(row.get("fiiCM"))
+                        dii = _num(row.get("diiCM"))
+                        idx_f = _num(row.get("fiiIdxFut"))
+                        idx_o = _num(row.get("fiiIdxOpt"))
+                        stk_f = _num(row.get("fiiStkFut"))
+                        stk_o = _num(row.get("fiiStkOpt"))
+                        net_deriv = idx_f + idx_o + stk_f + stk_o
+                        nifty = _num(row.get("niftyClose"))
+                        nchg = _num(row.get("niftyChange"))
+                        npct = _num(row.get("niftyChangePer"))
                         out.append({
                             "day": str(parsed.day),
                             "month": parsed.strftime("%b"),
@@ -3807,7 +3837,46 @@ def get_fii_dii_sessions(n_days: int = 10):
                             "nifty": nifty,
                             "nifty_chg": nchg,
                             "nifty_pct": npct,
-                            "net": net,
+                            "net": fii + dii,
+                            "net_deriv": net_deriv,
+                            "fii_cash": fii,
+                            "dii_cash": dii,
+                            "fii_idx_fut": idx_f,
+                            "fii_idx_opt": idx_o,
+                            "fii_stk_fut": stk_f,
+                            "fii_stk_opt": stk_o,
+                        })
+                        if len(out) >= n_days:
+                            break
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+
+    if len(out) >= 3:
+        return out[:n_days]
+
+    # --- 2) NiftyTrader cash series fallback ---
+    try:
+        r = requests.get("https://www.niftytrader.in/fii-dii-data", headers=headers, timeout=15)
+        if r.status_code == 200 and r.text:
+            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
+            if m:
+                series = (((json.loads(m.group(1)).get("props") or {}).get("pageProps") or {}).get("series")) or []
+                for row in reversed(series):
+                    try:
+                        created = str(row.get("created_at") or "")[:10]
+                        parsed = datetime.strptime(created, "%Y-%m-%d")
+                        fii = float(row.get("fii_net_value") or 0)
+                        dii = float(row.get("dii_net_value") or 0)
+                        out.append({
+                            "day": str(parsed.day),
+                            "month": parsed.strftime("%b"),
+                            "date": parsed.strftime("%d %b"),
+                            "nifty": float(row.get("last_trade_price") or 0),
+                            "nifty_chg": float(row.get("change_value") or 0),
+                            "nifty_pct": float(row.get("change_per") or 0),
+                            "net": fii + dii,
                             "net_deriv": 0.0,
                             "fii_cash": fii,
                             "dii_cash": dii,
@@ -3826,7 +3895,7 @@ def get_fii_dii_sessions(n_days: int = 10):
     if len(out) >= 3:
         return out[:n_days]
 
-    # --- 2) NSE single/latest day fallback ---
+    # --- 3) NSE cash-only last resort ---
     try:
         sess = requests.Session()
         nse_h = {
@@ -3873,6 +3942,7 @@ def get_fii_dii_sessions(n_days: int = 10):
     except Exception:
         pass
     return out[:n_days]
+
 
 
 # ---------- Nifty 50 Heatmap ----------
@@ -4709,15 +4779,17 @@ if _oi_rows:
             plot_df = oi_df.copy()
     else:
         plot_df = oi_df.copy()
-    # Readable colours on light-green panel (both themes)
+    # Strong saturated colours — readable on mobile/tablet even with ATM line overlay
     fig_oi = go.Figure()
     fig_oi.add_trace(go.Bar(
         x=plot_df["strike"], y=plot_df["ce_oi"], name="Call OI",
-        marker_color="#059669", opacity=0.9,
+        marker_color="#10b981", opacity=1.0,
+        marker_line=dict(width=0),
     ))
     fig_oi.add_trace(go.Bar(
         x=plot_df["strike"], y=plot_df["pe_oi"], name="Put OI",
-        marker_color="#dc2626", opacity=0.9,
+        marker_color="#ef4444", opacity=1.0,
+        marker_line=dict(width=0),
     ))
     shapes, annotations = [], []
     atm_v = _chain_full.get("atm")
@@ -4760,14 +4832,20 @@ if _oi_rows:
             xanchor=_mx, font=dict(size=11, color=_ann_mp, family="Inter, sans-serif"),
         ))
     _dark = st.session_state.theme == "dark"
-    # High-contrast axis labels (white on dark / deep green-gray on light)
+    # High-contrast axis labels; light green plot bg matches snapshot box (better mobile readability)
     _tick = "#f8fafc" if _dark else "#1e293b"
     _grid = "rgba(248,250,252,0.12)" if _dark else "rgba(30,41,59,0.12)"
-    _plot_bg = "rgba(15,23,42,0.35)" if _dark else "rgba(234,246,237,0.55)"
+    # Always use soft light-green plot area so red/green bars pop on tablet & mobile
+    _plot_bg = "rgba(234,246,237,0.92)" if not _dark else "rgba(15,23,42,0.55)"
+    # On dark theme still lift the OI panel so bars remain visible
+    if _dark:
+        _plot_bg = "rgba(30, 58, 48, 0.55)"  # muted green-tinted dark
     _legend_bg = "rgba(15,23,42,0.85)" if _dark else "rgba(234,246,237,0.95)"
     _legend_fg = "#f8fafc" if _dark else "#1e293b"
     fig_oi.update_layout(
         barmode="group",
+        bargap=0.12,
+        bargroupgap=0.04,
         height=320,
         margin=dict(l=8, r=8, t=40, b=48),
         template="plotly_dark" if _dark else "plotly_white",
@@ -5212,8 +5290,20 @@ else:
                              line=dict(color="#fbbf24", width=1.8), hoverinfo="skip"), row=1, col=1)
     fig.add_trace(go.Scatter(x=candle_df["x"], y=candle_df["EMA50"], mode="lines", name="EMA 50",
                              line=dict(color="#60a5fa", width=2.0), hoverinfo="skip"), row=1, col=1)
-    colors = ["#34d399" if c >= o else "#f87171" for o, c in zip(candle_df["Open"], candle_df["Close"])]
-    fig.add_trace(go.Bar(x=candle_df["x"], y=candle_df["Volume"], marker_color=colors, name="Volume", opacity=0.7, hoverinfo="skip"), row=2, col=1)
+    colors = ["#10b981" if c >= o else "#ef4444" for o, c in zip(candle_df["Open"], candle_df["Close"])]
+    fig.add_trace(go.Bar(
+        x=candle_df["x"], y=candle_df["Volume"], marker_color=colors, name="Volume",
+        opacity=0.85, marker_line=dict(width=0), hoverinfo="skip"
+    ), row=2, col=1)
+    # 20-session average volume line
+    try:
+        _vol_ma = candle_df["Volume"].rolling(20, min_periods=5).mean()
+        fig.add_trace(go.Scatter(
+            x=candle_df["x"], y=_vol_ma, mode="lines", name="Vol MA20",
+            line=dict(color="#fbbf24", width=1.6, dash="dot"), hoverinfo="skip"
+        ), row=2, col=1)
+    except Exception:
+        pass
     fig.update_layout(height=580 if use_sequential else 520, xaxis_rangeslider_visible=False,
                       template="plotly_dark" if is_dark else "plotly_white",
                       margin=dict(l=10, r=10, t=40, b=10),
@@ -5467,7 +5557,7 @@ st.markdown('<div class="section-header">FII / DII Activity — Last 10 Sessions
 st.caption(
     "Daily institutional flow (₹ Cr). Thick colour band = Cash Net (FII+DII). "
     "All four FII F&O legs are always shown (0 when source is cash-only). "
-    "Sources: NiftyTrader series · NSE fiidiiTradeReact · Moneycontrol F&O pages when parseable."
+    "Primary: Moneycontrol (cash + FII Idx/Stk Fut/Opt). Fallback: NiftyTrader / NSE. EOD data, cached 4h."
 )
 _fii_rows = get_fii_dii_sessions(10)
 if not _fii_rows:
