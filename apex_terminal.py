@@ -1909,10 +1909,25 @@ def get_ohlc_data(symbol: str, interval: str = "1d", period: str = "3mo"):
             period = "1mo" if interval == "1h" else "5d"
         df = t.history(period=period, interval=interval)
         if df.empty:
+            # Retry common intraday windows when first call is empty
+            if interval in ("15m", "30m", "1h"):
+                for _p in ("5d", "7d", "1mo"):
+                    try:
+                        df = t.history(period=_p, interval=interval)
+                        if df is not None and not df.empty:
+                            period = _p
+                            break
+                    except Exception:
+                        continue
+        if df is None or df.empty:
             return None
         df = df.reset_index()
         if "Datetime" in df.columns:
             df = df.rename(columns={"Datetime": "Date"})
+        # Ensure Volume column exists and is numeric (intraday sometimes omits / NaNs it)
+        if "Volume" not in df.columns:
+            df["Volume"] = 0.0
+        df["Volume"] = pd.to_numeric(df["Volume"], errors="coerce").fillna(0.0)
         # Commodity chart note: Yahoo is USD for GC=F/SI=F/CL=F — scale daily closes
         # to current MCX INR level so Renko/price chart matches Instant Snapshot units.
         if meta["kind"] == "commodity" and not df.empty and "Close" in df.columns:
@@ -5290,17 +5305,21 @@ else:
                              line=dict(color="#fbbf24", width=1.8), hoverinfo="skip"), row=1, col=1)
     fig.add_trace(go.Scatter(x=candle_df["x"], y=candle_df["EMA50"], mode="lines", name="EMA 50",
                              line=dict(color="#60a5fa", width=2.0), hoverinfo="skip"), row=1, col=1)
+    # Volume: coerce numeric; indices often return 0 on intraday — still plot so axis stays consistent
+    if "Volume" not in candle_df.columns:
+        candle_df["Volume"] = 0.0
+    candle_df["Volume"] = pd.to_numeric(candle_df["Volume"], errors="coerce").fillna(0.0)
     colors = ["#10b981" if c >= o else "#ef4444" for o, c in zip(candle_df["Open"], candle_df["Close"])]
     fig.add_trace(go.Bar(
         x=candle_df["x"], y=candle_df["Volume"], marker_color=colors, name="Volume",
-        opacity=0.85, marker_line=dict(width=0), hoverinfo="skip"
+        opacity=0.9, marker_line=dict(width=0), hoverinfo="skip"
     ), row=2, col=1)
     # 20-session average volume line
     try:
-        _vol_ma = candle_df["Volume"].rolling(20, min_periods=5).mean()
+        _vol_ma = candle_df["Volume"].rolling(20, min_periods=3).mean()
         fig.add_trace(go.Scatter(
             x=candle_df["x"], y=_vol_ma, mode="lines", name="Vol MA20",
-            line=dict(color="#fbbf24", width=1.6, dash="dot"), hoverinfo="skip"
+            line=dict(color="#fbbf24", width=1.8, dash="dot"), hoverinfo="skip"
         ), row=2, col=1)
     except Exception:
         pass
@@ -5309,6 +5328,9 @@ else:
                       margin=dict(l=10, r=10, t=40, b=10),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color=axis_color)),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=axis_color), dragmode=False)
+    # Keep volume pane readable on intraday (auto-range even when values are small)
+    fig.update_yaxes(row=2, col=1, tickfont=dict(color=axis_color), gridcolor=grid_color, showgrid=True,
+                     rangemode="tozero", fixedrange=False)
     if use_sequential:
         n = len(candle_df)
         step = max(1, n // 7)
@@ -5513,21 +5535,21 @@ else:
         pct = row["% Chg"]
         sym = row["Symbol"]
         new_map[sym] = pct
-        # colour scale (day % change)
+        # Soft pastel scale (~50% less saturated) — easier on mobile/tablet eyes
         if pct >= 2:
-            bg = "#10b981"
+            bg, fg = "#a7f3d0", "#065f46"      # soft emerald
         elif pct >= 1:
-            bg = "#34d399"
+            bg, fg = "#bbf7d0", "#166534"
         elif pct >= 0.3:
-            bg = "#6ee7b7"
+            bg, fg = "#d1fae5", "#047857"
         elif pct > -0.3:
-            bg = "#94a3b8"
+            bg, fg = "#e2e8f0", "#334155"     # neutral slate
         elif pct > -1:
-            bg = "#fca5a5"
+            bg, fg = "#fecaca", "#991b1b"
         elif pct > -2:
-            bg = "#f87171"
+            bg, fg = "#fca5a5", "#7f1d1d"
         else:
-            bg = "#ef4444"
+            bg, fg = "#f87171", "#7f1d1d"
         # Refresh-to-refresh direction arrow (intraday movement of the day-% figure)
         arrow = ""
         if sym in prev_map:
@@ -5539,10 +5561,10 @@ else:
             else:
                 arrow = ' <span style="font-size:10px;opacity:0.5;">●</span>'
         html_cells.append(
-            f'<div class="heat-cell" style="background:{bg};">'
-            f'<div class="hc-sym">{sym}{arrow}</div>'
-            f'<div class="hc-pct">{pct:+.2f}%</div>'
-            f'<div class="hc-ltp">₹{row["LTP"]:,.1f}</div></div>'
+            f'<div class="heat-cell" style="background:{bg};color:{fg};">'
+            f'<div class="hc-sym" style="color:{fg};">{sym}{arrow}</div>'
+            f'<div class="hc-pct" style="color:{fg};">{pct:+.2f}%</div>'
+            f'<div class="hc-ltp" style="color:{fg};opacity:0.9;">₹{row["LTP"]:,.1f}</div></div>'
         )
     st.session_state.heatmap_prev_pct = new_map
     st.markdown('<div class="heat-grid">' + "".join(html_cells) + "</div>", unsafe_allow_html=True)
@@ -5555,9 +5577,8 @@ st.markdown("---")
 # -------------------------------------------------
 st.markdown('<div class="section-header">FII / DII Activity — Last 10 Sessions</div>', unsafe_allow_html=True)
 st.caption(
-    "Daily institutional flow (₹ Cr). Thick colour band = Cash Net (FII+DII). "
-    "All four FII F&O legs are always shown (0 when source is cash-only). "
-    "Primary: Moneycontrol (cash + FII Idx/Stk Fut/Opt). Fallback: NiftyTrader / NSE. EOD data, cached 4h."
+    "Daily institutional flow (₹ Cr). Thick colour band = Total Net (Cash Net + Net Derivatives). "
+    "All four FII F&O legs always shown. Primary: Moneycontrol. Fallback: NiftyTrader / NSE. EOD, cached 4h."
 )
 _fii_rows = get_fii_dii_sessions(10)
 if not _fii_rows:
@@ -5576,9 +5597,12 @@ else:
             return ""
     cards_html = ['<div class="fii-grid">']
     for it in _fii_rows:
-        # Colour band = cash institutional net (FII+DII cash). Documented in caption.
+        # Band colour = Total Net (Cash Net + Net Derivatives). Matches reference cards:
+        # large F&O sell day turns red even if cash was a mild buy.
         net = float(it.get("net") or 0)
-        tone = "up" if net >= 0 else "down"
+        nd = float(it.get("net_deriv") or 0)
+        total_net = net + nd
+        tone = "up" if total_net >= 0 else "down"
         nchg = float(it.get("nifty_chg") or 0)
         npct = float(it.get("nifty_pct") or 0)
         nifty_s = ""
@@ -5589,9 +5613,9 @@ else:
                 f'<span class="{_cls(nchg)}">{sign}{nchg:.2f} ({sign}{npct:.2f}%)</span></div>'
             )
         # Always surface cash + all four FII F&O legs (0 / — when source has cash-only)
-        nd = float(it.get("net_deriv") or 0)
         body_rows = (
-            f'<div class="fii-net {_cls(net)}">Cash Net {_fmt_cr(net)}</div>'
+            f'<div class="fii-net {_cls(total_net)}">Total {_fmt_cr(total_net)}</div>'
+            f'<div class="fii-row"><span>Cash Net</span><span class="{_cls(net)}">{_fmt_cr(net)}</span></div>'
             f'<div class="fii-row"><span>FII Cash</span><span class="{_cls(it.get("fii_cash"))}">{_fmt_cr(it.get("fii_cash"))}</span></div>'
             f'<div class="fii-row"><span>DII Cash</span><span class="{_cls(it.get("dii_cash"))}">{_fmt_cr(it.get("dii_cash"))}</span></div>'
             f'<div class="fii-row" style="margin-top:3px;border-top:1px solid rgba(148,163,184,0.25);padding-top:3px;">'
@@ -5614,9 +5638,8 @@ else:
     cards_html.append("</div>")
     st.markdown("".join(cards_html), unsafe_allow_html=True)
     st.caption(
-        "Colour band = Cash Net (FII Cash + DII Cash). Green = institutional cash buy day, red = sell day. "
-        "F&O legs shown when the feed provides them (NiftyTrader cash series; Moneycontrol / NSE for cash; "
-        "derivatives filled when available from secondary sources). Values in ₹ Cr."
+        "Colour band = Total Net (Cash Net + Net Derivatives). Green when overall flow is positive, "
+        "red when negative — a heavy F&O sell day turns the band red even if cash was a mild buy. Values in ₹ Cr."
     )
 
 st.markdown("---")
