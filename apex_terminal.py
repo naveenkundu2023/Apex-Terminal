@@ -266,46 +266,100 @@ def apply_theme(theme: str):
                 .movers-grid { grid-template-columns: 1fr; }
             }
             .movers-panel {
-                background: rgba(30,41,59,0.75);
-                border: 1px solid rgba(148,163,184,0.28);
+                background: #f8fafc !important;
+                border: 1px solid #e2e8f0 !important;
                 border-radius: 10px;
-                padding: 6px 6px 4px 6px;
+                padding: 8px 8px 6px 8px;
                 overflow: hidden;
             }
             .movers-panel .movers-h {
-                font-size: 10px !important;
+                font-size: 11px !important;
                 font-weight: 700;
                 letter-spacing: 0.3px;
                 text-transform: uppercase;
-                margin: 0 0 4px 2px;
-                color: #c7d2fe;
+                margin: 0 0 5px 2px;
+                color: #334155 !important;
             }
             .movers-tbl {
                 width: 100%;
                 border-collapse: collapse;
-                font-size: 10px;
-                line-height: 1.15;
+                table-layout: fixed;
+                font-size: 12px;
+                line-height: 1.25;
             }
             .movers-tbl th {
-                font-size: 9px;
+                font-size: 10px;
                 font-weight: 600;
-                color: #94a3b8;
+                color: #64748b;
                 text-align: right;
-                padding: 1px 3px 3px 3px;
-                border-bottom: 1px solid rgba(148,163,184,0.25);
+                padding: 2px 4px 4px 4px;
+                border-bottom: 1px solid #e2e8f0;
             }
-            .movers-tbl th:first-child { text-align: left; }
+            .movers-tbl th:first-child { text-align: left; width: 34%; }
             .movers-tbl td {
-                padding: 2px 3px;
+                padding: 3px 4px;
                 text-align: right;
-                color: #e2e8f0;
+                color: #0f172a;
                 white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
             }
-            .movers-tbl td.m-sym { text-align: left; font-weight: 600; color: #f1f5f9; }
-            .movers-tbl td.m-pos { color: #34d399; font-weight: 600; }
-            .movers-tbl td.m-neg { color: #f87171; font-weight: 600; }
-            .movers-tbl td.m-muted { color: #94a3b8; font-size: 9px; }
-            .movers-tbl tr:nth-child(even) td { background: rgba(148,163,184,0.06); }
+            .movers-tbl td.m-sym { text-align: left; font-weight: 700; color: #0f172a; }
+            .movers-tbl td.m-pos { color: #059669; font-weight: 700; }
+            .movers-tbl td.m-neg { color: #dc2626; font-weight: 700; }
+            .movers-tbl td.m-muted { color: #475569; font-size: 11px; }
+            .movers-tbl tr:nth-child(even) td { background: #f1f5f9; }
+
+            .breadth-grid {
+                display: grid;
+                grid-template-columns: repeat(8, minmax(0, 1fr));
+                gap: 6px;
+                width: 100%;
+                margin-bottom: 8px;
+            }
+            .live-an-grid {
+                display: grid;
+                grid-template-columns: repeat(6, minmax(0, 1fr));
+                gap: 6px;
+                width: 100%;
+                margin-bottom: 8px;
+            }
+            @media (max-width: 1100px) {
+                .breadth-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+                .live-an-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            }
+            @media (max-width: 600px) {
+                .breadth-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+                .live-an-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+            }
+            .breadth-card {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 8px 6px;
+                text-align: center;
+                min-height: 56px;
+            }
+            .breadth-lab {
+                font-size: 10px;
+                font-weight: 600;
+                color: #64748b;
+                text-transform: uppercase;
+                letter-spacing: 0.2px;
+                margin-bottom: 3px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .breadth-val {
+                font-size: 14px;
+                font-weight: 700;
+                color: #0f172a;
+                line-height: 1.15;
+            }
+            .breadth-val.pos { color: #059669 !important; }
+            .breadth-val.neg { color: #dc2626 !important; }
+
 
 
             /* === v7.4 Dashboard polish === */
@@ -703,47 +757,49 @@ def apply_theme(theme: str):
                 .movers-grid { grid-template-columns: 1fr; }
             }
             .movers-panel {
-                background: #ffffff;
-                border: 1px solid #c7d2fe;
+                background: #f8fafc !important;
+                border: 1px solid #e2e8f0 !important;
                 border-radius: 10px;
-                padding: 6px 6px 4px 6px;
+                padding: 8px 8px 6px 8px;
                 overflow: hidden;
-                box-shadow: 0 1px 4px rgba(99,102,241,0.06);
             }
             .movers-panel .movers-h {
-                font-size: 10px !important;
+                font-size: 11px !important;
                 font-weight: 700;
                 letter-spacing: 0.3px;
                 text-transform: uppercase;
-                margin: 0 0 4px 2px;
-                color: #4338ca;
+                margin: 0 0 5px 2px;
+                color: #334155 !important;
             }
             .movers-tbl {
                 width: 100%;
                 border-collapse: collapse;
-                font-size: 10px;
-                line-height: 1.15;
+                table-layout: fixed;
+                font-size: 12px;
+                line-height: 1.25;
             }
             .movers-tbl th {
-                font-size: 9px;
+                font-size: 10px;
                 font-weight: 600;
                 color: #64748b;
                 text-align: right;
-                padding: 1px 3px 3px 3px;
+                padding: 2px 4px 4px 4px;
                 border-bottom: 1px solid #e2e8f0;
             }
-            .movers-tbl th:first-child { text-align: left; }
+            .movers-tbl th:first-child { text-align: left; width: 34%; }
             .movers-tbl td {
-                padding: 2px 3px;
+                padding: 3px 4px;
                 text-align: right;
                 color: #0f172a;
                 white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
             }
-            .movers-tbl td.m-sym { text-align: left; font-weight: 600; color: #0f172a; }
-            .movers-tbl td.m-pos { color: #059669; font-weight: 600; }
-            .movers-tbl td.m-neg { color: #dc2626; font-weight: 600; }
-            .movers-tbl td.m-muted { color: #64748b; font-size: 9px; }
-            .movers-tbl tr:nth-child(even) td { background: #f8fafc; }
+            .movers-tbl td.m-sym { text-align: left; font-weight: 700; color: #0f172a; }
+            .movers-tbl td.m-pos { color: #059669; font-weight: 700; }
+            .movers-tbl td.m-neg { color: #dc2626; font-weight: 700; }
+            .movers-tbl td.m-muted { color: #475569; font-size: 11px; }
+            .movers-tbl tr:nth-child(even) td { background: #f1f5f9; }
 
 
             /* === v7.4 Dashboard polish (light) === */
@@ -5365,18 +5421,27 @@ if not is_nse_market_hours() and st.session_state.get("last_nifty_pcr") is not N
 src_n = nifty_sent.get("source") or ("cached" if nifty_pcr is not None else None)
 src_b = bank_sent.get("source") or ("cached" if bank_pcr is not None else None)
 
-b1, b2, b3, b4 = st.columns(4)
-b1.metric("🟢 Bullish Stocks (Nifty 50)", bullish_cnt)
-b2.metric("🔴 Bearish Stocks (Nifty 50)", bearish_cnt)
-b3.metric("Nifty PCR (OI)", f"{nifty_pcr:.3f}" if nifty_pcr is not None else "Unavailable")
-b4.metric("Bank Nifty PCR (OI)", f"{bank_pcr:.3f}" if bank_pcr is not None else "Unavailable")
-
-# Max Pain + ATM IV row
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Nifty Max Pain", f"{nifty_mp:,.0f}" if nifty_mp is not None else "—")
-m2.metric("Nifty ATM IV", f"{nifty_iv:.1f}%" if nifty_iv is not None else "—")
-m3.metric("Bank Nifty Max Pain", f"{bank_mp:,.0f}" if bank_mp is not None else "—")
-m4.metric("Bank Nifty ATM IV", f"{bank_iv:.1f}%" if bank_iv is not None else "—")
+# Single responsive strip: 8 on desktop · 4 on tablet · 2 on mobile
+_br_items = [
+    ("Bullish", str(bullish_cnt), "pos"),
+    ("Bearish", str(bearish_cnt), "neg"),
+    ("Nifty PCR", f"{nifty_pcr:.3f}" if nifty_pcr is not None else "—", ""),
+    ("Bank PCR", f"{bank_pcr:.3f}" if bank_pcr is not None else "—", ""),
+    ("Nifty MaxPain", f"{nifty_mp:,.0f}" if nifty_mp is not None else "—", ""),
+    ("Nifty ATM IV", f"{nifty_iv:.1f}%" if nifty_iv is not None else "—", ""),
+    ("Bank MaxPain", f"{bank_mp:,.0f}" if bank_mp is not None else "—", ""),
+    ("Bank ATM IV", f"{bank_iv:.1f}%" if bank_iv is not None else "—", ""),
+]
+_br_html = ['<div class="breadth-grid">']
+for _lab, _val, _tone in _br_items:
+    _br_html.append(
+        f'<div class="breadth-card">'
+        f'<div class="breadth-lab">{_lab}</div>'
+        f'<div class="breadth-val {_tone}">{_val}</div>'
+        f'</div>'
+    )
+_br_html.append("</div>")
+st.markdown("".join(_br_html), unsafe_allow_html=True)
 
 st.caption(
     "PCR = total put OI ÷ total call OI. Sources: NSE → Quantsapp → NiftyTrader. "
@@ -5409,14 +5474,24 @@ if metrics is None and summary:
 if metrics is None:
     st.warning(f"Live analytics metrics unavailable for {selected} — charts below may be limited. Rest of dashboard continues.")
 else:
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Last Traded Price", f"₹{metrics['ltp']:,.2f}")
-    m2.metric("Day High", f"₹{metrics.get('prev_high') or 0:,.2f}")
-    m3.metric("Day Low", f"₹{metrics.get('prev_low') or 0:,.2f}")
-    m4.metric("Previous Close", f"₹{metrics.get('prev_close') or 0:,.2f}")
-    v1, v2 = st.columns(2)
-    v1.metric("Session Volume", f"{metrics.get('volume') or 0:,}")
-    v2.metric("20-Day Avg Volume", f"{metrics.get('avg_volume') or 0:,}")
+    _la_items = [
+        ("LTP", f"₹{metrics['ltp']:,.2f}"),
+        ("Day High", f"₹{metrics.get('prev_high') or 0:,.2f}"),
+        ("Day Low", f"₹{metrics.get('prev_low') or 0:,.2f}"),
+        ("Prev Close", f"₹{metrics.get('prev_close') or 0:,.2f}"),
+        ("Volume", f"{metrics.get('volume') or 0:,}"),
+        ("Avg Vol 20D", f"{metrics.get('avg_volume') or 0:,}"),
+    ]
+    _la_html = ['<div class="live-an-grid">']
+    for _lab, _val in _la_items:
+        _la_html.append(
+            f'<div class="breadth-card">'
+            f'<div class="breadth-lab">{_lab}</div>'
+            f'<div class="breadth-val">{_val}</div>'
+            f'</div>'
+        )
+    _la_html.append("</div>")
+    st.markdown("".join(_la_html), unsafe_allow_html=True)
 
 # -------------------------------------------------
 # Charts
