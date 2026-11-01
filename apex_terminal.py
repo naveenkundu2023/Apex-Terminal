@@ -315,14 +315,15 @@ def apply_theme(theme: str):
                 grid-template-columns: repeat(8, minmax(0, 1fr));
                 gap: 6px;
                 width: 100%;
-                margin-bottom: 8px;
+                margin-bottom: 2px;
             }
             .live-an-grid {
                 display: grid;
                 grid-template-columns: repeat(6, minmax(0, 1fr));
                 gap: 6px;
                 width: 100%;
-                margin-bottom: 8px;
+                margin-bottom: 4px;
+                margin-top: 0;
             }
             @media (max-width: 1100px) {
                 .breadth-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -333,32 +334,32 @@ def apply_theme(theme: str):
                 .live-an-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
             }
             .breadth-card {
-                background: #f8fafc;
-                border: 1px solid #e2e8f0;
+                background: linear-gradient(145deg, rgba(30,41,59,0.95), rgba(15,23,42,0.98));
+                border: 1px solid rgba(99,102,241,0.28);
                 border-radius: 8px;
-                padding: 8px 6px;
+                padding: 7px 5px;
                 text-align: center;
-                min-height: 56px;
+                min-height: 52px;
             }
             .breadth-lab {
                 font-size: 10px;
                 font-weight: 600;
-                color: #64748b;
+                color: #94a3b8;
                 text-transform: uppercase;
                 letter-spacing: 0.2px;
-                margin-bottom: 3px;
+                margin-bottom: 2px;
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
             .breadth-val {
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 700;
-                color: #0f172a;
+                color: #f1f5f9;
                 line-height: 1.15;
             }
-            .breadth-val.pos { color: #059669 !important; }
-            .breadth-val.neg { color: #dc2626 !important; }
+            .breadth-val.pos { color: #34d399 !important; }
+            .breadth-val.neg { color: #f87171 !important; }
 
 
 
@@ -5450,12 +5451,8 @@ st.caption(
     + pcr_note
 )
 
-st.markdown("---")
-
-# -------------------------------------------------
-# Stock Analytics
-# -------------------------------------------------
-st.markdown(f'<div class="section-header">📌 {selected} • Live Analytics</div>', unsafe_allow_html=True)
+# Live Analytics sits tight under Breadth (no heavy divider — saves vertical space)
+st.markdown(f'<div class="section-header" style="margin-top:6px;">📌 {selected} • Live Analytics</div>', unsafe_allow_html=True)
 metrics = None
 try:
     metrics = fetch_stock_data(selected)
