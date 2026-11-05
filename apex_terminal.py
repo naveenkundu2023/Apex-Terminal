@@ -1,4 +1,9 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-11-01 (v7.7.4)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-11-05 (v7.7.5)
+# v7.7.5 (Streamlit Cloud thread-exhaustion fix):
+# 1) ThreadPoolExecutor: lower workers + safe parallel helper with sequential fallback.
+#    Prevents "can't start new thread" / RuntimeError that appeared every 4–5 days on Cloud.
+# 2) Applied to: index cards (was 12), macro quotes (was 8), Renko scanner (was 14).
+# 3) No behaviour change when threads are available; graceful degrade under resource pressure.
 # v7.7.4 (institutional polish + FII/DII + OI + heatmap + news + macro + built-up):
 # 1) OI chart: ATM / Max Pain labels no longer overlap (opposite anchors); stronger bar
 #    colours + light-green plot bg for mobile/tablet visibility; wider bar groups.
@@ -67,6 +72,66 @@ import re
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import xml.etree.ElementTree as ET
+
+# -------------------------------------------------
+# Safe parallel map — Streamlit Cloud can exhaust OS threads
+# after days of auto-refresh / concurrent sessions. Falls
+# back to sequential so the page never crashes on RuntimeError.
+# -------------------------------------------------
+def _safe_parallel_map(fn, iterable, max_workers=6):
+    """map(fn, iterable) via ThreadPoolExecutor; sequential on thread failure."""
+    items = list(iterable)
+    if not items:
+        return []
+    workers = max(1, min(int(max_workers), len(items)))
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(fn, items))
+    except RuntimeError:
+        # Typical: OSError/RuntimeError: can't start new thread
+        return [fn(x) for x in items]
+    except Exception:
+        return [fn(x) for x in items]
+
+
+def _safe_parallel_submit(fn, jobs, max_workers=6):
+    """submit + as_completed style; returns list of successful results only."""
+    jobs = list(jobs)
+    if not jobs:
+        return []
+    workers = max(1, min(int(max_workers), len(jobs)))
+    results = []
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(fn, *job) if isinstance(job, (tuple, list)) else pool.submit(fn, job)
+                       for job in jobs]
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    if result is not None:
+                        results.append(result)
+                except Exception:
+                    continue
+        return results
+    except RuntimeError:
+        for job in jobs:
+            try:
+                result = fn(*job) if isinstance(job, (tuple, list)) else fn(job)
+                if result is not None:
+                    results.append(result)
+            except Exception:
+                continue
+        return results
+    except Exception:
+        for job in jobs:
+            try:
+                result = fn(*job) if isinstance(job, (tuple, list)) else fn(job)
+                if result is not None:
+                    results.append(result)
+            except Exception:
+                continue
+        return results
+
 
 # -------------------------------------------------
 # Page Config
@@ -2385,16 +2450,7 @@ def analyze_renko_signal(symbol: str, timeframe: str):
 def scan_renko_universe(universe_tuple: tuple):
     jobs = [(symbol, timeframe) for symbol in universe_tuple
             for timeframe in ("1 Hour", "30 Minutes", "15 Minutes")]
-    rows = []
-    with ThreadPoolExecutor(max_workers=14) as pool:
-        futures = [pool.submit(analyze_renko_signal, symbol, timeframe) for symbol, timeframe in jobs]
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                if result:
-                    rows.append(result)
-            except Exception:
-                continue
+    rows = _safe_parallel_submit(analyze_renko_signal, jobs, max_workers=6)
     if not rows:
         return pd.DataFrame()
     result_df = pd.DataFrame(rows)
@@ -4729,7 +4785,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.3 — MidSelect MC JSON + OHLC charts · FII 10-day")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.5 — thread-safe pools · MidSelect · FII 10-day")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -5181,9 +5237,8 @@ def _fetch_instrument_card(name_meta):
     return name, data
 
 _instrument_data = {}
-with ThreadPoolExecutor(max_workers=12) as _pool:
-    for _name, _data in _pool.map(_fetch_instrument_card, items):
-        _instrument_data[_name] = _data
+for _name, _data in _safe_parallel_map(_fetch_instrument_card, items, max_workers=6):
+    _instrument_data[_name] = _data
 
 # v7.6.2: single responsive CSS grid (6 desktop / 3 tablet / 2 mobile) instead of st.columns(6)
 _cards_html = ['<div class="index-grid">']
@@ -5300,9 +5355,8 @@ def _fetch_macro(spec):
         return label, None
 
 macro_quotes = {}
-with ThreadPoolExecutor(max_workers=8) as _mpool:
-    for _label, _q in _mpool.map(_fetch_macro, macro_specs):
-        macro_quotes[_label] = _q
+for _label, _q in _safe_parallel_map(_fetch_macro, macro_specs, max_workers=4):
+    macro_quotes[_label] = _q
 
 # --- Institutional-style Global Macro blocks ---
 china_asia = get_china_asia_context()
