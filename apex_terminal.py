@@ -1,4 +1,14 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-11-05 (v7.7.5)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-11-06 (v7.7.6)
+# v7.7.6 (live % change + news quality):
+# 1) Top Gainers/Losers + Heatmap + Most-Active Yahoo fallback:
+#    bulk yf.download daily was lagging one session on Cloud → now live fast_info
+#    + previous completed daily close (parallel). Cache 90s; top-10 returned.
+# 2) Top 10 Business News:
+#    - Max 2 headlines per source (stops Mint flooding the list)
+#    - Near-duplicate suppression via normalised title cores
+#    - Explicit per-desk Google News queries (ET, MC, FE, CNBC, Bloomberg…)
+#    - Light-green news box (matches Instant Snapshot / CA style)
+#    - 30-min cache retained; source badge shown on each item
 # v7.7.5 (Streamlit Cloud thread-exhaustion fix):
 # 1) ThreadPoolExecutor: lower workers + safe parallel helper with sequential fallback.
 #    Prevents "can't start new thread" / RuntimeError that appeared every 4–5 days on Cloud.
@@ -294,14 +304,16 @@ def apply_theme(theme: str):
             .bu-sc { background: #2563eb; }   /* Short covering */
             .bu-lu { background: #a3a30a; }   /* Long unwinding */
             .bu-na { background: #475569; }   /* N/A */
+            /* News box — same soft light-green as Instant Snapshot / CA boxes */
             .news-box {
-                background: linear-gradient(145deg, rgba(30,41,59,0.95), rgba(15,23,42,0.98));
-                border: 1px solid rgba(148,163,184,0.35);
+                background: #eaf6ed !important;
+                border: 1px solid #d3e9d8 !important;
                 border-radius: 10px; padding: 12px 16px; margin-bottom: 8px;
-                color: #f1f5f9 !important;
+                box-shadow: none !important;
+                color: #26332b !important;
             }
-            .news-box a { color: #a5b4fc !important; }
-            .news-box, .news-box * { color: #e2e8f0 !important; }
+            .news-box a { color: #166534 !important; font-weight: 600; }
+            .news-box, .news-box * { color: #26332b !important; }
             /* Corporate actions / Results — same soft green as Instant Snapshot */
             .ca-box {
                 background: #eaf6ed !important;
@@ -788,12 +800,15 @@ def apply_theme(theme: str):
             .bu-sc { background: #2563eb; }
             .bu-lu { background: #a3a30a; }
             .bu-na { background: #94a3b8; }
+            /* News box — same soft light-green as Instant Snapshot / CA boxes */
             .news-box {
-                background: #ffffff; border: 1px solid #c7d2fe;
+                background: #eaf6ed !important;
+                border: 1px solid #d3e9d8 !important;
                 border-radius: 10px; padding: 12px 16px; margin-bottom: 8px;
-                color: #0f172a !important; box-shadow: 0 2px 8px rgba(99,102,241,0.08);
+                box-shadow: none !important;
+                color: #26332b !important;
             }
-            .news-box a { color: #4f46e5 !important; }
+            .news-box a { color: #166534 !important; font-weight: 600; }
             /* Corporate actions / Results — same soft green as Instant Snapshot */
             .ca-box {
                 background: #eaf6ed !important;
@@ -2300,34 +2315,75 @@ def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
     renko_df["Brick"] = range(1, len(renko_df) + 1)
     return renko_df
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=90, show_spinner=False)
 def get_top_movers(universe: list):
-    try:
-        tickers = [f"{s}.NS" for s in universe]
-        data = yf.download(tickers, period="5d", group_by="ticker", progress=False, threads=True)
-        rows = []
-        for sym in universe:
-            try:
-                hist = data if len(universe) == 1 else (data[f"{sym}.NS"] if f"{sym}.NS" in data.columns.get_level_values(0) else None)
-                if hist is None or hist.empty:
-                    continue
-                close = hist["Close"].dropna()
-                if len(close) < 2:
-                    continue
-                last, prev = float(close.iloc[-1]), float(close.iloc[-2])
-                chg = last - prev
-                rows.append({"Symbol": sym, "LTP": round(last, 2), "Change": round(chg, 2), "% Chg": round((chg / prev) * 100, 2)})
-            except Exception:
-                continue
-        df = pd.DataFrame(rows)
-        if df.empty:
-            return None, None
-        return (
-            df.sort_values("% Chg", ascending=False).head(8).reset_index(drop=True),
-            df.sort_values("% Chg", ascending=True).head(8).reset_index(drop=True)
-        )
-    except Exception:
+    """Live top gainers / losers for Nifty-50 universe.
+    Uses fast_info last_price (live) + previous completed daily close.
+    Bulk yf.download daily was frequently returning the prior session on Streamlit Cloud,
+    so rankings lagged by one day (e.g. yesterday's INDIGO still showing as top gainer).
+    """
+    if not universe:
         return None, None
+
+    ist = pytz.timezone("Asia/Kolkata")
+    today = datetime.now(ist).date()
+
+    def _one(sym: str):
+        try:
+            t = yf.Ticker(f"{sym}.NS")
+            # 1) Previous completed daily close
+            daily = t.history(period="10d", interval="1d")
+            if daily is None or daily.empty:
+                return None
+            daily = daily.dropna(subset=["Close"])
+            if daily.empty:
+                return None
+            # Identify last completed bar (exclude today if present)
+            last_ts = daily.index[-1]
+            try:
+                last_d = last_ts.tz_convert(ist).date() if last_ts.tzinfo else last_ts.date()
+            except Exception:
+                last_d = pd.Timestamp(last_ts).date()
+            if last_d == today and len(daily) >= 2:
+                prev = float(daily["Close"].iloc[-2])
+                # Today's bar Close can lag; prefer live
+                bar_close = float(daily["Close"].iloc[-1])
+            else:
+                prev = float(daily["Close"].iloc[-1])
+                bar_close = prev
+
+            # 2) Live LTP
+            ltp = None
+            try:
+                fi = t.fast_info
+                ltp = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
+            except Exception:
+                pass
+            if ltp is None or float(ltp) <= 0:
+                ltp = bar_close
+            ltp = float(ltp)
+            if prev <= 0:
+                return None
+            chg = ltp - prev
+            pct = (chg / prev) * 100
+            return {
+                "Symbol": sym,
+                "LTP": round(ltp, 2),
+                "Change": round(chg, 2),
+                "% Chg": round(pct, 2),
+            }
+        except Exception:
+            return None
+
+    results = _safe_parallel_map(_one, list(universe), max_workers=8)
+    rows = [r for r in results if r is not None]
+    if not rows:
+        return None, None
+    df = pd.DataFrame(rows)
+    return (
+        df.sort_values("% Chg", ascending=False).head(10).reset_index(drop=True),
+        df.sort_values("% Chg", ascending=True).head(10).reset_index(drop=True),
+    )
 
 def analyze_renko_signal(symbol: str, timeframe: str):
     """Live Renko signal. Signal rules unchanged; only box-size ladder updated:
@@ -3842,45 +3898,67 @@ def get_most_active(by: str = "value"):
         except Exception:
             pass
 
-    # ---- Fallback: rank Nifty-50 universe via Yahoo (volume / approx value) ----
+    # ---- Fallback: rank Nifty-50 universe via live Yahoo quotes (volume / approx value) ----
+    # Same lag fix as top-movers / heatmap: prefer fast_info last_price + completed prev close.
     try:
         uni = list(get_stock_universe()) if "get_stock_universe" in globals() else []
         if not uni:
             uni = ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN", "BHARTIARTL",
                    "ITC", "LT", "AXISBANK", "KOTAKBANK", "HINDUNILVR", "BAJFINANCE", "ASIANPAINT"]
-        tickers = [f"{s}.NS" for s in uni]
-        data = yf.download(tickers, period="5d", group_by="ticker", progress=False, threads=True)
-        rows = []
-        for sym in uni:
+        ist = pytz.timezone("Asia/Kolkata")
+        today = datetime.now(ist).date()
+
+        def _one_active(sym: str):
             try:
-                tk = f"{sym}.NS"
-                hist = None
-                if hasattr(data, "columns") and getattr(data.columns, "nlevels", 1) > 1:
-                    if tk in data.columns.get_level_values(0):
-                        hist = data[tk]
-                elif hasattr(data, "columns") and "Close" in data.columns:
-                    hist = data
-                if hist is None or hist.empty:
-                    continue
-                hist = hist.dropna(subset=["Close"])
-                if hist.empty:
-                    continue
-                last = hist.iloc[-1]
-                prev = hist.iloc[-2] if len(hist) > 1 else last
-                ltp = float(last["Close"])
-                prevc = float(prev["Close"]) if prev is not None else ltp
-                vol = float(last["Volume"]) if "Volume" in last.index and pd.notnull(last["Volume"]) else 0.0
+                t = yf.Ticker(f"{sym}.NS")
+                daily = t.history(period="10d", interval="1d")
+                if daily is None or daily.empty:
+                    return None
+                daily = daily.dropna(subset=["Close"])
+                if daily.empty:
+                    return None
+                last_ts = daily.index[-1]
+                try:
+                    last_d = last_ts.tz_convert(ist).date() if last_ts.tzinfo else last_ts.date()
+                except Exception:
+                    last_d = pd.Timestamp(last_ts).date()
+                if last_d == today and len(daily) >= 2:
+                    prevc = float(daily["Close"].iloc[-2])
+                    bar_close = float(daily["Close"].iloc[-1])
+                    vol = float(daily["Volume"].iloc[-1]) if "Volume" in daily.columns else 0.0
+                else:
+                    prevc = float(daily["Close"].iloc[-1])
+                    bar_close = prevc
+                    vol = float(daily["Volume"].iloc[-1]) if "Volume" in daily.columns else 0.0
+                ltp = None
+                try:
+                    fi = t.fast_info
+                    ltp = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
+                    # Prefer live volume when present
+                    live_vol = getattr(fi, "last_volume", None) or getattr(fi, "regular_market_volume", None)
+                    if live_vol is not None and float(live_vol) > 0:
+                        vol = float(live_vol)
+                except Exception:
+                    pass
+                if ltp is None or float(ltp) <= 0:
+                    ltp = bar_close
+                ltp = float(ltp)
+                if prevc <= 0:
+                    return None
                 pct = ((ltp - prevc) / prevc * 100) if prevc else 0.0
                 val_lakh = (ltp * vol) / 1e5 if vol else 0.0
-                rows.append({
+                return {
                     "Symbol": sym,
                     "LTP": round(ltp, 2),
                     "% Chg": round(pct, 2),
                     "Volume": int(vol),
                     "Value (₹ Lakh)": round(val_lakh, 2),
-                })
+                }
             except Exception:
-                continue
+                return None
+
+        results = _safe_parallel_map(_one_active, list(uni), max_workers=8)
+        rows = [r for r in results if r is not None]
         if not rows:
             return pd.DataFrame()
         df = pd.DataFrame(rows)
@@ -4241,36 +4319,66 @@ def get_fii_dii_sessions(n_days: int = 10):
 
 
 # ---------- Nifty 50 Heatmap ----------
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=90, show_spinner=False)
 def get_nifty50_heatmap(universe: list):
-    try:
-        tickers = [f"{s}.NS" for s in universe]
-        data = yf.download(tickers, period="5d", group_by="ticker", progress=False, threads=True)
-        rows = []
-        for sym in universe:
-            try:
-                hist = data if len(universe) == 1 else (data[f"{sym}.NS"] if f"{sym}.NS" in data.columns.get_level_values(0) else None)
-                if hist is None or hist.empty:
-                    continue
-                close = hist["Close"].dropna()
-                if len(close) < 2:
-                    continue
-                last, prev = float(close.iloc[-1]), float(close.iloc[-2])
-                pct = (last - prev) / prev * 100 if prev else 0
-                # Intraday move vs open of last bar when available (refresh-to-refresh uses session)
-                day_open = float(hist["Open"].iloc[-1]) if "Open" in hist.columns else prev
-                intraday_pct = (last - day_open) / day_open * 100 if day_open else 0
-                rows.append({
-                    "Symbol": sym,
-                    "LTP": round(last, 2),
-                    "% Chg": round(pct, 2),
-                    "Intraday %": round(intraday_pct, 2),
-                })
-            except Exception:
-                continue
-        return pd.DataFrame(rows)
-    except Exception:
+    """Nifty-50 heatmap with live % change.
+    Same fix as get_top_movers: bulk daily download was lagging one session on Cloud.
+    Now uses live last_price + previous completed daily close.
+    """
+    if not universe:
         return pd.DataFrame()
+
+    ist = pytz.timezone("Asia/Kolkata")
+    today = datetime.now(ist).date()
+
+    def _one(sym: str):
+        try:
+            t = yf.Ticker(f"{sym}.NS")
+            daily = t.history(period="10d", interval="1d")
+            if daily is None or daily.empty:
+                return None
+            daily = daily.dropna(subset=["Close"])
+            if daily.empty:
+                return None
+            last_ts = daily.index[-1]
+            try:
+                last_d = last_ts.tz_convert(ist).date() if last_ts.tzinfo else last_ts.date()
+            except Exception:
+                last_d = pd.Timestamp(last_ts).date()
+            if last_d == today and len(daily) >= 2:
+                prev = float(daily["Close"].iloc[-2])
+                bar_close = float(daily["Close"].iloc[-1])
+                day_open = float(daily["Open"].iloc[-1]) if "Open" in daily.columns else prev
+            else:
+                prev = float(daily["Close"].iloc[-1])
+                bar_close = prev
+                day_open = float(daily["Open"].iloc[-1]) if "Open" in daily.columns else prev
+
+            ltp = None
+            try:
+                fi = t.fast_info
+                ltp = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
+            except Exception:
+                pass
+            if ltp is None or float(ltp) <= 0:
+                ltp = bar_close
+            ltp = float(ltp)
+            if prev <= 0:
+                return None
+            pct = (ltp - prev) / prev * 100
+            intraday_pct = (ltp - day_open) / day_open * 100 if day_open else 0.0
+            return {
+                "Symbol": sym,
+                "LTP": round(ltp, 2),
+                "% Chg": round(pct, 2),
+                "Intraday %": round(intraday_pct, 2),
+            }
+        except Exception:
+            return None
+
+    results = _safe_parallel_map(_one, list(universe), max_workers=8)
+    rows = [r for r in results if r is not None]
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 # ---------- Corporate Actions (Nifty 50) ----------
 @st.cache_data(ttl=300, show_spinner=False)
@@ -4447,57 +4555,170 @@ def get_corporate_actions(universe: list):
     return df.head(30)
 
 
-# ---------- Top 5 market-moving business news (30-min cache) ----------
+# ---------- Top 10 market-moving business news (30-min cache) ----------
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_top_business_news():
     """Top India + global market-moving headlines (Top 10).
-    Sources prioritised via Google News RSS: ET, Moneycontrol, Bloomberg, CNBC Asia,
-    Financial Express, Zee Business, Dalal Street, Smartinvestor, Mint, BS, Reuters, FT.
+    Improvements v7.7.6:
+      - Stronger source diversity (cap 2 per outlet; prefer ET / MC / FE / CNBC / Bloomberg)
+      - Near-duplicate suppression (normalised title core, not just exact match)
+      - Explicit per-source Google News queries so Mint cannot dominate the list
+      - 30-minute cache (ttl=1800) — new headlines appear after cache expires or full reload
     """
-    items = []
+    # Preferred outlets (higher rank = preferred when scores are close)
+    SOURCE_RANK = {
+        "economic times": 10, "moneycontrol": 10, "financial express": 9,
+        "cnbc": 9, "bloomberg": 9, "reuters": 8, "business standard": 8,
+        "mint": 6, "livemint": 6, "zee business": 7, "zeebiz": 7,
+        "dalal street": 5, "smartinvestor": 5, "financial times": 8,
+        "hindu business": 6, "ndtv profit": 5, "cnbctv18": 8,
+    }
+    MAX_PER_SOURCE = 2
+
+    # Targeted queries — force coverage across major desks instead of one broad search
     queries = [
-        "(India+OR+Nifty+OR+Sensex+OR+RBI+OR+FII+OR+Budget+OR+GST)+when:1d",
-        "(Federal+Reserve+OR+US+inflation+OR+Treasury+OR+crude+oil+OR+geopolitics)+when:1d",
-        "(site:economictimes.indiatimes.com+OR+site:moneycontrol.com+OR+site:financialexpress.com)+(market+OR+nifty+OR+stocks)+when:1d",
-        "(China+OR+Japan+OR+Hong+Kong+OR+Asia+markets+OR+trade+deal)+when:1d",
-        "(Bloomberg+OR+CNBC+OR+%22Financial+Times%22+OR+Reuters)+(India+OR+Asia+OR+Fed+OR+oil)+when:1d",
-        "(site:zeebiz.com+OR+site:dsij.in+OR+site:smartinvestor.in+OR+site:livemint.com+OR+site:business-standard.com)+(nifty+OR+market+OR+FII)+when:1d",
+        # Core India markets
+        "site:economictimes.indiatimes.com+(Nifty+OR+Sensex+OR+FII+OR+RBI+OR+stocks)+when:1d",
+        "site:moneycontrol.com+(Nifty+OR+Sensex+OR+market+OR+FII+OR+stocks)+when:1d",
+        "site:financialexpress.com+(Nifty+OR+Sensex+OR+market+OR+stocks)+when:1d",
+        # Global / macro that moves India open
+        "(Federal+Reserve+OR+US+inflation+OR+Treasury+yields+OR+crude+oil)+when:1d",
+        "(site:cnbc.com+OR+site:bloomberg.com+OR+site:reuters.com)+(India+OR+Asia+OR+Fed+OR+oil)+when:1d",
+        # Asia + secondary India desks (capped later)
+        "(China+OR+Japan+OR+Hong+Kong+OR+Asia+markets)+when:1d",
+        "site:livemint.com+(Nifty+OR+market+OR+FII)+when:1d",
+        "site:business-standard.com+(Nifty+OR+Sensex+OR+market)+when:1d",
+        "(site:zeebiz.com+OR+site:cnbctv18.com)+(Nifty+OR+market)+when:1d",
     ]
-    headers = {"User-Agent": "Mozilla/5.0"}
-    seen = set()
+
+    def _extract_source(title: str) -> str:
+        """Google News titles usually end with ' - Source Name'."""
+        if " - " in title:
+            tail = title.rsplit(" - ", 1)[-1].strip().lower()
+            # Normalise common variants
+            if "economic times" in tail or tail == "et":
+                return "economic times"
+            if "moneycontrol" in tail:
+                return "moneycontrol"
+            if "financial express" in tail:
+                return "financial express"
+            if "livemint" in tail or tail == "mint":
+                return "mint"
+            if "business standard" in tail:
+                return "business standard"
+            if "cnbc" in tail:
+                return "cnbc"
+            if "bloomberg" in tail:
+                return "bloomberg"
+            if "reuters" in tail:
+                return "reuters"
+            if "zee" in tail:
+                return "zee business"
+            if "dalal street" in tail:
+                return "dalal street"
+            if "smartinvestor" in tail:
+                return "smartinvestor"
+            if "cnbctv18" in tail or "cnbc-tv18" in tail:
+                return "cnbctv18"
+            if "financial times" in tail or tail == "ft":
+                return "financial times"
+            return tail[:40]
+        return "unknown"
+
+    def _norm_core(title: str) -> str:
+        """Normalise title for near-duplicate detection (strip source, punctuation, filler)."""
+        core = title
+        if " - " in core:
+            core = core.rsplit(" - ", 1)[0]
+        core = core.lower()
+        core = re.sub(r"[^a-z0-9\s]", " ", core)
+        # Drop very common filler words
+        stop = {"the", "a", "an", "to", "of", "in", "on", "for", "and", "or", "as", "at",
+                "is", "are", "was", "by", "with", "from", "after", "over", "its", "this",
+                "that", "rs", "crore", "lakh", "pct", "percent", "shares", "stock", "stocks"}
+        tokens = [t for t in core.split() if t not in stop and len(t) > 1]
+        return " ".join(tokens[:12])  # first ~12 content tokens are enough
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept-Language": "en-IN,en;q=0.9",
+    }
+    raw = []
+    seen_exact = set()
     for q in queries:
         try:
             rss = f"https://news.google.com/rss/search?q={q}&hl=en-IN&gl=IN&ceid=IN:en"
-            nr = requests.get(rss, headers=headers, timeout=7)
+            nr = requests.get(rss, headers=headers, timeout=8)
             if not nr.ok:
                 continue
             root = ET.fromstring(nr.content)
             for item in root.findall(".//item"):
                 title = (item.findtext("title") or "").strip()
                 link = (item.findtext("link") or "").strip()
-                if not title or title in seen:
+                if not title or title in seen_exact:
                     continue
+                seen_exact.add(title)
                 low = title.lower()
+                # Relevance score
                 score = 0
                 for kw in ["fed", "rate", "oil", "crude", "treasury", "china", "india", "nifty",
                            "sensex", "trade", "war", "sanction", "inflation", "gdp", "stimulus",
                            "yen", "dollar", "bitcoin", "gold", "geopolit", "deal", "rbi", "fii",
-                           "budget", "gst", "sebi", "ipo", "earnings", "rupee", "bond", "fomc"]:
+                           "budget", "gst", "sebi", "ipo", "earnings", "rupee", "bond", "fomc",
+                           "market", "stocks", "equity", "bank", "rbi"]:
                     if kw in low:
                         score += 1
-                for src in ["economic times", "moneycontrol", "bloomberg", "financial times",
-                            "reuters", "trading economics", "mint", "business standard",
-                            "cnbc", "financial express", "zee business", "zeebiz",
-                            "dalal street", "smartinvestor", "livemint"]:
-                    if src in low:
-                        score += 2
-                if score >= 1:
-                    seen.add(title)
-                    items.append({"title": title, "link": link, "score": score})
+                src = _extract_source(title)
+                rank = SOURCE_RANK.get(src, 3)
+                score += rank  # prefer quality desks
+                if score >= 2:
+                    raw.append({
+                        "title": title,
+                        "link": link,
+                        "score": score,
+                        "source": src,
+                        "core": _norm_core(title),
+                    })
         except Exception:
             continue
-    items.sort(key=lambda x: -x["score"])
-    return items[:10]
+
+    # --- Near-duplicate suppression + per-source cap ---
+    # Sort by score desc so higher-quality / more relevant items win the slot
+    raw.sort(key=lambda x: -x["score"])
+    selected = []
+    used_cores = []
+    source_count = {}
+
+    def _is_near_dup(core: str) -> bool:
+        if not core:
+            return False
+        tokens = set(core.split())
+        if len(tokens) < 3:
+            return core in used_cores
+        for prev in used_cores:
+            prev_tokens = set(prev.split())
+            if not prev_tokens:
+                continue
+            overlap = len(tokens & prev_tokens) / max(len(tokens), len(prev_tokens))
+            if overlap >= 0.55:  # >55% token overlap → same story
+                return True
+        return False
+
+    for it in raw:
+        src = it["source"]
+        if source_count.get(src, 0) >= MAX_PER_SOURCE:
+            continue
+        if _is_near_dup(it["core"]):
+            continue
+        selected.append(it)
+        used_cores.append(it["core"])
+        source_count[src] = source_count.get(src, 0) + 1
+        if len(selected) >= 10:
+            break
+
+    # Return clean dicts (drop internal keys)
+    return [{"title": x["title"], "link": x["link"], "score": x["score"], "source": x["source"]}
+            for x in selected]
 
 @st.cache_data(ttl=900, show_spinner=False)
 def get_china_asia_context():
@@ -4785,7 +5006,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.5 — thread-safe pools · MidSelect · FII 10-day")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.6 — live % change + diversified news · thread-safe · MidSelect · FII 10-day")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -6254,20 +6475,35 @@ st.markdown("---")
 # Top 5 Business News (30-min refresh)
 # -------------------------------------------------
 st.markdown('<div class="section-header">Top 10 Market-Moving Business News</div>', unsafe_allow_html=True)
-st.caption("India-first + global headlines — ET, Moneycontrol, Bloomberg, CNBC Asia, Financial Express, Zee Business, Dalal Street, Smartinvestor, Mint, BS, Reuters, FT. Auto-refreshes every 30 minutes.")
+st.caption(
+    "India-first + global headlines · max 2 per source · near-duplicate suppressed · "
+    "ET · Moneycontrol · Financial Express · CNBC · Bloomberg · Reuters · Mint · BS · Zee. "
+    "Cache 30 min — new headlines appear after expiry or full page reload."
+)
 
 biz_news = get_top_business_news()
 
-# Top 6 linked list (quick scan)
 if not biz_news:
     st.info("News feed temporarily unavailable.")
 else:
     news_html = '<div class="news-box">'
     for i, n in enumerate(biz_news[:10], 1):
+        src = n.get("source") or ""
+        src_badge = (
+            f' <span style="font-size:10px;font-weight:600;color:#64748b;'
+            f'background:#f1f5f9;border-radius:4px;padding:1px 5px;margin-left:4px;">'
+            f'{src.title()}</span>'
+        ) if src and src != "unknown" else ""
         if n.get("link"):
-            news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> <a href="{n["link"]}" target="_blank">{n["title"]}</a></div>'
+            news_html += (
+                f'<div style="margin-bottom:8px;line-height:1.35;">'
+                f'<b>{i}.</b> <a href="{n["link"]}" target="_blank">{n["title"]}</a>{src_badge}</div>'
+            )
         else:
-            news_html += f'<div style="margin-bottom:8px;"><b>{i}.</b> {n["title"]}</div>'
+            news_html += (
+                f'<div style="margin-bottom:8px;line-height:1.35;">'
+                f'<b>{i}.</b> {n["title"]}{src_badge}</div>'
+            )
     news_html += "</div>"
     st.markdown(news_html, unsafe_allow_html=True)
 
