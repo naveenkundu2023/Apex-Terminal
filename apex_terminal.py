@@ -1,4 +1,11 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-11-06 (v7.7.6)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-11-06 (v7.7.7)
+# v7.7.7 (multi-source live Nifty-50 + desktop density):
+# 1) Heatmap / Gainers-Losers / Most-Active / Breadth:
+#    Shared multi-source live batch (NSE equity-stockIndices → Yahoo intraday 1m/5m
+#    → fast_info). Per-symbol picks newest parseable timestamp; market-hours = *Live,
+#    after close = *Market closed. Yahoo daily-only lag path retired as primary.
+# 2) Desktop-only density (min-width 1101px): tighter index/heatmap/FII/movers/
+#    breadth/panel padding. OI chart + Renko layout untouched. Mobile unchanged.
 # v7.7.6 (live % change + news quality):
 # 1) Top Gainers/Losers + Heatmap + Most-Active Yahoo fallback:
 #    bulk yf.download daily was lagging one session on Cloud → now live fast_info
@@ -688,6 +695,45 @@ def apply_theme(theme: str):
             .fii-pos { color: #15803d !important; font-weight: 700; }
             .fii-neg { color: #b91c1c !important; font-weight: 700; }
 
+
+            /* === v7.7.7 desktop density (aggressive) — mobile/tablet unchanged === */
+            @media (min-width: 1101px) {
+                .dash-topbar { padding: 6px 4px 10px 4px !important; margin-bottom: 2px !important; }
+                .dash-brand h1 { font-size: 20px !important; }
+                .section-header { margin-bottom: 6px !important; margin-top: 2px !important; padding-bottom: 2px !important; font-size: 15px !important; }
+                .panel-card, .analysis-box { padding: 10px 12px !important; margin-bottom: 8px !important; }
+                .dash-divider { margin: 8px 0 !important; }
+                .index-grid { gap: 6px !important; }
+                .index-grid .metric-card { min-height: 56px !important; padding: 4px 3px !important; }
+                .index-grid .index-title { font-size: 8px !important; }
+                .index-grid .index-price { font-size: 12px !important; }
+                .index-grid .index-change { font-size: 9px !important; }
+                .heat-grid { gap: 4px !important; }
+                .heat-grid .heat-cell { min-height: 52px !important; padding: 4px 1px !important; }
+                .heat-grid .hc-sym { font-size: 11px !important; }
+                .heat-grid .hc-pct { font-size: 11px !important; }
+                .heat-grid .hc-ltp { font-size: 10px !important; }
+                .movers-grid { gap: 6px !important; margin-bottom: 4px !important; }
+                .movers-panel { padding: 5px 6px 4px 6px !important; }
+                .movers-tbl td { padding: 2px 3px !important; }
+                .movers-tbl th { padding: 1px 3px 3px 3px !important; }
+                .breadth-grid, .live-an-grid { gap: 4px !important; }
+                .breadth-card { min-height: 46px !important; padding: 6px 4px !important; }
+                .breadth-lab { font-size: 11px !important; margin-bottom: 2px !important; }
+                .breadth-val { font-size: 14px !important; }
+                .fii-grid { gap: 6px !important; }
+                .fii-card .fii-band { height: 11px !important; }
+                .fii-card .fii-body { padding: 3px 6px 4px 6px !important; }
+                .fii-card .fii-date { font-size: 13px !important; }
+                .fii-card .fii-month { font-size: 9px !important; margin-bottom: 1px !important; }
+                .fii-card .fii-nifty { font-size: 9px !important; margin-bottom: 1px !important; }
+                .fii-card .fii-row { font-size: 9px !important; line-height: 1.2 !important; }
+                .fii-card .fii-net { font-size: 11px !important; margin: 1px 0 !important; }
+                .ca-box, .news-box { padding: 8px 12px !important; margin-bottom: 6px !important; }
+                .res-day { min-height: 56px !important; padding: 4px 3px !important; }
+                .builtup-wrap { padding: 10px !important; }
+            }
+
             @media (max-width: 600px) {
                 .res-date-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
                 .res-day { min-height: 58px; padding: 5px 3px; }
@@ -1114,6 +1160,45 @@ def apply_theme(theme: str):
             }
             .fii-pos { color: #15803d !important; font-weight: 700; }
             .fii-neg { color: #b91c1c !important; font-weight: 700; }
+
+
+            /* === v7.7.7 desktop density (aggressive) — mobile/tablet unchanged === */
+            @media (min-width: 1101px) {
+                .dash-topbar { padding: 6px 4px 10px 4px !important; margin-bottom: 2px !important; }
+                .dash-brand h1 { font-size: 20px !important; }
+                .section-header { margin-bottom: 6px !important; margin-top: 2px !important; padding-bottom: 2px !important; font-size: 15px !important; }
+                .panel-card, .analysis-box { padding: 10px 12px !important; margin-bottom: 8px !important; }
+                .dash-divider { margin: 8px 0 !important; }
+                .index-grid { gap: 6px !important; }
+                .index-grid .metric-card { min-height: 56px !important; padding: 4px 3px !important; }
+                .index-grid .index-title { font-size: 8px !important; }
+                .index-grid .index-price { font-size: 12px !important; }
+                .index-grid .index-change { font-size: 9px !important; }
+                .heat-grid { gap: 4px !important; }
+                .heat-grid .heat-cell { min-height: 52px !important; padding: 4px 1px !important; }
+                .heat-grid .hc-sym { font-size: 11px !important; }
+                .heat-grid .hc-pct { font-size: 11px !important; }
+                .heat-grid .hc-ltp { font-size: 10px !important; }
+                .movers-grid { gap: 6px !important; margin-bottom: 4px !important; }
+                .movers-panel { padding: 5px 6px 4px 6px !important; }
+                .movers-tbl td { padding: 2px 3px !important; }
+                .movers-tbl th { padding: 1px 3px 3px 3px !important; }
+                .breadth-grid, .live-an-grid { gap: 4px !important; }
+                .breadth-card { min-height: 46px !important; padding: 6px 4px !important; }
+                .breadth-lab { font-size: 11px !important; margin-bottom: 2px !important; }
+                .breadth-val { font-size: 14px !important; }
+                .fii-grid { gap: 6px !important; }
+                .fii-card .fii-band { height: 11px !important; }
+                .fii-card .fii-body { padding: 3px 6px 4px 6px !important; }
+                .fii-card .fii-date { font-size: 13px !important; }
+                .fii-card .fii-month { font-size: 9px !important; margin-bottom: 1px !important; }
+                .fii-card .fii-nifty { font-size: 9px !important; margin-bottom: 1px !important; }
+                .fii-card .fii-row { font-size: 9px !important; line-height: 1.2 !important; }
+                .fii-card .fii-net { font-size: 11px !important; margin: 1px 0 !important; }
+                .ca-box, .news-box { padding: 8px 12px !important; margin-bottom: 6px !important; }
+                .res-day { min-height: 56px !important; padding: 4px 3px !important; }
+                .builtup-wrap { padding: 10px !important; }
+            }
 
             @media (max-width: 600px) {
                 .res-date-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
@@ -2315,77 +2400,282 @@ def generate_renko(df: pd.DataFrame, box_size: float) -> pd.DataFrame:
     renko_df["Brick"] = range(1, len(renko_df) + 1)
     return renko_df
 
-@st.cache_data(ttl=90, show_spinner=False)
-def get_top_movers(universe: list):
-    """Live top gainers / losers for Nifty-50 universe.
-    Uses fast_info last_price (live) + previous completed daily close.
-    Bulk yf.download daily was frequently returning the prior session on Streamlit Cloud,
-    so rankings lagged by one day (e.g. yesterday's INDIGO still showing as top gainer).
+@st.cache_data(ttl=60, show_spinner=False)
+def get_nifty50_live_batch(universe: tuple):
+    """Live quotes for Nifty-50 from multiple sources; per-symbol keeps the newest
+    parseable timestamp. Sources tried in parallel:
+      1) NSE equity-stockIndices?index=NIFTY 50  (best when not 403'd)
+      2) Yahoo intraday (1m / 5m last) + completed prior daily close
+      3) Yahoo fast_info last_price + previous_close
+    Returns DataFrame columns:
+      Symbol, LTP, prev_close, Change, % Chg, Volume, Value (₹ Lakh),
+      source, source_ts (IST-aware datetime or None), status ('live'|'market_closed')
     """
-    if not universe:
-        return None, None
+    uni = [str(s).strip().upper() for s in (universe or []) if s]
+    if not uni:
+        return pd.DataFrame()
 
     ist = pytz.timezone("Asia/Kolkata")
-    today = datetime.now(ist).date()
+    now_ist = datetime.now(ist)
+    market_open = is_nse_market_hours()
+    status = "live" if market_open else "market_closed"
+    today = now_ist.date()
 
-    def _one(sym: str):
+    cands = {s: [] for s in uni}
+
+    def _add(sym, ltp, prev, vol, source, source_ts=None):
         try:
-            t = yf.Ticker(f"{sym}.NS")
-            # 1) Previous completed daily close
-            daily = t.history(period="10d", interval="1d")
-            if daily is None or daily.empty:
-                return None
-            daily = daily.dropna(subset=["Close"])
-            if daily.empty:
-                return None
-            # Identify last completed bar (exclude today if present)
-            last_ts = daily.index[-1]
-            try:
-                last_d = last_ts.tz_convert(ist).date() if last_ts.tzinfo else last_ts.date()
-            except Exception:
-                last_d = pd.Timestamp(last_ts).date()
-            if last_d == today and len(daily) >= 2:
-                prev = float(daily["Close"].iloc[-2])
-                # Today's bar Close can lag; prefer live
-                bar_close = float(daily["Close"].iloc[-1])
-            else:
-                prev = float(daily["Close"].iloc[-1])
-                bar_close = prev
-
-            # 2) Live LTP
-            ltp = None
-            try:
-                fi = t.fast_info
-                ltp = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
-            except Exception:
-                pass
-            if ltp is None or float(ltp) <= 0:
-                ltp = bar_close
             ltp = float(ltp)
-            if prev <= 0:
-                return None
+            prev = float(prev) if prev is not None else None
+            if ltp <= 0:
+                return
+            if prev is None or prev <= 0:
+                prev = ltp
+            vol = float(vol or 0)
             chg = ltp - prev
-            pct = (chg / prev) * 100
-            return {
+            pct = (chg / prev * 100) if prev else 0.0
+            cands[sym].append({
                 "Symbol": sym,
                 "LTP": round(ltp, 2),
+                "prev_close": round(prev, 2),
                 "Change": round(chg, 2),
                 "% Chg": round(pct, 2),
-            }
+                "Volume": int(vol) if vol else 0,
+                "Value (₹ Lakh)": round((ltp * vol) / 1e5, 2) if vol else 0.0,
+                "source": source,
+                "source_ts": source_ts,
+                "status": status,
+            })
         except Exception:
-            return None
+            return
 
-    results = _safe_parallel_map(_one, list(universe), max_workers=8)
-    rows = [r for r in results if r is not None]
+    # 1) NSE equity-stockIndices
+    try:
+        headers = nse_session_headers()
+        sess = requests.Session()
+        sess.get("https://www.nseindia.com", headers=headers, timeout=6)
+        sess.get(
+            "https://www.nseindia.com/market-data/live-equity-market?symbol=NIFTY%2050",
+            headers=headers, timeout=6,
+        )
+        for idx_name in ("NIFTY 50", "NIFTY50", "Nifty 50"):
+            try:
+                url = (
+                    "https://www.nseindia.com/api/equity-stockIndices?index="
+                    + requests.utils.quote(idx_name)
+                )
+                r = sess.get(url, headers=headers, timeout=10)
+                if r.status_code != 200:
+                    continue
+                payload = r.json() or {}
+                rows = payload.get("data") or []
+                if not rows:
+                    continue
+                fetch_ts = now_ist
+                for item in rows:
+                    sym = str(item.get("symbol") or item.get("Symbol") or "").strip().upper()
+                    if not sym or sym not in cands:
+                        continue
+                    ltp = item.get("lastPrice") or item.get("ltp") or item.get("last")
+                    prev = (
+                        item.get("previousClose")
+                        or item.get("prevClose")
+                        or item.get("previous_close")
+                    )
+                    vol = (
+                        item.get("totalTradedVolume")
+                        or item.get("volume")
+                        or item.get("tradedVolume")
+                        or 0
+                    )
+                    if (prev is None or float(prev or 0) <= 0) and ltp is not None:
+                        try:
+                            pchg = item.get("pChange") or item.get("perChange")
+                            if pchg is not None and float(ltp) and float(pchg) != 0:
+                                prev = float(ltp) / (1.0 + float(pchg) / 100.0)
+                        except Exception:
+                            pass
+                    _add(sym, ltp, prev, vol, "NSE", fetch_ts)
+                break
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # 2+3) Yahoo intraday / fast_info / daily
+    def _yahoo_one(sym: str):
+        out = []
+        try:
+            t = yf.Ticker(f"{sym}.NS")
+            prev = None
+            bar_close = None
+            vol = 0.0
+            daily_ts = None
+            try:
+                daily = t.history(period="10d", interval="1d")
+                if daily is not None and not daily.empty:
+                    daily = daily.dropna(subset=["Close"])
+                if daily is not None and not daily.empty:
+                    last_ts = daily.index[-1]
+                    try:
+                        last_d = (
+                            last_ts.tz_convert(ist).date()
+                            if getattr(last_ts, "tzinfo", None)
+                            else pd.Timestamp(last_ts).date()
+                        )
+                    except Exception:
+                        last_d = pd.Timestamp(last_ts).date()
+                    if last_d == today and len(daily) >= 2:
+                        prev = float(daily["Close"].iloc[-2])
+                        bar_close = float(daily["Close"].iloc[-1])
+                        vol = float(daily["Volume"].iloc[-1]) if "Volume" in daily.columns else 0.0
+                        try:
+                            daily_ts = (
+                                last_ts.tz_convert(ist)
+                                if getattr(last_ts, "tzinfo", None)
+                                else ist.localize(pd.Timestamp(last_ts).to_pydatetime())
+                            )
+                        except Exception:
+                            daily_ts = now_ist
+                    else:
+                        prev = float(daily["Close"].iloc[-1])
+                        bar_close = prev
+                        vol = float(daily["Volume"].iloc[-1]) if "Volume" in daily.columns else 0.0
+                        try:
+                            daily_ts = (
+                                last_ts.tz_convert(ist)
+                                if getattr(last_ts, "tzinfo", None)
+                                else ist.localize(pd.Timestamp(last_ts).to_pydatetime())
+                            )
+                        except Exception:
+                            daily_ts = None
+            except Exception:
+                pass
+
+            intra_ltp = None
+            intra_ts = None
+            intra_vol = None
+            for interval in ("1m", "5m"):
+                try:
+                    ih = t.history(period="1d", interval=interval, prepost=False)
+                    if ih is None or ih.empty:
+                        continue
+                    ih = ih.dropna(subset=["Close"])
+                    if ih.empty:
+                        continue
+                    intra_ltp = float(ih["Close"].iloc[-1])
+                    if "Volume" in ih.columns:
+                        try:
+                            intra_vol = float(ih["Volume"].fillna(0).sum())
+                        except Exception:
+                            intra_vol = float(ih["Volume"].iloc[-1] or 0)
+                    ts = ih.index[-1]
+                    try:
+                        intra_ts = (
+                            ts.tz_convert(ist)
+                            if getattr(ts, "tzinfo", None)
+                            else ist.localize(pd.Timestamp(ts).to_pydatetime())
+                        )
+                    except Exception:
+                        intra_ts = now_ist
+                    break
+                except Exception:
+                    continue
+
+            fi_ltp = fi_prev = fi_vol = None
+            try:
+                fi = t.fast_info
+                fi_ltp = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
+                fi_prev = getattr(fi, "previous_close", None)
+                fi_vol = getattr(fi, "last_volume", None) or getattr(fi, "regular_market_volume", None)
+            except Exception:
+                pass
+
+            if prev is None and fi_prev is not None:
+                try:
+                    prev = float(fi_prev)
+                except Exception:
+                    pass
+
+            if intra_ltp and prev:
+                v = intra_vol if intra_vol and intra_vol > 0 else vol
+                out.append((sym, intra_ltp, prev, v, "Yahoo intraday", intra_ts))
+            if fi_ltp is not None:
+                try:
+                    fl = float(fi_ltp)
+                    fp = float(fi_prev) if fi_prev is not None else (prev or fl)
+                    fv = float(fi_vol) if fi_vol is not None and float(fi_vol) > 0 else vol
+                    out.append(
+                        (
+                            sym,
+                            fl,
+                            fp,
+                            fv,
+                            "Yahoo fast_info",
+                            now_ist if market_open else daily_ts,
+                        )
+                    )
+                except Exception:
+                    pass
+            if bar_close and prev:
+                out.append((sym, bar_close, prev, vol, "Yahoo daily", daily_ts))
+        except Exception:
+            pass
+        return out
+
+    try:
+        y_results = _safe_parallel_map(_yahoo_one, uni, max_workers=8)
+        for pack in y_results:
+            if not pack:
+                continue
+            for sym, ltp, prev, vol, src, ts in pack:
+                if sym in cands:
+                    _add(sym, ltp, prev, vol, src, ts)
+    except Exception:
+        pass
+
+    rows = []
+    for sym in uni:
+        opts = cands.get(sym) or []
+        if not opts:
+            continue
+
+        def _rank(o):
+            ts = o.get("source_ts")
+            ts_key = ts.timestamp() if hasattr(ts, "timestamp") else 0.0
+            src = (o.get("source") or "").lower()
+            src_boost = (
+                3
+                if src.startswith("nse")
+                else (2 if "intraday" in src else (1 if "fast_info" in src else 0))
+            )
+            return (ts_key, src_boost)
+
+        rows.append(max(opts, key=_rank))
+
     if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_top_movers(universe: list):
+    """Live top gainers / losers for Nifty-50 via multi-source batch (v7.7.7)."""
+    if not universe:
         return None, None
-    df = pd.DataFrame(rows)
-    return (
-        df.sort_values("% Chg", ascending=False).head(10).reset_index(drop=True),
-        df.sort_values("% Chg", ascending=True).head(10).reset_index(drop=True),
-    )
+    try:
+        df = get_nifty50_live_batch(tuple(universe))
+    except Exception:
+        df = pd.DataFrame()
+    if df is None or df.empty or "% Chg" not in df.columns:
+        return None, None
+    gainers = df.sort_values("% Chg", ascending=False).head(10).reset_index(drop=True)
+    losers = df.sort_values("% Chg", ascending=True).head(10).reset_index(drop=True)
+    return gainers, losers
+
 
 def analyze_renko_signal(symbol: str, timeframe: str):
+
     """Live Renko signal. Signal rules unchanged; only box-size ladder updated:
     Daily ATR (existing) → 1H = D/6 → 30M = D/12 → 15M = D/24.
     """
@@ -3136,29 +3426,19 @@ def get_pcr(symbol: str = "NIFTY"):
     data = get_option_sentiment(symbol)
     return data.get("pcr") if data else None
 
-@st.cache_data(ttl=90)
+@st.cache_data(ttl=60, show_spinner=False)
 def get_market_breadth(universe: list):
+    """Bullish / bearish counts from multi-source live batch (same as heatmap)."""
     try:
-        tickers = [f"{s}.NS" for s in universe]
-        data = yf.download(tickers, period="2d", group_by="ticker", progress=False, threads=True)
-        bullish = 0
-        bearish = 0
-        for sym in universe:
-            try:
-                hist = data if len(universe) == 1 else (data[f"{sym}.NS"] if f"{sym}.NS" in data.columns.get_level_values(0) else None)
-                if hist is None or hist.empty or len(hist) < 2:
-                    continue
-                last = float(hist["Close"].iloc[-1])
-                prev = float(hist["Close"].iloc[-2])
-                if last > prev:
-                    bullish += 1
-                elif last < prev:
-                    bearish += 1
-            except Exception:
-                continue
+        df = get_nifty50_live_batch(tuple(universe or []))
+        if df is None or df.empty or "% Chg" not in df.columns:
+            return 0, 0
+        bullish = int((df["% Chg"] > 0).sum())
+        bearish = int((df["% Chg"] < 0).sum())
         return bullish, bearish
     except Exception:
         return 0, 0
+
 
 @st.cache_data(ttl=120)
 def get_stock_news(symbol: str, limit: int = 4):
@@ -3837,11 +4117,11 @@ def build_taaza_khabar_image(
 
 
 # ---------- Most Active (Value / Volume) from NSE + fallbacks ----------
-@st.cache_data(ttl=90, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def get_most_active(by: str = "value"):
     """Top most-active equities by value or volume.
-    Primary: NSE live-analysis API. Fallback: Yahoo ranking of Nifty-50 by volume/value
-    (NSE often returns 403 from cloud/datacenter IPs — fallback keeps the panel alive).
+    Primary: NSE live-analysis API (when reachable).
+    Fallback: multi-source Nifty-50 live batch ranked by volume/value (v7.7.7).
     """
     headers = nse_session_headers()
     endpoints = [
@@ -3872,104 +4152,47 @@ def get_most_active(by: str = "value"):
                     chg = item.get("pChange") or item.get("percentChange") or item.get("perChange") or 0
                     vol = item.get("totalTradedVolume") or item.get("volume") or item.get("tradedQuantity") or 0
                     val = item.get("totalTradedValue") or item.get("value") or item.get("tradedValue") or 0
-                    # NSE totalTradedValue is typically in ₹; convert to Lakh when looks like full rupees
                     try:
                         val_f = float(val) if val else 0.0
                     except Exception:
                         val_f = 0.0
-                    if val_f > 1e6:  # likely full ₹ → show in Lakh
+                    if val_f > 1e6:
                         val_f = val_f / 1e5
                     out.append({
-                        "Symbol": str(sym).strip(),
+                        "Symbol": str(sym).strip().upper(),
                         "LTP": round(float(ltp), 2) if ltp else 0,
                         "% Chg": round(float(chg), 2) if chg else 0,
                         "Volume": int(float(vol)) if vol else 0,
                         "Value (₹ Lakh)": round(val_f, 2),
+                        "source": "NSE",
+                        "status": "live" if is_nse_market_hours() else "market_closed",
                     })
                 if out:
-                    return pd.DataFrame(out[:10])
+                    df = pd.DataFrame(out)
+                    if by == "volume":
+                        df = df.sort_values("Volume", ascending=False)
+                    else:
+                        df = df.sort_values("Value (₹ Lakh)", ascending=False)
+                    return df.head(10).reset_index(drop=True)
             except Exception:
                 continue
     except Exception:
         pass
-    finally:
-        try:
-            session.close()
-        except Exception:
-            pass
 
-    # ---- Fallback: rank Nifty-50 universe via live Yahoo quotes (volume / approx value) ----
-    # Same lag fix as top-movers / heatmap: prefer fast_info last_price + completed prev close.
+    # Fallback: multi-source Nifty-50 batch
     try:
-        uni = list(get_stock_universe()) if "get_stock_universe" in globals() else []
-        if not uni:
-            uni = ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN", "BHARTIARTL",
-                   "ITC", "LT", "AXISBANK", "KOTAKBANK", "HINDUNILVR", "BAJFINANCE", "ASIANPAINT"]
-        ist = pytz.timezone("Asia/Kolkata")
-        today = datetime.now(ist).date()
-
-        def _one_active(sym: str):
-            try:
-                t = yf.Ticker(f"{sym}.NS")
-                daily = t.history(period="10d", interval="1d")
-                if daily is None or daily.empty:
-                    return None
-                daily = daily.dropna(subset=["Close"])
-                if daily.empty:
-                    return None
-                last_ts = daily.index[-1]
-                try:
-                    last_d = last_ts.tz_convert(ist).date() if last_ts.tzinfo else last_ts.date()
-                except Exception:
-                    last_d = pd.Timestamp(last_ts).date()
-                if last_d == today and len(daily) >= 2:
-                    prevc = float(daily["Close"].iloc[-2])
-                    bar_close = float(daily["Close"].iloc[-1])
-                    vol = float(daily["Volume"].iloc[-1]) if "Volume" in daily.columns else 0.0
-                else:
-                    prevc = float(daily["Close"].iloc[-1])
-                    bar_close = prevc
-                    vol = float(daily["Volume"].iloc[-1]) if "Volume" in daily.columns else 0.0
-                ltp = None
-                try:
-                    fi = t.fast_info
-                    ltp = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
-                    # Prefer live volume when present
-                    live_vol = getattr(fi, "last_volume", None) or getattr(fi, "regular_market_volume", None)
-                    if live_vol is not None and float(live_vol) > 0:
-                        vol = float(live_vol)
-                except Exception:
-                    pass
-                if ltp is None or float(ltp) <= 0:
-                    ltp = bar_close
-                ltp = float(ltp)
-                if prevc <= 0:
-                    return None
-                pct = ((ltp - prevc) / prevc * 100) if prevc else 0.0
-                val_lakh = (ltp * vol) / 1e5 if vol else 0.0
-                return {
-                    "Symbol": sym,
-                    "LTP": round(ltp, 2),
-                    "% Chg": round(pct, 2),
-                    "Volume": int(vol),
-                    "Value (₹ Lakh)": round(val_lakh, 2),
-                }
-            except Exception:
-                return None
-
-        results = _safe_parallel_map(_one_active, list(uni), max_workers=8)
-        rows = [r for r in results if r is not None]
-        if not rows:
+        uni = get_stock_universe()
+        df = get_nifty50_live_batch(tuple(uni))
+        if df is None or df.empty:
             return pd.DataFrame()
-        df = pd.DataFrame(rows)
         if by == "volume":
             df = df.sort_values("Volume", ascending=False)
         else:
             df = df.sort_values("Value (₹ Lakh)", ascending=False)
-        return df.head(10).reset_index(drop=True)
+        cols = [c for c in ["Symbol", "LTP", "% Chg", "Volume", "Value (₹ Lakh)", "source", "status"] if c in df.columns]
+        return df[cols].head(10).reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
-
 
 
 # ---------- Research360 MCX commodity quotes + option chain ----------
@@ -4319,66 +4542,20 @@ def get_fii_dii_sessions(n_days: int = 10):
 
 
 # ---------- Nifty 50 Heatmap ----------
-@st.cache_data(ttl=90, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def get_nifty50_heatmap(universe: list):
-    """Nifty-50 heatmap with live % change.
-    Same fix as get_top_movers: bulk daily download was lagging one session on Cloud.
-    Now uses live last_price + previous completed daily close.
-    """
+    """Nifty-50 heatmap from multi-source live batch (v7.7.7)."""
     if not universe:
         return pd.DataFrame()
+    try:
+        df = get_nifty50_live_batch(tuple(universe))
+    except Exception:
+        return pd.DataFrame()
+    if df is None or df.empty:
+        return pd.DataFrame()
+    cols = [c for c in ["Symbol", "LTP", "% Chg", "source", "source_ts", "status"] if c in df.columns]
+    return df[cols].copy() if cols else pd.DataFrame()
 
-    ist = pytz.timezone("Asia/Kolkata")
-    today = datetime.now(ist).date()
-
-    def _one(sym: str):
-        try:
-            t = yf.Ticker(f"{sym}.NS")
-            daily = t.history(period="10d", interval="1d")
-            if daily is None or daily.empty:
-                return None
-            daily = daily.dropna(subset=["Close"])
-            if daily.empty:
-                return None
-            last_ts = daily.index[-1]
-            try:
-                last_d = last_ts.tz_convert(ist).date() if last_ts.tzinfo else last_ts.date()
-            except Exception:
-                last_d = pd.Timestamp(last_ts).date()
-            if last_d == today and len(daily) >= 2:
-                prev = float(daily["Close"].iloc[-2])
-                bar_close = float(daily["Close"].iloc[-1])
-                day_open = float(daily["Open"].iloc[-1]) if "Open" in daily.columns else prev
-            else:
-                prev = float(daily["Close"].iloc[-1])
-                bar_close = prev
-                day_open = float(daily["Open"].iloc[-1]) if "Open" in daily.columns else prev
-
-            ltp = None
-            try:
-                fi = t.fast_info
-                ltp = getattr(fi, "last_price", None) or getattr(fi, "regular_market_price", None)
-            except Exception:
-                pass
-            if ltp is None or float(ltp) <= 0:
-                ltp = bar_close
-            ltp = float(ltp)
-            if prev <= 0:
-                return None
-            pct = (ltp - prev) / prev * 100
-            intraday_pct = (ltp - day_open) / day_open * 100 if day_open else 0.0
-            return {
-                "Symbol": sym,
-                "LTP": round(ltp, 2),
-                "% Chg": round(pct, 2),
-                "Intraday %": round(intraday_pct, 2),
-            }
-        except Exception:
-            return None
-
-    results = _safe_parallel_map(_one, list(universe), max_workers=8)
-    rows = [r for r in results if r is not None]
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 # ---------- Corporate Actions (Nifty 50) ----------
 @st.cache_data(ttl=300, show_spinner=False)
@@ -5006,7 +5183,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.6 — live % change + diversified news · thread-safe · MidSelect · FII 10-day")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.7 — multi-source live Nifty-50 · desktop density · thread-safe · MidSelect · FII 10-day")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -5065,7 +5242,7 @@ with col3:
             fetch_midcap_select, fetch_investing_brent, fetch_tradingeconomics_quote,
             fetch_tradingeconomics_commodity, fetch_stock_data, get_option_sentiment,
             get_options_chain, fetch_option_chain_full, get_stock_summary_analytics, get_index_analytics,
-            get_nifty50_heatmap, get_most_active, get_market_breadth, get_top_movers,
+            get_nifty50_heatmap, get_most_active, get_market_breadth, get_top_movers, get_nifty50_live_batch,
             get_fno_builtup, get_fii_dii_sessions, fetch_mcx_quotes, fetch_commodity_option_chain, get_midselect_ohlc, fetch_midcap_select,
         ):
             try:
@@ -5991,7 +6168,11 @@ else:
 # Gainers / Losers
 # -------------------------------------------------
 st.markdown('<div class="section-header">Top Gainers, Losers & Most Active</div>', unsafe_allow_html=True)
-st.caption("Nifty 50 gainers/losers · NSE most-active (Yahoo fallback). Top 10 each — compact, no scroll.")
+_live_flag = "*Live" if is_nse_market_hours() else "*Market closed"
+st.caption(
+    f"Nifty 50 gainers/losers · most-active (NSE → multi-source live batch). Top 10 each — compact, no scroll. "
+    f"{_live_flag} · multi-source picks newest timestamp per name."
+)
 
 gainers, losers = get_top_movers(universe)
 ma_val = get_most_active("value")
@@ -6123,7 +6304,11 @@ st.markdown("---")
 # Nifty 50 Heatmap
 # -------------------------------------------------
 st.markdown('<div class="section-header">Nifty 50 Heatmap</div>', unsafe_allow_html=True)
-st.caption("Colour intensity = day % change. Green = up, Red = down.")
+_live_flag_h = "*Live" if is_nse_market_hours() else "*Market closed"
+st.caption(
+    f"Colour intensity = day % change vs previous close. Green = up, Red = down. "
+    f"{_live_flag_h} · multi-source (NSE / Yahoo intraday / fast_info), newest timestamp wins."
+)
 
 heat_df = get_nifty50_heatmap(universe)
 if heat_df.empty:
