@@ -1,4 +1,11 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-11-06 (v7.7.7)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-11-07 (v7.7.8)
+# v7.7.8:
+# 1) Gainers/Losers/Most-Active/Heatmap after close: Yahoo daily now uses last session
+#    close vs prior close (not LTP=prev → 0%). Ranking prefers completed daily after hours.
+# 2) Instant Snapshot: Renko box size 30M (ATR/12) + 15M (ATR/24) and live BUY/SELL/…
+#    signal from the same analyzer used by the scanner.
+# 3) Desktop (≥1101px): Market Indices grid 8 columns (≈3 rows); FII 10 cards on one row.
+#    Mobile/tablet breakpoints unchanged.
 # v7.7.7 (multi-source live Nifty-50 + desktop density):
 # 1) Heatmap / Gainers-Losers / Most-Active / Breadth:
 #    Shared multi-source live batch (NSE equity-stockIndices → Yahoo intraday 1m/5m
@@ -703,11 +710,11 @@ def apply_theme(theme: str):
                 .section-header { margin-bottom: 6px !important; margin-top: 2px !important; padding-bottom: 2px !important; font-size: 15px !important; }
                 .panel-card, .analysis-box { padding: 10px 12px !important; margin-bottom: 8px !important; }
                 .dash-divider { margin: 8px 0 !important; }
-                .index-grid { gap: 6px !important; }
-                .index-grid .metric-card { min-height: 56px !important; padding: 4px 3px !important; }
-                .index-grid .index-title { font-size: 8px !important; }
-                .index-grid .index-price { font-size: 12px !important; }
-                .index-grid .index-change { font-size: 9px !important; }
+                .index-grid { grid-template-columns: repeat(8, minmax(0, 1fr)) !important; gap: 5px !important; }
+                .index-grid .metric-card { min-height: 52px !important; padding: 3px 2px !important; }
+                .index-grid .index-title { font-size: 7px !important; }
+                .index-grid .index-price { font-size: 11px !important; }
+                .index-grid .index-change { font-size: 8px !important; }
                 .heat-grid { gap: 4px !important; }
                 .heat-grid .heat-cell { min-height: 52px !important; padding: 4px 1px !important; }
                 .heat-grid .hc-sym { font-size: 11px !important; }
@@ -721,14 +728,14 @@ def apply_theme(theme: str):
                 .breadth-card { min-height: 46px !important; padding: 6px 4px !important; }
                 .breadth-lab { font-size: 11px !important; margin-bottom: 2px !important; }
                 .breadth-val { font-size: 14px !important; }
-                .fii-grid { gap: 6px !important; }
-                .fii-card .fii-band { height: 11px !important; }
-                .fii-card .fii-body { padding: 3px 6px 4px 6px !important; }
-                .fii-card .fii-date { font-size: 13px !important; }
-                .fii-card .fii-month { font-size: 9px !important; margin-bottom: 1px !important; }
-                .fii-card .fii-nifty { font-size: 9px !important; margin-bottom: 1px !important; }
-                .fii-card .fii-row { font-size: 9px !important; line-height: 1.2 !important; }
-                .fii-card .fii-net { font-size: 11px !important; margin: 1px 0 !important; }
+                .fii-grid { grid-template-columns: repeat(10, minmax(0, 1fr)) !important; gap: 4px !important; }
+                .fii-card .fii-band { height: 8px !important; }
+                .fii-card .fii-body { padding: 2px 4px 3px 4px !important; }
+                .fii-card .fii-date { font-size: 11px !important; }
+                .fii-card .fii-month { font-size: 8px !important; margin-bottom: 1px !important; }
+                .fii-card .fii-nifty { font-size: 8px !important; margin-bottom: 1px !important; }
+                .fii-card .fii-row { font-size: 8px !important; line-height: 1.15 !important; }
+                .fii-card .fii-net { font-size: 10px !important; margin: 1px 0 !important; }
                 .ca-box, .news-box { padding: 8px 12px !important; margin-bottom: 6px !important; }
                 .res-day { min-height: 56px !important; padding: 4px 3px !important; }
                 .builtup-wrap { padding: 10px !important; }
@@ -1169,11 +1176,11 @@ def apply_theme(theme: str):
                 .section-header { margin-bottom: 6px !important; margin-top: 2px !important; padding-bottom: 2px !important; font-size: 15px !important; }
                 .panel-card, .analysis-box { padding: 10px 12px !important; margin-bottom: 8px !important; }
                 .dash-divider { margin: 8px 0 !important; }
-                .index-grid { gap: 6px !important; }
-                .index-grid .metric-card { min-height: 56px !important; padding: 4px 3px !important; }
-                .index-grid .index-title { font-size: 8px !important; }
-                .index-grid .index-price { font-size: 12px !important; }
-                .index-grid .index-change { font-size: 9px !important; }
+                .index-grid { grid-template-columns: repeat(8, minmax(0, 1fr)) !important; gap: 5px !important; }
+                .index-grid .metric-card { min-height: 52px !important; padding: 3px 2px !important; }
+                .index-grid .index-title { font-size: 7px !important; }
+                .index-grid .index-price { font-size: 11px !important; }
+                .index-grid .index-change { font-size: 8px !important; }
                 .heat-grid { gap: 4px !important; }
                 .heat-grid .heat-cell { min-height: 52px !important; padding: 4px 1px !important; }
                 .heat-grid .hc-sym { font-size: 11px !important; }
@@ -1187,14 +1194,14 @@ def apply_theme(theme: str):
                 .breadth-card { min-height: 46px !important; padding: 6px 4px !important; }
                 .breadth-lab { font-size: 11px !important; margin-bottom: 2px !important; }
                 .breadth-val { font-size: 14px !important; }
-                .fii-grid { gap: 6px !important; }
-                .fii-card .fii-band { height: 11px !important; }
-                .fii-card .fii-body { padding: 3px 6px 4px 6px !important; }
-                .fii-card .fii-date { font-size: 13px !important; }
-                .fii-card .fii-month { font-size: 9px !important; margin-bottom: 1px !important; }
-                .fii-card .fii-nifty { font-size: 9px !important; margin-bottom: 1px !important; }
-                .fii-card .fii-row { font-size: 9px !important; line-height: 1.2 !important; }
-                .fii-card .fii-net { font-size: 11px !important; margin: 1px 0 !important; }
+                .fii-grid { grid-template-columns: repeat(10, minmax(0, 1fr)) !important; gap: 4px !important; }
+                .fii-card .fii-band { height: 8px !important; }
+                .fii-card .fii-body { padding: 2px 4px 3px 4px !important; }
+                .fii-card .fii-date { font-size: 11px !important; }
+                .fii-card .fii-month { font-size: 8px !important; margin-bottom: 1px !important; }
+                .fii-card .fii-nifty { font-size: 8px !important; margin-bottom: 1px !important; }
+                .fii-card .fii-row { font-size: 8px !important; line-height: 1.15 !important; }
+                .fii-card .fii-net { font-size: 10px !important; margin: 1px 0 !important; }
                 .ca-box, .news-box { padding: 8px 12px !important; margin-bottom: 6px !important; }
                 .res-day { min-height: 56px !important; padding: 4px 3px !important; }
                 .builtup-wrap { padding: 10px !important; }
@@ -2538,8 +2545,14 @@ def get_nifty50_live_batch(universe: tuple):
                         except Exception:
                             daily_ts = now_ist
                     else:
-                        prev = float(daily["Close"].iloc[-1])
-                        bar_close = prev
+                        # Market closed / prior session: LTP = last completed close,
+                        # prev = previous session close → real day % (not 0%).
+                        if len(daily) >= 2:
+                            prev = float(daily["Close"].iloc[-2])
+                            bar_close = float(daily["Close"].iloc[-1])
+                        else:
+                            prev = float(daily["Close"].iloc[-1])
+                            bar_close = prev
                         vol = float(daily["Volume"].iloc[-1]) if "Volume" in daily.columns else 0.0
                         try:
                             daily_ts = (
@@ -2644,11 +2657,25 @@ def get_nifty50_live_batch(universe: tuple):
             ts = o.get("source_ts")
             ts_key = ts.timestamp() if hasattr(ts, "timestamp") else 0.0
             src = (o.get("source") or "").lower()
-            src_boost = (
-                3
-                if src.startswith("nse")
-                else (2 if "intraday" in src else (1 if "fast_info" in src else 0))
-            )
+            # After close prefer completed daily bar (true session %) over fast_info
+            # which can collapse LTP≈prev and show 0%. During live hours keep intraday first.
+            if not market_open:
+                if src.startswith("nse"):
+                    src_boost = 4
+                elif "daily" in src:
+                    src_boost = 3
+                elif "intraday" in src:
+                    src_boost = 2
+                elif "fast_info" in src:
+                    src_boost = 0
+                else:
+                    src_boost = 1
+            else:
+                src_boost = (
+                    3
+                    if src.startswith("nse")
+                    else (2 if "intraday" in src else (1 if "fast_info" in src else 0))
+                )
             return (ts_key, src_boost)
 
         rows.append(max(opts, key=_rank))
@@ -5183,7 +5210,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.7 — multi-source live Nifty-50 · desktop density · thread-safe · MidSelect · FII 10-day")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.8 — after-hours session % · Renko in snapshot · desktop 8-col indices / 10-col FII · MidSelect")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -5310,6 +5337,50 @@ with snap_col:
         chg_color = "#1f8a4c" if summary["change"] >= 0 else "#c0392b"
         pcr_html = f"<div><b>PCR (OI):</b> {stock_pcr:.3f}" + (f" <span style='font-size:11px;color:#52615a;'>({stock_pcr_src})</span>" if stock_pcr_src else "") + "</div>" if stock_pcr is not None else "<div><b>PCR (OI):</b> —</div>"
         mp_html = f"<div><b>Max Pain:</b> ₹{stock_mp:,.0f}</div>" if stock_mp is not None else "<div><b>Max Pain:</b> —</div>"
+        # Renko brick sizes (same ladder as chart / scanner) + live signal for 30M / 15M
+        _renko_box_html = ""
+        try:
+            _ltp_snap = float(summary.get("current") or 0) or 0.0
+            _atr7 = get_daily_atr(selected, 14, 7)
+            _atr14 = get_daily_atr(selected, 14, 14)
+            _base = _atr7 if _atr7 and _atr7 > 0 else (_atr14 if _atr14 and _atr14 > 0 else (_ltp_snap * 0.005 if _ltp_snap else 0))
+            _box_30 = (_base / 12.0) if _base else 0.0
+            _box_15 = (_base / 24.0) if _base else 0.0
+            _sig_30 = _sig_15 = None
+            try:
+                _sig_30 = analyze_renko_signal(selected, "30 Minutes")
+            except Exception:
+                _sig_30 = None
+            try:
+                _sig_15 = analyze_renko_signal(selected, "15 Minutes")
+            except Exception:
+                _sig_15 = None
+            def _sig_badge(sig):
+                if not sig:
+                    return '<span style="color:#64748b;">—</span>'
+                s = sig.get("Signal") or ""
+                conf = sig.get("Confidence")
+                conf_s = f" {int(conf)}%" if conf is not None else ""
+                if s == "BUY":
+                    return f'<span style="color:#059669;font-weight:700;">🟢 BUY{conf_s}</span>'
+                if s == "SELL":
+                    return f'<span style="color:#dc2626;font-weight:700;">🔴 SELL{conf_s}</span>'
+                if s == "BULLISH":
+                    return f'<span style="color:#059669;font-weight:600;">🟩 BULLISH{conf_s}</span>'
+                if s == "BEARISH":
+                    return f'<span style="color:#dc2626;font-weight:600;">🟥 BEARISH{conf_s}</span>'
+                return f'<span style="color:#64748b;">{s or "—"}</span>'
+            _b30 = f"₹{_box_30:.2f}" if _box_30 else "—"
+            _b15 = f"₹{_box_15:.2f}" if _box_15 else "—"
+            _renko_box_html = (
+                f"<div style=\"flex:1 1 100%;margin-top:4px;padding-top:4px;border-top:1px solid #cfe8d6;"
+                f"font-size:12px;line-height:1.35;\">"
+                f"<b>Renko box</b> · 30M {_b30} → {_sig_badge(_sig_30)}"
+                f" &nbsp;|&nbsp; 15M {_b15} → {_sig_badge(_sig_15)}"
+                f"</div>"
+            )
+        except Exception:
+            _renko_box_html = ""
         bars = summary.get("last5_bars") or []
         bar_html = ""
         if bars:
@@ -5373,6 +5444,7 @@ with snap_col:
                         <div><b>Bias:</b> <span style="color:{bias_color}; font-weight:700;">{summary['bias']}</span></div>
                         {pcr_html}
                         {mp_html}
+                        {_renko_box_html}
                     </div>
                 </div>
                 <div style="flex:0 0 auto;">{bar_html}</div>
