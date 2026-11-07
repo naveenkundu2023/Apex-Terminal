@@ -4,7 +4,7 @@
 #    close vs prior close (not LTP=prev → 0%). Ranking prefers completed daily after hours.
 # 2) Instant Snapshot: Renko box size 30M (ATR/12) + 15M (ATR/24) and live BUY/SELL/…
 #    signal from the same analyzer used by the scanner.
-# 3) Desktop (≥1101px): Market Indices grid 8 columns (≈3 rows); FII 10 cards on one row.
+# 3) Desktop (≥1101px): Market Indices grid 9 columns (27 boxes → 3 rows); FII 10 cards on one row.
 #    Mobile/tablet breakpoints unchanged.
 # v7.7.7 (multi-source live Nifty-50 + desktop density):
 # 1) Heatmap / Gainers-Losers / Most-Active / Breadth:
@@ -710,7 +710,7 @@ def apply_theme(theme: str):
                 .section-header { margin-bottom: 6px !important; margin-top: 2px !important; padding-bottom: 2px !important; font-size: 15px !important; }
                 .panel-card, .analysis-box { padding: 10px 12px !important; margin-bottom: 8px !important; }
                 .dash-divider { margin: 8px 0 !important; }
-                .index-grid { grid-template-columns: repeat(8, minmax(0, 1fr)) !important; gap: 5px !important; }
+                .index-grid { grid-template-columns: repeat(9, minmax(0, 1fr)) !important; gap: 5px !important; }
                 .index-grid .metric-card { min-height: 52px !important; padding: 3px 2px !important; }
                 .index-grid .index-title { font-size: 7px !important; }
                 .index-grid .index-price { font-size: 11px !important; }
@@ -1176,7 +1176,7 @@ def apply_theme(theme: str):
                 .section-header { margin-bottom: 6px !important; margin-top: 2px !important; padding-bottom: 2px !important; font-size: 15px !important; }
                 .panel-card, .analysis-box { padding: 10px 12px !important; margin-bottom: 8px !important; }
                 .dash-divider { margin: 8px 0 !important; }
-                .index-grid { grid-template-columns: repeat(8, minmax(0, 1fr)) !important; gap: 5px !important; }
+                .index-grid { grid-template-columns: repeat(9, minmax(0, 1fr)) !important; gap: 5px !important; }
                 .index-grid .metric-card { min-height: 52px !important; padding: 3px 2px !important; }
                 .index-grid .index-title { font-size: 7px !important; }
                 .index-grid .index-price { font-size: 11px !important; }
@@ -5210,7 +5210,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.8 — after-hours session % · Renko in snapshot · desktop 8-col indices / 10-col FII · MidSelect")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.8 — after-hours session % · Renko in snapshot · desktop 9-col indices / 10-col FII · MidSelect")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
