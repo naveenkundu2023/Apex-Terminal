@@ -1,4 +1,10 @@
-# APEX MARKET TERMINAL — UPDATED BUILD 2026-11-07 (v7.7.8)
+# APEX MARKET TERMINAL — UPDATED BUILD 2026-11-11 (v7.7.9)
+# v7.7.9:
+# 1) Corporate Actions: removed hardcoded INFY 03-Nov-2026 dividend fallback that
+#    kept repeating after the ex-date. Actions now filtered to rolling [today-1, today+10]
+#    by parsed Ex-Date; if none → explicit "no event" message.
+# 2) Results strip: Q1/Q2/Q3/Q4 heading auto-picks from purpose text, else calendar
+#    month heuristic (India FY). Empty days still show "—" (rolling 10-day window).
 # v7.7.8:
 # 1) Gainers/Losers/Most-Active/Heatmap after close: Yahoo daily now uses last session
 #    close vs prior close (not LTP=prev → 0%). Ranking prefers completed daily after hours.
@@ -4586,35 +4592,97 @@ def get_nifty50_heatmap(universe: list):
 
 # ---------- Corporate Actions (Nifty 50) ----------
 @st.cache_data(ttl=300, show_spinner=False)
-def get_corporate_actions(universe: list):
-    """Forthcoming corporate actions for Nifty-50 names.
+def get_corporate_actions(universe: list, days: int = 10):
+    """Forthcoming corporate actions for Nifty-50 names (rolling window).
+
     Primary: NSE corporates-corporateActions API.
     Always also try Moneycontrol (merge) — NSE often 403 from cloud IPs.
-    Extra: light Trendlyne / known high-visibility dividends when both thin.
+    Only returns actions whose Ex-Date falls in [today − 1 day, today + `days`].
+    Past events (e.g. INFY 03-Nov once that date has passed) are dropped.
+    No hardcoded single-name fallbacks.
     """
+    from datetime import timedelta
+    ist = pytz.timezone("Asia/Kolkata")
+    today = datetime.now(ist).date()
+    window_start = today - timedelta(days=1)   # keep "today / yesterday" briefly visible
+    window_end = today + timedelta(days=max(1, int(days)))
+
     headers = nse_session_headers()
     session = requests.Session()
     uni_set = set(s.upper() for s in universe)
     out = []
     seen = set()  # (sym, purpose_prefix, ex_date)
 
+    def _parse_ex_date(raw) -> "datetime.date | None":
+        if raw is None:
+            return None
+        s = str(raw).strip()
+        if not s or s in ("—", "-", "N/A", "NA", "None"):
+            return None
+        # ISO / common numeric
+        for fmt in (
+            "%Y-%m-%d", "%d-%b-%Y", "%d-%B-%Y", "%d/%m/%Y", "%d-%m-%Y",
+            "%d %b %Y", "%d %B %Y", "%d-%b-%y", "%d %b %y",
+            "%b %d, %Y", "%B %d, %Y", "%d/%b/%Y",
+        ):
+            try:
+                return datetime.strptime(s[:20].strip(), fmt).date()
+            except ValueError:
+                continue
+        # Day-month only (assume current / next year)
+        for fmt in ("%d %b", "%d %B", "%d-%b", "%d-%B"):
+            try:
+                d = datetime.strptime(s[:12].strip(), fmt).date().replace(year=today.year)
+                if d < today - timedelta(days=45):
+                    d = d.replace(year=today.year + 1)
+                return d
+            except ValueError:
+                continue
+        # "03-Nov-2026" already covered; try loose regex
+        m = re.search(
+            r"(\d{1,2})[\s\-/]+([A-Za-z]{3,9})[\s\-/]+(\d{2,4})",
+            s,
+        )
+        if m:
+            day, mon, yr = m.group(1), m.group(2), m.group(3)
+            if len(yr) == 2:
+                yr = "20" + yr
+            for fmt in ("%d %b %Y", "%d %B %Y"):
+                try:
+                    return datetime.strptime(f"{day} {mon} {yr}", fmt).date()
+                except ValueError:
+                    continue
+        return None
+
     def _add(sym, purpose, ex_date, rec_date="", face=""):
         sym = (sym or "").strip().upper()
         if not sym or (uni_set and sym not in uni_set):
             return
         purpose = (str(purpose)[:80] if purpose else "—")
-        ex_date = str(ex_date)[:16] if ex_date else ""
+        ex_raw = str(ex_date)[:24] if ex_date else ""
         rec_date = str(rec_date)[:16] if rec_date else ""
-        key = (sym, purpose[:40].lower(), ex_date)
+        parsed = _parse_ex_date(ex_raw)
+        # If we can parse the date, keep only rolling window; if unparseable, keep
+        # only when bulk feeds are thin (still prefer dated rows).
+        if parsed is not None:
+            if not (window_start <= parsed <= window_end):
+                return
+            ex_disp = parsed.strftime("%d-%b-%Y")
+            sort_key = parsed
+        else:
+            # No reliable date → skip (avoids stale fixed rows sticking around)
+            return
+        key = (sym, purpose[:40].lower(), ex_disp)
         if key in seen:
             return
         seen.add(key)
         out.append({
             "Symbol": sym,
             "Purpose": purpose,
-            "Ex-Date": ex_date,
-            "Record Date": rec_date,
+            "Ex-Date": ex_disp,
+            "Record Date": rec_date or ex_disp,
             "Face Value": face,
+            "_sort": sort_key,
         })
 
     # ---- 1) NSE ----
@@ -4659,7 +4727,6 @@ def get_corporate_actions(universe: list):
             "Accept-Language": "en-US,en;q=0.9",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
-        # Latest corporate actions list + dividend-focused pages
         mc_urls = [
             "https://www.moneycontrol.com/stocks/marketstats/nse_ca_latest.php",
             "https://www.moneycontrol.com/stocks/marketstats/nse_ca.php",
@@ -4697,66 +4764,14 @@ def get_corporate_actions(universe: list):
     except Exception:
         pass
 
-    # ---- 3) Per-stock Moneycontrol dividend page for key names if still missing major names ----
-    # INFY interim ₹26 / 03-Nov-2026 is high-visibility; ensure it surfaces when bulk feeds lag.
-    try:
-        # Lightweight check: if INFY already present with Nov / dividend, skip
-        has_infy_div = any(
-            r.get("Symbol") == "INFY" and "dividend" in str(r.get("Purpose", "")).lower()
-            for r in out
-        )
-        if not has_infy_div and (not uni_set or "INFY" in uni_set):
-            mc_headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            }
-            # Company facts / dividends page
-            r = requests.get(
-                "https://www.moneycontrol.com/company-facts/infosys/dividends/IT/",
-                headers=mc_headers,
-                timeout=8,
-            )
-            if r.status_code == 200 and r.text:
-                plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
-                # Look for recent interim + Nov 2026 style rows
-                # e.g. Interim ... 3 Nov 2026 ... 26
-                m = re.search(
-                    r"(?:Interim|interim)[^0-9]{0,40}(?:Dividend)?[^0-9]{0,20}"
-                    r"(?:Rs\.?\s*)?(\d+(?:\.\d+)?)\s*"
-                    r".{0,80}?"
-                    r"(?:Ex[- ]?(?:Dividend\s*)?Date|Ex-Date)[^0-9A-Za-z]{0,20}"
-                    r"(\d{1,2}\s*(?:Nov|November|Oct|October|Dec|December)[a-z]*\s*,?\s*2026)",
-                    plain,
-                    re.I,
-                )
-                if not m:
-                    m = re.search(
-                        r"(\d{1,2}\s*(?:Nov|November)\s*,?\s*2026).{0,60}?(?:Interim|Dividend).{0,40}?(?:Rs\.?\s*)?(\d+(?:\.\d+)?)",
-                        plain,
-                        re.I,
-                    )
-                    if m:
-                        ex_d, amt = m.group(1), m.group(2)
-                        _add("INFY", f"Interim Dividend - Rs {amt} Per Share", ex_d, ex_d, "5")
-                else:
-                    amt, ex_d = m.group(1), m.group(2)
-                    _add("INFY", f"Interim Dividend - Rs {amt} Per Share", ex_d, ex_d, "5")
-            # Fallback known announcement (declared 23 Oct 2026, public filings) if scrape still misses
-            if not any(r.get("Symbol") == "INFY" and "dividend" in str(r.get("Purpose", "")).lower() for r in out):
-                _add(
-                    "INFY",
-                    "Interim Dividend - Rs 26 Per Share",
-                    "03-Nov-2026",
-                    "03-Nov-2026",
-                    "5",
-                )
-    except Exception:
-        pass
+    # No hardcoded single-name dividend fallbacks (they went stale after ex-date).
 
     if not out:
         return pd.DataFrame()
     df = pd.DataFrame(out).drop_duplicates(subset=["Symbol", "Purpose", "Ex-Date"])
-    return df.head(30)
+    if "_sort" in df.columns:
+        df = df.sort_values(["_sort", "Symbol"]).drop(columns=["_sort"])
+    return df.head(30).reset_index(drop=True)
 
 
 # ---------- Top 10 market-moving business news (30-min cache) ----------
@@ -5210,7 +5225,7 @@ with st.sidebar:
     else:
         st.caption("Watchlist is empty")
     st.markdown("---")
-    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.8 — after-hours session % · Renko in snapshot · desktop 9-col indices / 10-col FII · MidSelect")
+    st.caption("Data: TV → Investing → TE (oil) → Yahoo • NSE  |  ⚡ Fast Refresh = soft quote clear (Renko stays warm)\nUI v7.7.9 — CA rolling 10d (no fixed INFY) · Q-label auto · after-hours % · Renko snapshot · desktop density")
 
 # -------------------------------------------------
 # Header + Time (dashboard top bar)
@@ -6590,30 +6605,30 @@ else:
 st.markdown("---")
 
 # -------------------------------------------------
-# Corporate Actions + Upcoming Results (Nifty 50)  — v7.6.2 display
+# Corporate Actions + Upcoming Results (Nifty 50)  — v7.7.9 rolling window
 # -------------------------------------------------
 st.markdown('<div class="section-header">Corporate Actions & Upcoming Results — Nifty 50</div>', unsafe_allow_html=True)
 st.caption(
-    "Dividends, bonuses, splits, rights + Nifty 50 earnings/results over the next 10 days. "
-    "Results: Moneycontrol NIFTY 50 results-calendar (id=9). Actions: NSE → Moneycontrol fallback."
+    "Dividends, bonuses, splits, rights + Nifty 50 earnings/results over the next 10 days (rolling). "
+    "Past ex-dates are dropped automatically. Results: Moneycontrol NIFTY 50 calendar (id=9). "
+    "Actions: NSE → Moneycontrol. No fixed single-name placeholders."
 )
 
-ca_df = get_corporate_actions(universe)
+ca_df = get_corporate_actions(universe, days=10)
 res_df = get_upcoming_results(universe, days=10)
 
 if ca_df.empty and (res_df is None or res_df.empty):
     st.info(
-        "No upcoming corporate actions / results for Nifty 50 right now "
-        "(NSE often returns 403 from cloud IPs; Moneycontrol fallback also empty). "
-        "Try again during market hours or from a home network."
+        "No upcoming corporate actions / results for Nifty 50 in the next 10 days. "
+        "(NSE often returns 403 from cloud IPs; Moneycontrol may also be empty off-hours.)"
     )
 else:
-    # --- Corporate actions (compact list, no expander) ---
+    # --- Corporate actions (compact list; only in-window dates) ---
     if not ca_df.empty:
         ca_html = (
             '<div class="ca-box">'
             '<div style="font-weight:700;margin-bottom:8px;">📌 Corporate actions '
-            '(dividends · bonuses · splits · rights)</div>'
+            '(next ~10 days · dividends · bonuses · splits · rights)</div>'
         )
         for _, row in ca_df.iterrows():
             ca_html += (
@@ -6624,15 +6639,21 @@ else:
             )
         ca_html += "</div>"
         st.markdown(ca_html, unsafe_allow_html=True)
+    else:
+        st.markdown(
+            '<div class="ca-box">'
+            '<div style="font-weight:700;margin-bottom:4px;">📌 Corporate actions</div>'
+            '<div style="color:#52615a;">No dividends / bonuses / splits / rights in the next 10 days '
+            'for Nifty 50 names (rolling window).</div></div>',
+            unsafe_allow_html=True,
+        )
 
     # --- Upcoming results: 10-day rolling date strip + symbols under each date ---
     if res_df is not None and not res_df.empty:
         from datetime import timedelta as _td
         _ist = pytz.timezone("Asia/Kolkata")
         _today = datetime.now(_ist).date()
-        # Build 10-day window starting today
         day_list = [_today + _td(days=i) for i in range(10)]
-        # Group symbols by date
         by_date = {d: [] for d in day_list}
         purposes = []
         for _, row in res_df.iterrows():
@@ -6641,7 +6662,6 @@ else:
                 continue
             d_raw = row.get("Date") or ""
             d_obj = None
-            # Prefer SortDate-like parsing via common formats in the Date column
             for fmt in ("%d %b %Y", "%d %B %Y", "%Y-%m-%d", "%d-%b-%Y", "%d/%m/%Y"):
                 try:
                     d_obj = datetime.strptime(str(d_raw).strip()[:16], fmt).date()
@@ -6649,7 +6669,6 @@ else:
                 except Exception:
                     continue
             if d_obj is None:
-                # try day-month only with current/next year
                 for fmt in ("%d %b", "%d %B"):
                     try:
                         tmp = datetime.strptime(str(d_raw).strip()[:12], fmt).date().replace(year=_today.year)
@@ -6661,34 +6680,51 @@ else:
                         continue
             if d_obj is None:
                 continue
-            # Snap into nearest day in our 10-day window if within range
             if d_obj in by_date:
                 if sym not in by_date[d_obj]:
                     by_date[d_obj].append(sym)
             purpose = str(row.get("Purpose") or "Results")
             purposes.append(purpose.lower())
 
-        # Simple heading: if everything looks like Q2 / quarterly results, label as Q2
-        q2ish = sum(1 for p in purposes if "q2" in p or "quarter" in p or "result" in p)
-        if purposes and q2ish >= max(1, int(0.6 * len(purposes))):
-            heading = "📊 Q2 Results — next 10 days"
+        # Quarter label: prefer explicit Q1/Q2/Q3/Q4 in purpose text; else calendar heuristic
+        # India FY: Q2 results cluster ~Oct–Nov, Q3 ~Jan–Feb, Q4 ~Apr–May, Q1 ~Jul–Aug
+        q_counts = {"Q1": 0, "Q2": 0, "Q3": 0, "Q4": 0}
+        for p in purposes:
+            if re.search(r"\bq1\b|first quarter", p):
+                q_counts["Q1"] += 1
+            elif re.search(r"\bq2\b|second quarter", p):
+                q_counts["Q2"] += 1
+            elif re.search(r"\bq3\b|third quarter", p):
+                q_counts["Q3"] += 1
+            elif re.search(r"\bq4\b|fourth quarter|full year|annual", p):
+                q_counts["Q4"] += 1
+        dominant = max(q_counts, key=q_counts.get) if any(q_counts.values()) else None
+        if dominant and q_counts[dominant] >= max(1, int(0.4 * max(1, len(purposes)))):
+            heading = f"📊 {dominant} Results — next 10 days"
         else:
-            heading = "📊 Upcoming Results — next 10 days"
+            # Calendar-month fallback when MC purpose text is generic ("Results")
+            m = _today.month
+            if m in (10, 11, 12):
+                heading = "📊 Q2 Results — next 10 days"
+            elif m in (1, 2, 3):
+                heading = "📊 Q3 Results — next 10 days"
+            elif m in (4, 5, 6):
+                heading = "📊 Q4 Results — next 10 days"
+            else:
+                heading = "📊 Q1 Results — next 10 days"
 
         cells = []
         for i, d in enumerate(day_list):
             syms = by_date.get(d) or []
-            label = d.strftime("%d %b")  # e.g. 30 Oct
+            label = d.strftime("%d %b")
             if syms:
                 sym_txt = ", ".join(syms)
                 empty_cls = ""
             else:
                 sym_txt = "—"
                 empty_cls = " empty"
-            # Today = stronger green (heatmap-like); later days = softer distinct tints
             if d == _today:
                 day_cls = " res-today"
-                # inline fallback so it always shows even if CSS cache lags
                 style = (
                     'background:#bbf7d0;border:1px solid #4ade80;'
                     'box-shadow:0 0 0 1px rgba(22,163,74,0.25);'
@@ -6706,7 +6742,6 @@ else:
                 date_style = "color:#475569;"
                 sym_style = "color:#334155;"
             if empty_cls:
-                # keep empty days muted regardless of bucket
                 style = "background:#f8fafc;border:1px solid #e2e8f0;"
                 date_style = "color:#94a3b8;"
                 sym_style = "color:#94a3b8;"
@@ -6720,6 +6755,8 @@ else:
             '<div class="ca-box">'
             f'<div style="font-weight:700;margin-bottom:10px;">{heading}</div>'
             '<div class="res-date-strip">' + "".join(cells) + '</div>'
+            '<div style="margin-top:8px;font-size:11px;color:#64748b;">'
+            'Empty day = no Nifty-50 result scheduled that date. Window rolls forward daily.</div>'
             '</div>'
         )
         st.markdown(res_html, unsafe_allow_html=True)
@@ -6728,9 +6765,6 @@ else:
 
 st.markdown("---")
 
-# -------------------------------------------------
-# Top 5 Business News (30-min refresh)
-# -------------------------------------------------
 st.markdown('<div class="section-header">Top 10 Market-Moving Business News</div>', unsafe_allow_html=True)
 st.caption(
     "India-first + global headlines · max 2 per source · near-duplicate suppressed · "
